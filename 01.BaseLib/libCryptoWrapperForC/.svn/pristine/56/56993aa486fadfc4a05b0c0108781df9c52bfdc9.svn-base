@@ -1,0 +1,17 @@
+*.obj
+*.tlog
+*.spf
+*.suo
+*.sdf
+*.~
+*.opensdf
+ .gitignore~
+.*~
+
+CryptoWrapper/build/win64
+CryptoWrapper/build/win32
+CryptoWrapper/build/win/x64
+CryptoWrapper/lib
+CryptoWrapper/demo/win/x64
+
+

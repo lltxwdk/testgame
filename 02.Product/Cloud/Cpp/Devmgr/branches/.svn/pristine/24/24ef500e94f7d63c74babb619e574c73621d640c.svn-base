@@ -1,0 +1,190 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7DBE5442-B935-432C-A4D6-30C0DC07C1FC}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>DevMgr</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <CharacterSet>NotSet</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>NotSet</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+    <IncludePath>C:\Program Files\MySQL\MySQL Server 5.6\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\Program Files\MySQL\MySQL Server 5.6\lib;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+    <IncludePath>C:\Program Files\MySQL\MySQL Server 5.6\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\Program Files\MySQL\MySQL Server 5.6\lib;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>WIN32;MYSQL_DB_DEF;_DEBUG;_CONSOLE;_LIB;_AFXDLL;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>true</SDLCheck>
+      <AdditionalIncludeDirectories>..\sredisdll\;..\..\..\..\..\..\..\..\01.BaseLib\netlib\include;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\include;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output;..\..\build\windows\mysql\include;..\..\..\..\..\..\..\..\00.Common\common;..\..\build\windows\shentong\include;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\event2;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\compat;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\WIN32-Code\nmake</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\..\build\windows\Debug;..\..\..\..\..\..\..\..\01.BaseLib\netlib\lib;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\lib\windows\debug;..\..\build\windows\mysql\lib;..\..\build\windows\shentong\win32;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\lib\win32\debug</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Win32_Interop.lib;hiredis.lib;sredisdll.lib;libmysql.lib;libprotobuf.lib;libprotobuf-lite.lib;netlib_d.lib;ACCI.lib;aci.lib;libevent.lib;libevent_openssl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;MYSQL_DB_DEF;NDEBUG;_CONSOLE;_LIB;_AFXDLL;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>true</SDLCheck>
+      <AdditionalIncludeDirectories>..\sredisdll;..\..\..\..\..\..\..\..\01.BaseLib\netlib\include;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\include;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output;..\..\build\windows\mysql\include;..\..\..\..\..\..\..\..\00.Common\common;..\..\build\windows\shentong\include;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\compat;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\event2;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\WIN32-Code\nmake</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalLibraryDirectories>..\..\build\windows\Release;..\..\..\..\..\..\..\..\01.BaseLib\netlib\lib;..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\lib\windows\release;..\..\build\windows\mysql\lib;..\..\build\windows\shentong\win32;..\..\build\windows\libevent-2.1.8-stable\win\vs2013\lib\win32\release</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Win32_Interop.lib;hiredis.lib;sredisdll.lib;libmysql.lib;libprotobuf.lib;libprotobuf-lite.lib;netlib_r.lib;ACCI.lib;aci.lib;libevent.lib;libevent_openssl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <Text Include="ReadMe.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\Common.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\LpConfig.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\NetCommon.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\ParsePdu.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\SRProtoParser.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\TcpParsePdu.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\common\TraceLog.h" />
+    <ClInclude Include="..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\device_ser.pb.h" />
+    <ClInclude Include="ActiveConnect.h" />
+    <ClInclude Include="asyncthread.h" />
+    <ClInclude Include="AutoTrace.h" />
+    <ClInclude Include="cbuffer.h" />
+    <ClInclude Include="DBconnector.h" />
+    <ClInclude Include="deviceConnect.h" />
+    <ClInclude Include="deviceConnMgr.h" />
+    <ClInclude Include="DevMgr.h" />
+    <ClInclude Include="disabled.h" />
+    <ClInclude Include="functor.h" />
+    <ClInclude Include="HttpConnMgr.h" />
+    <ClInclude Include="list_confpollinfo.h" />
+    <ClInclude Include="list_confrollcallinfo.h" />
+    <ClInclude Include="list_datadictionary.h" />
+    <ClInclude Include="list_polllist.h" />
+    <ClInclude Include="list_rollcalllist.h" />
+    <ClInclude Include="list_conference.h" />
+    <ClInclude Include="list_confparticipant.h" />
+    <ClInclude Include="list_confrecord.h" />
+    <ClInclude Include="list_confreport.h" />
+    <ClInclude Include="list_device.h" />
+    <ClInclude Include="list_deviceconfdetail.h" />
+    <ClInclude Include="list_deviceconfig.h" />
+    <ClInclude Include="list_confliveinfo.h" />
+    <ClInclude Include="list_conflivesetting.h" />
+    <ClInclude Include="list_mediagroup.h" />
+    <ClInclude Include="list_recordfile.h" />
+    <ClInclude Include="list_userconfdetail.h" />
+    <ClInclude Include="parser.h" />
+    <ClInclude Include="SRProtoConnBase.h" />
+    <ClInclude Include="sr_message.h" />
+    <ClInclude Include="sr_msgprocess.h" />
+    <ClInclude Include="sr_queuemsgid.h" />
+    <ClInclude Include="sr_timer.h" />
+    <ClInclude Include="targetver.h" />
+    <ClInclude Include="thread.h" />
+    <ClInclude Include="thread_mutex.h" />
+    <ClInclude Include="timer_manager.h" />
+    <ClInclude Include="utility.h" />
+    <ClInclude Include="wrapper_msg.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\Common.c" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\LpConfig.c" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\ParsePdu.cc" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\SRProtoParser.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\TraceLog.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\common\Utils.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\device_ser.pb.cc" />
+    <ClCompile Include="ActiveConnect.cpp" />
+    <ClCompile Include="asyncthread.cpp" />
+    <ClCompile Include="AutoTrace.cpp" />
+    <ClCompile Include="DBconnector.cpp" />
+    <ClCompile Include="deviceConnect.cpp" />
+    <ClCompile Include="deviceConnMgr.cpp" />
+    <ClCompile Include="DevMgr.cpp" />
+    <ClCompile Include="HttpConnMgr.cpp" />
+    <ClCompile Include="list_confpollinfo.cpp" />
+    <ClCompile Include="list_confrollcallinfo.cpp" />
+    <ClCompile Include="list_datadictionary.cpp" />
+    <ClCompile Include="list_polllist.cpp" />
+    <ClCompile Include="list_rollcalllist.cpp" />
+    <ClCompile Include="list_conference.cpp" />
+    <ClCompile Include="list_confparticipant.cpp" />
+    <ClCompile Include="list_confrecord.cpp" />
+    <ClCompile Include="list_confreport.cpp" />
+    <ClCompile Include="list_device.cpp" />
+    <ClCompile Include="list_deviceconfdetail.cpp" />
+    <ClCompile Include="list_deviceconfig.cpp" />
+    <ClCompile Include="list_confliveinfo.cpp" />
+    <ClCompile Include="list_conflivesetting.cpp" />
+    <ClCompile Include="list_mediagroup.cpp" />
+    <ClCompile Include="list_recordfile.cpp" />
+    <ClCompile Include="list_userconfdetail.cpp" />
+    <ClCompile Include="parser.cpp" />
+    <ClCompile Include="SRProtoConnBase.cpp" />
+    <ClCompile Include="thread.cpp" />
+    <ClCompile Include="thread_mutex.cpp" />
+    <ClCompile Include="timer_manager.cpp" />
+    <ClCompile Include="utility.cpp" />
+    <ClCompile Include="wrapper_msg.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="ClassDiagram.cd" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

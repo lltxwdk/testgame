@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="testcase">
+      <UniqueIdentifier>{d626a283-1027-4472-82ec-e7669158389a}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\unittest\Main.cpp">
+      <Filter>testcase</Filter>
+    </ClCompile>
+    <ClCompile Include="..\unittest\SRMediaHeadV2Test.cpp">
+      <Filter>testcase</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

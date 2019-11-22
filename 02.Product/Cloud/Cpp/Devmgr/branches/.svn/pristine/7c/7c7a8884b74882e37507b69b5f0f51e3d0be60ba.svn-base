@@ -1,0 +1,25 @@
+#ifndef ACCI_DEF_ST
+#define ACCI_DEF_ST
+
+#define oracle  shentong
+#define occi	acci
+
+#define OCCI_SQLT_STR				ACCI_SQLT_STR
+#define OCCICURSOR					ACCICURSOR
+#define OCCIINT						ACCIINT
+#define OCCISTRING					ACCISTRING
+#define OCCITIMESTAMP				ACCITIMESTAMP
+#define OCCINUMBER					ACCINUMBER
+#define OCCIINTERVALYM				ACCIINTERVALYM
+#define OCCIINTERVALDS				ACCIINTERVALDS
+#define OCCIFLOAT					ACCIFLOAT
+#define OCCIDOUBLE					ACCIDOUBLE
+#define OCCIDATE					ACCIDATE
+#define	OCCIBYTES					ACCIBYTES
+#define OCCIBFLOAT					ACCIBFLOAT
+#define OCCIBDOUBLE					ACCIBDOUBLE
+#define OCCI_SQLT_ODT				ACCI_SQLT_ODT
+#define OCCI_SQLT_VNU				ACCI_SQLT_VNU
+
+
+#endif                                              /* ACCI_DEF_ST */
