@@ -1,0 +1,36 @@
+dependencies: \
+  /Users/suirui-sdk/s_plan/callserver/ios/hening/protobuf-2.6.1/src/google/protobuf/descriptor.cc \
+  ../../src/google/protobuf/stubs/hash.h \
+  ../../src/google/protobuf/stubs/common.h \
+  /Users/suirui-sdk/s_plan/callserver/ios/hening/protobuf-2.6.1/config.h \
+  ../../src/google/protobuf/descriptor.h \
+  ../../src/google/protobuf/descriptor_database.h \
+  ../../src/google/protobuf/descriptor.pb.h \
+  ../../src/google/protobuf/generated_message_util.h \
+  ../../src/google/protobuf/stubs/once.h \
+  ../../src/google/protobuf/stubs/atomicops.h \
+  ../../src/google/protobuf/stubs/platform_macros.h \
+  ../../src/google/protobuf/stubs/atomicops_internals_macosx.h \
+  ../../src/google/protobuf/stubs/atomicops_internals_atomicword_compat.h \
+  ../../src/google/protobuf/message.h \
+  ../../src/google/protobuf/message_lite.h \
+  ../../src/google/protobuf/repeated_field.h \
+  ../../src/google/protobuf/stubs/type_traits.h \
+  ../../src/google/protobuf/stubs/template_util.h \
+  ../../src/google/protobuf/extension_set.h \
+  ../../src/google/protobuf/generated_enum_reflection.h \
+  ../../src/google/protobuf/unknown_field_set.h \
+  ../../src/google/protobuf/dynamic_message.h \
+  ../../src/google/protobuf/text_format.h \
+  ../../src/google/protobuf/wire_format.h \
+  ../../src/google/protobuf/wire_format_lite.h \
+  ../../src/google/protobuf/io/coded_stream.h \
+  ../../src/google/protobuf/io/strtod.h \
+  ../../src/google/protobuf/io/tokenizer.h \
+  ../../src/google/protobuf/io/zero_copy_stream_impl.h \
+  ../../src/google/protobuf/io/zero_copy_stream.h \
+  ../../src/google/protobuf/io/zero_copy_stream_impl_lite.h \
+  ../../src/google/protobuf/stubs/stl_util.h \
+  ../../src/google/protobuf/stubs/strutil.h \
+  ../../src/google/protobuf/stubs/substitute.h \
+  ../../src/google/protobuf/stubs/map_util.h

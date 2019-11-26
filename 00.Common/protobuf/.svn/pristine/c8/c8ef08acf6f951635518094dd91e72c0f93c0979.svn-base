@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IDESourceControlProjectFavoriteDictionaryKey</key>
+	<false/>
+	<key>IDESourceControlProjectIdentifier</key>
+	<string>6ED267AC-C71E-46F1-857F-06705049803D</string>
+	<key>IDESourceControlProjectName</key>
+	<string>protobuf</string>
+	<key>IDESourceControlProjectOriginsDictionary</key>
+	<dict>
+		<key>eba3fca8-403d-4c23-b0d3-cc2bb8ee3336++23</key>
+		<string>http://192.168.90.100/svn/2-ProjectLib/06.S-plan/code/00.Common</string>
+	</dict>
+	<key>IDESourceControlProjectPath</key>
+	<string>protobuf/build/ios/protobuf.xcodeproj</string>
+	<key>IDESourceControlProjectRelativeInstallPathDictionary</key>
+	<dict>
+		<key>eba3fca8-403d-4c23-b0d3-cc2bb8ee3336++23</key>
+		<string>../../../../..</string>
+	</dict>
+	<key>IDESourceControlProjectRepositoryRootDictionary</key>
+	<dict>
+		<key>eba3fca8-403d-4c23-b0d3-cc2bb8ee3336++23</key>
+		<string>http://192.168.90.100/svn/2-ProjectLib</string>
+	</dict>
+	<key>IDESourceControlProjectURL</key>
+	<string>http://192.168.90.100/svn/2-ProjectLib/06.S-plan/code/00.Common/protobuf/build/ios/protobuf.xcodeproj</string>
+	<key>IDESourceControlProjectVersion</key>
+	<integer>111</integer>
+	<key>IDESourceControlProjectWCCIdentifier</key>
+	<string>eba3fca8-403d-4c23-b0d3-cc2bb8ee3336++23</string>
+	<key>IDESourceControlProjectWCConfigurations</key>
+	<array>
+		<dict>
+			<key>IDESourceControlRepositoryExtensionIdentifierKey</key>
+			<string>public.vcs.subversion</string>
+			<key>IDESourceControlWCCIdentifierKey</key>
+			<string>eba3fca8-403d-4c23-b0d3-cc2bb8ee3336++23</string>
+			<key>IDESourceControlWCCName</key>
+			<string>00.Common</string>
+		</dict>
+	</array>
+</dict>
+</plist>

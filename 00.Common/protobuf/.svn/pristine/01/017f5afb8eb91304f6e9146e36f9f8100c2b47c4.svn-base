@@ -1,0 +1,214 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+//单会议单MP
+//
+//[BEGIN] MC<->VAS////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->VAS/////////////////////////////////////
+// mc --> vas 创建一个视频分析channel
+message ReqVASCreateConf
+{ 
+	message NetMpAddr
+	{
+		optional uint32		netmpid				= 1;//netmp_deviceid
+		optional string 	netmpmediaip		= 2;// 一般是netmp内网地址
+		optional uint32		audiodatarecvport	= 3;
+		optional uint32		audioctrlrecvport	= 4;
+		optional uint32		videodatarecvport	= 5;
+		optional uint32		videoctrlrecvport	= 6;
+		optional uint32		video2datarecvport	= 7;
+		optional uint32		video2ctrlrecvport	= 8;
+		optional uint32		video3datarecvport	= 9;
+		optional uint32		video3ctrlrecvport	= 10;
+		optional uint32		desktopdatarecvport	= 11;
+		optional uint32		desktopctrlrecvport	= 12;
+	}
+  optional uint64		confid			= 1;
+  optional uint32		mcid			= 2;//发送消息的mc_deviceid
+  optional uint32		vasid			= 3;//接收消息的vas_deviceid
+  optional uint32		vaschannelid	= 4;//MC为VAS分配的通道id
+  optional NetMpAddr 	netmpaddr 		= 5;//会议中netmp（多个中的随意一个netmp）的地址信息
+  optional uint32		vaschantype 	= 6;//MC为VAS分配vaschannelid对应的通道类型,0-未知、1-人脸识别(分析)通道、2-虚拟桌牌通道
+  optional uint32		videosize 	 	= 7;//选看MP编码流的大小(目前只有录制直播屏设置), 0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+}
+// mc --> vas 销毁视频分析channel
+message CmdVASDestroyConf 
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		vasid			= 3;//接收消息的vas_deviceid
+	optional uint32		vaschannelid	= 4;//MC为VAS分配的通道id 
+	optional string		reason			= 5;//销毁VAS通道的原因
+}
+// mc --> vas 请求VAS开始分析相应通道某路媒体流
+message CmdVASStartAnaly
+{
+  message AnalyInfo
+  {
+	optional uint32 	channelid  = 1;//待分析视频源,MPI对应通道id或者终端对应的通道id
+	optional uint32 	screenid   = 2;//待分析视频源,非0-代表选看对应的屏幕
+	optional uint32	vaschannelid   = 3;//待分析视频源关联的VAS通道id(由MC预分配)
+	optional uint32 	srcmapid   = 4;//待分析视频源(终端或者mpichannel)在VAS中映射id(由MC预分配)
+	repeated uint32 	userids    = 5;//待识别人员ids，如果为空，vas全检索
+	optional bool   isdispmnum     = 6;//is display match number,分析结果是否显示匹配度百分比,0-不显示(默认)、1-显示；vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--不关注
+	optional bool   isdispmname    = 7;//is display match name,分析结果是否显示匹配的名称,0-不显示(默认)、1-显示；vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--不关注
+  }
+  optional uint64	confid 			 = 1;
+  optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+  optional uint32	vasid			 = 3;//接收消息的vasid
+  repeated AnalyInfo analyinfos 	 = 4;//在指定视频源分析指定人员的信息
+}
+// mc --> vas 请求VAS停止分析相应通道某路媒体流
+message CmdVASStopAnaly
+{
+	message AnalyInfo
+    {
+	  optional uint32 	channelid  = 1;//待分析视频源,MPI对应通道id或者终端对应的通道id
+	  optional uint32 	screenid   = 2;//待分析视频源,非0-代表选看对应的屏幕
+	  optional uint32	vaschannelid = 3;//待分析视频源关联的VAS通道id(由MC预分配)
+	  optional uint32 	srcmapid   = 4;//待分析视频源(终端或者mpichannel)在VAS中映射id(由MC预分配)
+    }
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	vasid			 = 3;//接收消息的vasid
+	repeated AnalyInfo analyinfos 	 = 4;//停止分析指定视频源
+}
+// mc --> vas 请求VAS更新某路待分析视频源的待识别人员信息
+message CmdVASUpdateAnaly
+{
+    message AnalyInfo
+    {
+	  optional uint32 	channelid  = 1;//待分析视频源,MPI对应通道id或者终端对应的通道id
+	  optional uint32 	screenid   = 2;//待分析视频源,非0-代表选看对应的屏幕
+	  optional uint32	vaschannelid = 3;//待分析视频源关联的VAS通道id(由MC预分配)
+	  optional uint32 	srcmapid   = 4;//待分析视频源(终端或者mpichannel)在VAS中映射id(由MC预分配)
+	  repeated uint32 	newuserids = 5;//待识别人员ids，如果为空，vas全检索
+	  optional bool   isdispmnum   = 6;//is display match number,分析结果是否显示匹配度百分比,0-不显示(默认)、1-显示；vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--不关注
+	  optional bool   isdispmname  = 7;//is display match name,分析结果是否显示匹配的名称,0-不显示(默认)、1-显示；vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--不关注
+    }
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	vasid			 = 3;//接收消息的vasid
+	repeated AnalyInfo analyinfos 	 = 4;//更新指定视频源的待识别人员信息
+}
+// mc-->vas 告诉vas重新选择netmp打开通道
+message CmdVASReOpenNetMPMediaPort
+{
+	optional string 	netmpip 			= 1;//一般是netmp内网地址
+	optional uint32		audiodatarecvport	= 2;
+	optional uint32		audioctrlrecvport	= 3;
+	optional uint32		videodatarecvport	= 4;
+	optional uint32		videoctrlrecvport	= 5;
+	optional uint32		video2datarecvport	= 6;
+	optional uint32		video2ctrlrecvport	= 7;
+	optional uint32		video3datarecvport	= 8;
+	optional uint32		video3ctrlrecvport	= 9;
+	optional uint32		desktopdatarecvport = 10;
+	optional uint32		desktopctrlrecvport	= 11;	
+	optional uint64		confid 			    = 12;
+	optional uint32		mcid				= 13;//发送消息的mc_deviceid
+	optional uint32 	vasid 			    = 14;//接收消息的vas_deviceid
+	optional uint32   	vaschannelid        = 15;//MC为vas分配的通道id	 
+}
+// mc --> vas mc到vas的心跳
+message IndMCHeartBeatToVAS
+{ 
+	optional uint32		mcid				= 1;//发送消息的mc_deviceid
+	optional uint32 	vasid				= 2;//接收消息的vas_deviceid
+}
+//mc --> vas 将会议中创建好的mpi以及屏幕信息告诉VAS
+message IndConfAllMPIInfoToVAS
+{	
+	message ScreensInMPI
+	{
+		optional uint32 screenid	= 1;//屏幕id
+		optional uint32 screentype	= 2;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	}
+	message MPIsInConf
+	{
+		optional uint32 		mpichannelid 	= 1;
+		repeated ScreensInMPI	screens			= 2;
+	}	
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		vasid			= 3;//接收消息的vasid 
+	repeated MPIsInConf mpis			= 4;//会议中所有MPI的信息（可能包含screen信息）
+}
+//mc --> vas 将新创建的mpi信息告诉VAS
+message IndMPIInfoToVAS
+{ 
+	optional uint64		confid			= 1;
+	optional uint32		mpichannelid	= 2;// MC为会议媒体处理实例MPI分配的通道id
+	optional uint32		addordel		= 3;// 1-添加screenid，2-删除screenid
+	optional uint32 	vasid 			= 4;// 接收消息的vasid
+}
+//mc --> vas 将新创建的屏幕信息告诉VAS
+message IndScreenInfoToVAS 
+{ 
+	optional uint64		confid			= 1;
+	optional uint32		mpichannelid	= 2;//MC为会议媒体处理实例MPI分配的通道id
+	optional uint32		screenid		= 3;//屏幕id
+	optional uint32		screentype		= 4;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32		addordel		= 5;// 1-添加screenid，2-删除screenid
+	optional uint32 	vasid 			= 6;//接收消息的vasid
+}
+/////////////////////////////////VAS-->MC/////////////////////////////////////
+
+message RspVASCreateConf
+{ 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;//接收消息的mc_deviceid 
+	optional uint32		vasid				= 4;//创建会议的vas_deviceid 
+	optional uint32		vaschannelid		= 5;//创建会议的vas通道id
+	optional uint32     relatednetmpid		= 6;//该VAS通道关联的netmpid
+	optional string 	failreason			= 7;//若失败，则会有失败说明
+	optional uint32     errorcode           = 8;//错误提示对应的错误码	
+    optional uint32		vaschantype 	    = 9;//vaschannelid对应的通道类型,0-未知、1-人脸识别(分析)通道、2-虚拟桌牌通道
+}
+
+message IndVASHeartBeatToMC
+{ 
+	optional uint32		mcid				= 1;//接收消息的mc_deviceid
+	optional uint32 	vasid				= 2;//发送消息的vas_deviceid
+}
+// vas-->mc   上报匹配结果
+message IndVASMatchResult
+{
+	message videoMatch 
+	{
+		optional uint32 userid 	= 1;//人员(用户)ID
+		optional uint32 rate	= 2;// 1-100,人脸匹配相似度,vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--关注
+	}
+	message MatchResult 
+	{
+		optional uint32 	channelid   = 1;//已分析的视频源,MPI对应通道id或者终端对应的通道id
+		optional uint32 	screenid    = 2;//已分析的视频源,非0-代表选看对应的屏幕
+		optional uint32	vaschannelid    = 3;//已分析的视频源所关联的VAS通道id(由MC预分配)
+		optional uint32 	srcmapid    = 4;//已分析的视频源(终端或者mpichannel)在VAS中映射id(由MC预分配)
+		repeated videoMatch videoMatchs = 5;//图像识别结果
+		optional bool   hasmismatch  = 6;// 有不匹配人员存在,false-没有不匹配人员存在(即都匹配上)、true-有不匹配人员存在,vaschannelid为虚拟桌牌通道(默认焦点屏)--不关注、人脸识别模式(默认直播屏)--关注
+	}
+	optional uint64		confid 		= 1;// 会议id
+	optional uint32		mcid		= 2;//接收消息的mc_deviceid
+	optional uint32 	vasid 		= 3;//发送消息的vas_deviceid
+	repeated MatchResult matchresults = 4;//匹配结果
+}
+// vas发起选看
+message CmdMCVASSeleteVideo
+{ 
+	message TermInfo
+	{ 		
+		optional uint32 	terid 	 	 = 1;//被选看的终端id或者mp媒体处理实例的通道id
+		optional uint32 	screenid	 = 2;//被选看的是终端则填入0,被选看的是mp媒体处理实例则填入具体的屏幕id（即非0-代表选看对应的屏幕）
+		optional uint32 	videosize  	 = 3;//期望流的大小， 0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+		optional uint32 	recvfps		 = 4;//期望的帧率大小，0:0 1:8 2:16 3:24 4:30 5:60.如果终端选看没填该选项，透传给netmp强制使用默认3:24
+	} 
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//接收消息的mc_deviceid
+	optional uint32  	vasid			= 3;//发起选看vas的vas_deviceid
+	optional uint32 	vaschannelid	= 4;//发起选看vas的通道id
+	repeated TermInfo  	seleteterinfo	= 5;
+}
+//[END] VAS<->MC////////////////////////////////////////////////////////////////////////////////////////

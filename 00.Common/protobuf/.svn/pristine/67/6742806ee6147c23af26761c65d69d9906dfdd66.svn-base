@@ -1,0 +1,732 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+//单会议单MP
+//
+//[BEGIN] MP<->MC////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->MP/////////////////////////////////////
+
+message ReqMPCreateMPI //创建媒体实例，对应创建会议
+{ 
+	message AgcSetting
+	{
+		optional bool  	agc_enable  			= 1;   //true: 使能AGC，false: 不启用AGC
+		optional int32  target_level_dbfs 		= 2;  //AGC等级
+		optional int32  compression_gain_db  	= 3;  //AGC增益
+		optional bool  	limiter_enable 			= 4;  //AGC限幅器使能标志
+	}
+	message Confcfg
+	{
+		optional uint32   	max_participants 	= 1; //会议最大允许人数
+		optional uint32		max_audiomix_num	= 2; //会议最大混音数
+		optional uint32		useVideoMixer		= 3; //是否启用视频混合器
+		optional uint32		useAudioMixer		= 4; //是否启用音频混合器
+		optional uint32		mixing_frequency 	= 5; //会议混音频率
+		optional uint32   	max_encoder_num		= 6; //会议中音频编码器最大个数
+		optional  AgcSetting  agc_setting 		= 7; //混音器AGC设置
+		optional uint32		mediaencryptionalgorithm = 8;//媒体数据加密算法
+		optional bytes		encryptionkey		= 9;//加密秘钥
+	}
+	message NetMpAddr
+	{
+		optional uint32		netmpid				= 1;//netmp_deviceid
+		optional string 	netmpmediaip		= 2;
+		optional uint32		audiodatarecvport	= 3;
+		optional uint32		audioctrlrecvport	= 4;
+		optional uint32		videodatarecvport	= 5;
+		optional uint32		videoctrlrecvport	= 6;
+		optional uint32		video2datarecvport	= 7;
+		optional uint32		video2ctrlrecvport	= 8;
+		optional uint32		video3datarecvport	= 9;
+		optional uint32		video3ctrlrecvport	= 10;
+		optional uint32		desktopdatarecvport	= 11;
+		optional uint32		desktopctrlrecvport	= 12;
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		mpid			= 3;//接收消息的mp_deviceid
+	optional uint32		channelid		= 4;//MC为会议媒体处理实例分配的通道id
+	optional Confcfg	confcfg 		= 5;//会议配置信息 
+	optional NetMpAddr netmpaddr 		= 6;//会议中netmp（多个中的随意一个netmp）的地址信息
+}
+
+message CmdMPDestoryMPI
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		mpid			= 3;//接收消息的mp_deviceid
+	optional uint32		channelid		= 4;//MC为会议媒体处理实例分配的通道id 
+	optional string		reason			= 5;//销毁会议媒体处理实例的原因
+}
+
+message IndMPTerJoined 
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	message DeviceInfo 
+	{ 
+	    optional uint32	  type        = 1;//0-音频设备、1-视频设备
+		repeated SourceInfo  srcinfos = 2;//音视频源信息
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     mpid            = 3;//接收消息的mp_deviceid
+	optional uint32		terid			= 4;//新加入confid会议的终端terid
+	optional uint32		channelid		= 5;//该终端的channelid
+	optional uint32 	termtype 		= 6;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 	fromtype 		= 7;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional string 	tername			= 8;
+	optional uint32 	specialtype	    = 9;//特殊类型, 0-普通终端类型,1-投屏终端类型
+	optional uint32 	gmrtype 		= 10;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		    = 11;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	        = 12;//分组会议的分组名
+	repeated DeviceInfo  devinfos       = 13;//终端的设备信息,如音视频设备	
+	optional uint32 	suid 			= 14;//终端唯一标识(由终端产生)
+	optional uint32 	producttype     = 15;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+}
+message IndMPTerLeft 
+{	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     mpid            	= 3;//接收消息的mp_deviceid
+	optional uint32		terid				= 4;//退出confid会议的终端terid
+	optional uint32		channelid			= 5;//该终端的channelid
+	optional uint32 	gmrtype 		    = 6;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		        = 7;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	            = 8;//分组会议的分组名
+}
+
+//告诉MP，在哪个CRS上创建/删除crschannelid
+message IndCRSChannelInfoToMp
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     mpid         	= 3;//接收消息的mp_deviceid
+	optional uint32     crsid			= 4;//CRS的设备id
+	optional uint32		crschannelid	= 5;//CRS对应的通道id
+	optional uint32		addordel		= 6;//1-添加channelid，2-删除channelid
+}
+
+message IndConfAllTerMediaFormatToMP
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端音频格式
+		optional uint32 audiofrequency	= 2; //终端音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端音频通道数
+		optional uint32 audioframelen	= 4; //终端音频帧长
+		optional uint32 audiopt         = 5; //终端音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端主视频格式
+		optional uint32 videopt         = 7; //终端主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端辅流视频格式
+        optional uint32 duovideopt      = 9; //终端辅流负载类型payload type
+		optional uint32 videobandwidth  = 10; //终端主流带宽
+	}
+	message TermsMediaFmt
+	{
+		optional uint32 terid 						= 1;
+		optional MediaTypeAndFormat sendmediaformat = 2;
+		optional MediaTypeAndFormat recvmediaformat = 3;		
+	}	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     mpid            	= 3;//接收消息的mp_deviceid
+	repeated TermsMediaFmt tersmediainfo	= 4; 
+}
+
+message IndMPTerMediaFormat 
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端发送音频格式
+		optional uint32 audiofrequency	= 2; //终端发送音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端发送音频通道数
+		optional uint32 audioframelen	= 4; //终端发送音频帧长
+		optional uint32 audiopt         = 5; //终端发送音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端发送主视频格式
+		optional uint32 videopt         = 7; //终端发送主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端发送辅流视频格式
+        optional uint32 duovideopt      = 9; //终端发送辅流负载类型payload type
+		optional uint32 videobandwidth  = 10; //终端发送主流带宽
+	}	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     mpid            	= 3;//接收消息的mp_deviceid
+	optional uint32		terid				= 4;//该终端terid
+	optional uint32		channelid			= 5;//该终端的channelid
+	optional MediaTypeAndFormat sendmediaformat = 6;
+	optional MediaTypeAndFormat recvmediaformat = 7;
+}
+
+message IndMPTerSendMediaFormat 
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端发送音频格式
+		optional uint32 audiofrequency	= 2; //终端发送音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端发送音频通道数
+		optional uint32 audioframelen	= 4; //终端发送音频帧长
+		optional uint32 audiopt         = 5; //终端发送音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端发送主视频格式
+		optional uint32 videopt         = 7; //终端发送主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端发送辅流视频格式
+        optional uint32 duovideopt      = 9; //终端发送辅流负载类型payload type
+		optional uint32 videobandwidth  = 10; //终端发送主流带宽
+	}	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     mpid            	= 3;//接收消息的mp_deviceid
+	optional uint32		terid				= 4;//该终端terid
+	optional uint32		channelid			= 5;//该终端的channelid
+	optional MediaTypeAndFormat sendmediaformat = 6;
+}
+
+message IndMPTerRecvMediaFormat 
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端接收音频格式
+		optional uint32 audiofrequency	= 2; //终端接收音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端接收音频通道数
+		optional uint32 audioframelen	= 4; //终端接收音频帧长
+		optional uint32 audiopt         = 5; //终端接收音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端接收主视频格式
+		optional uint32 videopt         = 7; //终端接收主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端接收辅流视频格式
+        optional uint32 duovideopt      = 9; //终端接收辅流负载类型payload type
+		optional uint32 videobandwidth  = 10;//终端接收主流带宽
+	}
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     mpid            	= 3;//接收消息的mp_deviceid
+	optional uint32		terid				= 4;//该终端terid
+	optional uint32		channelid			= 5;//该终端的channelid
+	optional MediaTypeAndFormat recvmediaformat = 6;
+}
+
+message ReqMPCreateScreen
+{ 
+	message TextATTR
+	{
+		optional uint32		textpos			= 1;//文本位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+		optional string		textcolor		= 2;//文本颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+		optional uint32		textFontsize	= 3;//文本字体大小：1-大、2-中、3-小
+		optional bool		enableTextBg	= 4;//使能文本背景
+		optional string		textBgColor		= 5;//文本背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	}
+	message TernameATTR
+	{
+		optional bool		enableTername	= 1 ; //使能会场名称
+		optional TextATTR	ternametextattr	= 2; //终端名称文本属性
+	}
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发起请求的mc_deviceid
+	optional uint32		mpid				= 3;//接收消息的mp_deviceid
+	optional uint32		channelid			= 4;//请求在某会议媒体处理实例通道channelid上创建屏幕
+	optional uint32		screentype			= 5;//请求创建的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32     relatednetmpid		= 6;//请求创建的屏幕关联的netmpid
+    optional bool   	voiceActiveInd		= 7;//请求创建屏幕的属性：发言激活指示
+	optional string  	voiceActiveColor	= 8;//请求创建屏幕的属性：发言激活颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional string		chairFeccColor		= 9;//请求创建屏幕的属性：远程控制指示颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional TernameATTR ternameattr		= 10;//请求创建屏幕的属性：终端名属性
+	optional uint32		seqnum				= 11;//发起请求的序列号，由发起请求的MC维护
+	optional uint32		screenid			= 12;//请求创建的屏幕的screenid
+	optional uint32		videosize 	 		= 13;//期望MP编码流的大小(目前只有screentype==4录制直播屏设置),0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+}
+
+message CmdMPSetScreenLayout 
+{ 
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message ConfPollInfo
+	{
+		optional uint32 terid   = 1;//轮询的终端id;
+	}
+	message ScreenPaneInfo 
+	{
+		optional uint32 paneindex	= 1;//分屏id,从0开始
+		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    	= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 	= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 	= 7;//终端名称
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空表示不指定范围。
+	} 
+	optional uint64				confid			= 1;//被设置的会议
+	optional uint32				mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     		mpid			= 3;//接收消息（被设置）的mp_deviceid
+	optional uint32 			channelid		= 4;//被设置的会议媒体处理实例通道id
+	optional uint32 			screenid		= 5;//被设置的屏幕id
+	optional uint32				screentype		= 6;//混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32 			layoutmode		= 7;//混屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+	repeated ScreenPaneInfo		screenpanelist	= 8;
+	repeated ConfPollInfo   	confpolllist   	= 9;//主席模式下会议布局轮询表
+	optional uint32       		chairfollow     = 10;//0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+}
+
+message CmdMPDestoryScreen
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发起请求mc_deviceid
+	optional uint32		mpid			= 3;//接收请求的mp_deviceid
+	optional uint32		channelid		= 4;//请求销毁屏幕所在的会议媒体处理实例通道id
+	optional uint32		screenid		= 5;//请求销毁的屏幕id
+}
+
+
+message CmdMPAddSubtitle
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发起命令的mc_deviceid
+	optional uint32		mpid			= 3;//接收命令的mp_deviceid
+	optional string 	message			= 4;//滚动字幕内容
+	optional uint32 	msgpos  		= 5;//滚动字幕的位置：1-上、2-中、3-下
+	optional string		msgcolor  		= 6;//滚动字幕字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 7;//滚动字幕字体大小：1-大、2-中、3-小
+	optional bool		enablemsgbg		= 8;//使能滚动字幕背景
+	optional string 	msgbgcolor  	= 9;//滚动字幕背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	displaytime  	= 10;//字幕显示时间，单位：秒;0-永久显示,非零-确切显示时间
+	optional bool		enablemsgroll	= 11;//字幕是否滚动显示:true-滚动显示(默认)、false-固定显示
+	optional uint32 	rollspeed   	= 12;//enablemsgroll为true时的滚动速度：1-缓慢、2-一般(默认)、3-稍快、4-快速
+}
+message CmdMPStopSubtitle
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发起命令的mc_deviceid
+	optional uint32		mpid			= 3;//接收命令的mp_deviceid
+}
+
+//显示会场名
+message CmdMPDisplayTername
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发起命令的mc_deviceid
+	optional uint32		mpid			= 3;//接收命令的mp_deviceid
+	optional uint32 	msgpos  		= 4;//会场名的位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+	optional string		msgcolor  		= 5;//会场名字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 6;//会场名字体大小：1-大、2-中、3-小
+	optional bool		enableMsgBg		= 7;//使能会场名称背景
+	optional string 	msgbgcolor  	= 8;//会场名背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+}
+//隐藏会场名
+message CmdMPHideTername
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发起命令的mc_deviceid
+	optional uint32		mpid			= 3;//接收命令的mp_deviceid
+}
+
+//命令MP发送对应屏幕不同等级的视频
+message CmdMPStartSendVideo
+{
+	message VideoSize
+	{
+		optional uint32 level 	= 1;// 0:不看 1:level-1 2:level-2 3:level-3.......n:level-n
+		optional uint32 count 	= 2;// 该屏幕被选看的level计数
+	}
+	optional uint64	confid 			 = 1;
+	optional uint32 channelid 		 = 2;//MPI媒体处理实例id
+	optional uint32 screenid 		 = 3;//非0-代表选看对应的混屏
+	repeated VideoSize sendvideosize = 4;
+}
+
+//告诉mp重新选择netmp打开通道
+message CmdMPReOpenNetMPMediaPort
+{
+    optional string 	netmpip 			= 1;//netmp_deviceid
+	optional uint32		audiodatarecvport	= 2;
+	optional uint32		audioctrlrecvport	= 3;
+	optional uint32		videodatarecvport	= 4;
+	optional uint32		videoctrlrecvport	= 5;
+	optional uint32		video2datarecvport	= 6;
+	optional uint32		video2ctrlrecvport	= 7;
+	optional uint32		video3datarecvport	= 8;
+	optional uint32		video3ctrlrecvport	= 9;
+	optional uint32		desktopdatarecvport = 10;
+	optional uint32		desktopctrlrecvport	= 11;	
+	optional uint64		confid 			    = 12;
+	optional uint32		mcid				= 13;//发送消息的mc_deviceid
+	optional uint32 	mpid 			    = 14;//接收消息的mp_deviceid
+	optional uint32     channelid           = 15;//MC为会议媒体处理实例分配的通道id	 
+}
+
+message IndMPChairTransfer //MC将该消息群发到会议中其他所有MP
+{ 
+	optional uint64	confid 			= 1;
+	optional uint32	mcid			= 2;//发送消息的MC
+	optional uint32 mpid 			= 3;//接收消息的MP
+	optional uint32	nchterid 		= 4;//更换后的主持人terid
+	optional uint32	nchchannelid 	= 5;//更换后的主持人channelid
+}
+
+message IndtMPTerMuteEnable //MC将该消息群发到会议中其他所有MP
+{
+	optional uint64 	confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+	optional uint32		terid 		= 4;//需设置的终端terid
+	optional uint32		channelid 	= 5;//需设置的终端channelid
+	optional bool   	mute_enable	= 6;//静音使能标志，true-静音、false-非静音
+}
+//全部静音
+message IndMPTerMuteAllEnable
+{
+	optional uint64 	confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+	optional bool   mute_all_enable	= 4;//静音使能标志，true-全部静音、false-取消全部静音
+}
+//MC将该消息群发到会议中其他所有MP
+message IndMPTerCameraEnable
+{
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	optional bool   	camera_enable	= 6;//摄像头开关标志，true-打开、false-关闭
+	repeated SourceInfo  srcinfos       = 7;//被修改终端的视频源信息
+}
+
+message IndMCHeartBeatToMP
+{ 
+	optional uint32		mcid				= 1;//发送消息的mc_deviceid
+	optional uint32 	mpid				= 2;//接收消息的mp_deviceid
+}
+//MC将该消息群发到其他所有MP
+message IndMPAssistVideoOn
+{
+	optional uint64		confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+    optional uint32 	avterid 	= 4;//在发送双流的终端
+	optional uint32 	avtype 		= 5;//发送的双流模式,默认0-AVC清晰模式,1-SVC流畅模式
+	optional uint32     sharedaudio = 6;//共享音频,默认0-不共享音频,1-共享音频
+}
+//MC将该消息群发到其他所有MP
+message IndMPAssistVideoOff
+{
+    optional uint64		confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+    optional uint32 	avterid 	= 4;//在发送双流的终端
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPSpecialtypeTransfer
+{
+	optional uint64		confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+	optional uint32     nspclterid 	= 4;//特殊类型变化的终端id
+	optional uint32     nspcltype 	= 5;//变化后的类型,	0-普通终端类型,1-投屏终端类型
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPChangeVideoSourceName
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo  srcinfos       = 6;//被修改终端所修改的终端视频源信息,srcinfos size为0不处理
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPChangeVideoSourcePriority
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional uint32	priority  = 2;//源的优先级级别(决定srcid谁将是主源)
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo allsrcinfos     = 6;//被修改终端所修改的终端视频源信息(覆盖式消息),allsrcinfos size为0不处理
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPNewAudioSourceJoined
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo  srcinfos       = 6;//终端音频源信息
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPAudioSourceLeave
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+		optional string	  name	  = 2;//源名称
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo  srcinfos       = 6;//终端音频源信息
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPNewVideoSourceJoined
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo newsrcinfos     = 6;//terid新插入的终端视频源信息,newsrcinfos size为0不处理
+	repeated SourceInfo allsrcinfos     = 7;//terid插入后当前所有终端视频源信息,allsrcinfos size为0不处理
+}
+
+//MC将该消息群发到其他所有MP
+message IndMPVideoSourceLeave
+{
+    message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32		terid 			= 4;//需设置的终端terid
+	optional uint32		channelid 		= 5;//需设置的终端channelid
+	repeated SourceInfo  delsrcinfos    = 6;//terid被移除的终端视频源信息,delsrcinfos size为0不处理
+	repeated SourceInfo  cursrcinfos    = 7;//terid移除后当前所有终端视频源信息
+}
+//MC将同名终端入会终端设备信息变化发送给mp
+message IndMPChangeDeviceInfos
+{
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	message DeviceInfo 
+	{ 
+	    optional uint32	  type        	 = 1;//0-音频设备、1-视频设备
+		repeated SourceInfo oldsrcinfos  = 2;//终端摄像头变化之前所有的终端音视频源信息,oldsrcinfos size为0不处理
+		repeated SourceInfo  newsrcinfos = 3;//终端摄像头变化后所有的终端音视频源信息(覆盖式消息),newsrcinfos size为0不处理
+	}
+	optional uint64 	confid 			 = 1;
+	optional uint32   	mcid    		 = 2;//发送消息的MC id
+	optional uint32   	mpid    		 = 3;//接收消息的mp id
+	optional uint32		terid 			 = 4;//需设置的终端terid
+	optional uint32		channelid 		 = 5;//需设置的终端channelid
+	repeated DeviceInfo deviceinfos 	 = 6;//终端设备变化信息(目前只有视频设备)
+}
+//mc将轮询列表信息发到所有MP
+message IndMPAutoPollInfo
+{
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+		optional string 	apname 		       = 2;//名单名称
+		optional uint32		addordel           = 3;//1-添加名单，2-删除名单（直接删除对应名单列表），3-修改名单
+		repeated ParticipantInfo parts         = 4;//名单成员(添加、修改时为覆盖式),如果为空表示不指定轮巡范围
+	}
+	optional uint64			confid			   = 1;
+	optional uint32			mcid			   = 2;//mc_deviceid
+	optional uint32   		mpid    		   = 3;//接收消息的mp id
+	repeated AutoPollInfo   autopolllist 	   = 4;//自动轮巡名单列表
+}
+//通知MP,主席(会控)锁定某个终端的视频(与传统视频会议中的广播者是一个概念)
+message IndMPChairLock
+{
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	
+	optional uint64 	confid 		= 1;
+	optional uint32   	mcid    	= 2;//发送消息的MC id
+	optional uint32   	mpid    	= 3;//接收消息的mp id
+	optional uint32 	lockedterid = 4;//设置的焦点终端
+	repeated SourceInfo  srcinfos   = 5;//视频源信息
+}
+//通知MP,主席(会控)解锁某个终端的视频(与传统视频会议中的广播者是一个概念)
+message IndMPChairUnLock
+{
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	
+	optional uint64 	confid 			= 1;
+	optional uint32   	mcid    		= 2;//发送消息的MC id
+	optional uint32   	mpid    		= 3;//接收消息的mp id
+	optional uint32 	unlockedterid 	= 4;//取消设置的焦点终端
+	repeated SourceInfo  srcinfos   	= 5;//视频源信息
+}
+/////////////////////////////////MP-->MC/////////////////////////////////////
+
+message RspMCCreateMPI
+{ 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;//接收消息的mc_deviceid 
+	optional uint32		mpid				= 4;//创建会议媒体处理实例的mp_deviceid 
+	optional uint32		channelid			= 5;//返回创建的会议媒体处理实例通道id
+	optional uint32     relatednetmpid		= 6;//该会议媒体处理实例通道关联的netmpid
+	optional string 	failreason			= 7;//若失败，则会有失败说明
+	optional uint32     errorcode           = 8;//错误提示对应的错误码	
+}
+
+message RspMCCreateScreen
+{ 
+	optional bool 		isok			= 1;
+	optional uint64		confid			= 2;
+	optional uint32		mcid			= 3;//接收消息的mc_deviceid
+	optional uint32  	mpid    		= 4;//创建屏幕的mp_deviceid 
+	optional uint32     relatednetmpid	= 5;//被创建屏幕关联的netmpid
+	optional uint32		channelid		= 6;//被创建屏幕所在的会议媒体处理实例通道id
+	optional uint32  	screenid   		= 7;//返回创建的屏幕id
+	optional uint32		screentype		= 8;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional string 	failreason		= 9;//若失败，则会有失败说明
+	optional uint32		seqnum			= 10;//发起请求的序列号，由发起请求的MC维护
+	optional uint32     errorcode       = 11;//错误提示对应的错误码
+}
+
+
+message CmdMPSeleteVideo
+{ 
+	message TermInfo
+	{ 
+		optional uint32 terid 		= 1; 
+		optional uint32 channelid	= 2;// 终端通道id
+		optional uint32 videosize	= 3;// 0:不看 1:level-1 2:level-2 3:level-3.......n:level-n
+		optional uint32 srcid 		= 4;// 终端视频源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	} 
+	optional uint64		confid		= 1;
+	optional uint32		mcid		= 2;//接收消息的mc_deviceid
+	optional uint32     mpid		= 3;//发起语音激励终端所在mp deviceid
+	optional uint32 	channelid		= 4;//语音激励终端所在媒体处理实例通道id
+	optional uint32 	screenid		= 5;//语音激励终端所在屏幕id 
+	repeated TermInfo  	seleteterinfo	= 6;
+}
+//MP选看双流
+message CmdMPSelectAssistVideo
+{
+	message TermInfo
+	{ 
+		optional uint32 terid 		= 1;//发送双流的终端
+		optional uint32 channelid	= 2;//发送双流的终端通道id
+		optional uint32 recvfmt 	= 3;//发起选看者期望接收(所需)双流的格式
+		optional uint32 recvsize  	= 4;//发起选看者期望接收(所需)双流的格式等级,0:不看 1:level-1 2:level-2 3:level-3.......n:level-n	
+		optional uint32 recvavtype 	= 5;//发起选看者期望接收(所需)双流的模式,默认0-AVC清晰模式,1-SVC流畅模式
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//mc_deviceid
+	optional uint32     mpid         	= 3;//mp_deviceid,发送消息的mp
+	optional uint32		channelid		= 4;//发起选看屏幕所属的channelid
+	optional uint32 	screenid		= 5;//发起选看屏幕的id
+	repeated TermInfo 	selectavinfo 	= 6;//select assist video info
+}
+
+message IndMPHeartBeatToMC
+{ 
+	optional uint32		mcid			= 1;//mc_deviceid
+	optional uint32		mpid			= 2;//mp_deviceid	
+}
+
+//分屏信息更新,MP-->MC
+message IndMPLayoutInfo
+{
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message PaneInfo
+	{ 
+		optional uint32 paneindex	= 1;//分屏id,从0开始
+		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    	= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 	= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 	= 7;//终端名称
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空表示不指定范围。
+	}
+	message LayoutInfo
+	{		
+		optional uint32 	screenid 		= 1;//混屏布局对应屏幕id
+		optional uint32		screentype		= 2;//混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+		optional uint32 	layoutmode		= 3;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+		repeated PaneInfo 	panes			= 4;//分屏信息
+		optional uint32     chairfollow     = 5;////0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+	}
+	optional uint64		confid			= 1;//更新的会议
+	optional uint32		mcid			= 2;//接收消息的mc_deviceid
+	optional uint32     mpid			= 3;//发起消息的mp deviceid
+	optional uint32 	channelid		= 4;//混屏布局对应屏幕所属媒体处理实例通道
+	repeated LayoutInfo layoutinfos		= 5;//分屏布局信息
+}
+
+//[END] MP<->MC////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+

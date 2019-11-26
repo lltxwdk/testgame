@@ -1,0 +1,733 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+
+//修改记录
+//11.17 IndNewTermJoinConf 增加别名alias
+//11.17 IndTermLeaveConf 增加别名alias
+//11.17 IndsertodevHeart 增加deviceid
+//11.17 RspRegister 增加deviceid
+//11.17 RspRegister 增加deviceid
+//11.17 ReqGetDeviceInfo 增加deviceid
+//11.26 增加 ReqUpdateDeviceInfo RspUpdateDeviceInfo 两条消息 更新指定的设备信息；修改 ReqGetDeviceInfo消息，获取最多个数的设备信息
+//12.9  
+// 1)修改消息名称 MC->DevMgr: IndCreateConf-->改为 ReqConfInfoFromDevMgr || RspCreateConf-->改为 IndMCCreateConf || IndEndConf -->改为 IndMCEndConf
+//      		  DevMgr->MC: ReqCreateConf-->改为 RspConfInfoToMC	 			  
+// 2)合并 		  IndCreateConfFail、ReqCreateConf 为一条消息 RspConfInfoToMC
+// 3)新增消息     IndNetMPConfInfoInMC -->MC在netmp上创建或删除会议时通知DevMgr
+// 4)增加消息字段 终端上下会通知 IndNewTermJoinConf IndTermLeaveConf 里带上该终端使用的netmpid || MC删除会议通知 IndMCEndConf，带上该会议使用的所有netmpid
+// 5)删除消息字段 IndMCCreateConf(旧名称:RspCreateConf)里删除netmpid信息
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+
+//[BEGIN] Ser->Device/////////////////////////////////////////////////////////////////////////
+/////Request////
+message ReqRegister
+{
+	message TerInfo
+	{
+		optional uint32 suid = 1;// 加入者ID
+		optional string ip = 2;//标准终端
+		optional string alias = 3;//别名
+		optional uint32 netmpid = 4;//该终端使用的netmpid
+		optional uint32 fromtype = 5;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	    optional uint32 termtype = 6;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+		optional uint32 producttype = 7;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	}
+	message ConfInfo
+	{
+		optional uint64 confid = 1;//会议ID
+		repeated TerInfo terlist = 2; // 终端列表
+	}
+	message MapIPInfo
+	{
+		optional string mapip = 1;
+	}
+	optional uint32 ip = 1; // 
+	optional uint32 port = 2 ; // 
+	optional string auth_password = 3; // 序列码（含媒体集群信息）
+	optional uint32 svr_type = 4; // MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、Ddevmgr=7、CRS=9、stunserver=11、VAS=12等 
+	optional uint32 cpunums=5;// cpu几核 
+	optional uint32 max_bandwidth=6;// 最大带宽 netmp设值
+	repeated ConfInfo conflist = 7;//会议列表
+	optional string systemlicence = 8;//系统授权信息,由mc解密各自的系统授权文件拼接字符串携带过来
+	optional uint32 nettype = 9 ; // ip地址类型,0-私(内)网,1-公(外)网,2-VPN地址
+	optional string version = 10;// 该服务软件版本号
+	optional string domainname = 11;// svr_type==7时下级设备管理对应域名
+	optional uint32 httpport = 12 ; // svr_type==12时对应的图片上传的端口
+	repeated MapIPInfo mapinternetips = 13;//单一会见系统mc、devmgr部署外网,svr_type为2(netmp)、3(relaymc)部署内网时映射的外网ip列表(若服务本身在外网不必关注)
+}
+
+message ReqUnRegister{			//MC netmp通用
+	optional string token=1;//token组成自定义，唯一即可
+}
+
+//MC专用
+message ReqConfInfoFromDevMgr
+{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+}
+
+//获取指定数量的设备信息
+// mc、relayserver、relaymc、suiruigw通用
+// mc、relayserver获取netmp信息mc->netmp、relayserver->netmp;
+// relaymc、suiruigw获取mc信息relaymc -> mc、suiruigw -> mc;
+// mc获取mp、gw、crs、srs、relayserver信息mc->mp、mc->suiruigw、mc->crs、mc->srs、mc->relayserver;
+// relaymc获取所有relaymc的域信息relaymc->relaymc;
+message ReqGetDeviceInfo
+{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint32 svr_type = 3; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、devmgr=7等 
+	optional uint32 get_svr_type = 4; // 获取的设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、CRS=9、SRS=10、stunserver=11、VAS=12等 
+	optional uint32 devnums = 5;//想要获取最多devnums个设备
+	optional string domainname = 6;//想要获取指定域的设备,只有svr_type=3并且get_svr_type=3情况才分析该字段,如果没有该字段或者该字段为空,返回(上下级域)所有relaymc
+}
+
+// 目前仅限于下级devmgr向上级devmgr请求
+// 下级devmgr获取上级relaymc、relayserver、stunserver信息sub devmgr->up devmgr->up relaymc、sub devmgr->up devmgr->up relayserver、sub devmgr->up devmgr->up stunserver;
+message ReqGetSysDeviceInfo
+{
+	optional uint32 deviceid=1;// 发起请求的设备id,由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;// 发起请求的设备token组成自定义,唯一即可
+	optional uint32 svr_type = 3; // 发起请求的设备类型devmgr=7
+	optional string domainname = 4;// 发起请求的设备所属域域名,不为空：获取的设备域范围排除该域,为空：获取的设备域范围不排除该域
+	optional uint32 get_svr_type = 5; // 获取的设备类型Relaymc=3、relayserver=4、stunserver=11等 
+	repeated string get_domainnames = 6;// 想要获取指定域的集合,为空时返回所有域(需要进一判断是否排除domainname),也为将来支持获取平级(兄弟)域设定
+}
+
+// mc获取系统当前负载信息
+message ReqGetSystemCurLoad
+{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+}
+
+message ReqUpdateDeviceInfo{
+	message DeviceInfo{
+		optional uint32 deviceid = 1;
+		optional uint32 update_svr_type = 2;
+	}
+	optional uint32 deviceid = 1;
+	optional string token    = 2;
+	optional uint32 svr_type = 3; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、CRS=9等 
+	repeated DeviceInfo update_devices = 4;
+}
+
+/////////end////////////
+
+////////Indication////
+
+message IndNewTermJoinConf {		//MC专用
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;// 设备序列号
+	optional uint64 confid = 3;//会议ID
+	optional uint32 suid = 4;// 加入者ID
+	optional string ip = 5;//标准终端
+	optional string alias = 6;//别名，开会过程中可能修改，则由离开时再带一次别名。
+	optional uint32 netmpid = 7;//该终端使用的netmpid
+	optional uint64 confreportid = 8;
+	optional uint32 fromtype = 9;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 termtype = 10;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 producttype = 11;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+}
+
+message IndTermLeaveConf{				//MC专用
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;// 设备序列号
+	optional uint64 confid = 3;//会议ID
+	optional uint32 suid = 4;// 退出终端ID
+	optional string ip = 5;//标准终端
+	optional string alias = 6;//别名
+	optional uint32 netmpid = 7;//该终端使用的netmpid
+	optional uint64 confreportid = 8;
+}
+
+message IndMCCreateConf{				//MC专用
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+	optional bool isok = 3;// 结果
+	optional uint64 confid = 4;//会议ID
+	optional string failreason = 5;// 结果
+	optional uint64 confreportid = 6;
+}
+
+//mc、netmp、relaymc、relayserver、mp、gw、devmgr、crs、stunserver、VAS通用
+message IndsertodevHeart
+{
+	message LoadInfo
+	{
+		optional uint32 ternum = 1; // 当前在线终端总数
+		optional uint32 cpu = 2; // cpu使用率*10000
+		optional uint32 srcnt = 3;	// 当前在线SR终端数(MC专用)
+		optional uint32 stdcnt = 4;	// 当前在线标准终端数(MC专用)
+		optional uint32 reccnt = 5;	// 当前录制通道数(MC专用)
+		optional uint32 confcnt = 6;// 当前会议总数(MC专用)
+		optional uint32 livecnt = 7;// 当前直播总数(MC专用)
+		optional uint32 analycnt = 8;// 当前视频分析路数总数(MC专用)
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint32 load1=3;	//netmp:终端数，relayserver、stunserver:下行带宽，mp、GW、VAS：cpu使用率*10000
+	optional uint32 load2=4;	//netmp:下行带宽，relayserver、stunserver:终端数，mp：上行带宽（netmp->mp），Relaymc、GW、VAS：在线终端数
+	optional uint32 svr_type = 5; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、devmgr=7、CRS=9、stunserver=11、VAS=12等 	
+	optional LoadInfo loadinfo = 6;//mc负载信息
+}
+
+message IndMCEndConf{			//MC专用
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint64 confreportid = 4;
+	optional uint32 permanentenable = 5;// 是否是永久会议,0-一次性会议、1-永久性会议
+}
+
+message IndNetMPConfInfoInMC{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 netmpid = 4;//该会议使用的netmpid
+	optional uint32 addordel = 5;//MC在会议中使用netmp或删除netmp, 1:add 2:删除
+	optional uint64 confreportid = 6;
+}
+//MC专用
+message IndNetMPConnStatusInMC{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint32 netmpid = 3;//关联的netmpid
+	optional uint32 connstatus = 4;//0:断开连接 1:连接成功
+	optional uint32 groupid    = 5;//该netmp所属域分组id
+}
+//MC专用,开始录制会议
+message IndCRSStartRec{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 crsid  = 4;//录制服务设备id
+	optional string filestorsvrip   = 5;//CRS录制文件存放服务的ip
+	optional string filestorpath	= 6;//CRS录制文件存放相对路径
+	optional string sdefilepath	= 7;//CRS录制的加密文件存放相对路径
+	optional string relativepath	= 8;//CRS录制文件存放根路径
+	optional string confname        = 9;//会议名称
+	optional uint64 confreportid    = 10;
+}
+//MC专用,结束录制会议
+message IndCRSStopRec{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 crsid  = 4;//录制服务设备id
+	optional string filestorsvrip   = 5;//CRS录制文件存放服务的ip,stopreason为0不携带该字段
+	optional string filestorpath	= 6;//CRS录制文件存放相对路径,stopreason为0不携带该字段
+	optional string sdefilepath	= 7;//CRS录制的加密文件存放相对路径,stopreason为0不携带该字段
+	optional string relativepath	= 8;//CRS录制文件存放根路径,stopreason为0不携带该字段
+	optional uint32 stopreason	= 9;//0-异常(请求结束超时)结束录制,1-录播正常结束录制
+	optional string confname        = 10;//会议名称
+	optional uint64 confreportid    = 11;
+	optional uint64	filesize	= 12;//文件大小,单位：MB
+}
+//MC专用,单会议录制多文件,不是开始、结束录制操作关联的文件需要调用该消息另行通知
+message IndCRSFileStoragePath{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 crsid  = 4;//录制服务设备id
+	optional string filestorsvrip   = 5;//CRS录制文件存放服务的ip
+	optional string filestorpath	= 6;//CRS录制文件存放相对路径
+	optional string sdefilepath	= 7;//CRS录制的加密文件存放相对路径
+	optional string relativepath	= 8;//CRS录制文件存放根路径
+	optional uint32	recordstate	= 9;//该文件录制状态,1-录制开始、2-录制结束
+	optional uint64 confreportid    = 10;
+	optional uint64	filesize	= 11;//文件大小,单位：MB
+}
+
+//MC专用,视频分析服务分析视频的状态(目前只上报直播分析的状态)
+message IndVASAnalyVideoState
+{
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint64 confreportid  = 4;
+	optional uint32 analystate    = 5;//视频分析的状态,0-停止分析,1-正在分析
+}
+
+//MC专用,开始直播会议
+message IndCRSStartLive
+{
+	message LiveAddr
+	{ 		
+		optional uint32 type  = 1;//0-未知,1-RTMP,2-FLV,3-HLS
+		optional string url	  = 2;//对应type的直播地址
+	} 
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 crsid  = 4;//录制服务设备id
+	optional string livepushurl   = 5;//livesvrtype等于0时CRS直播(推流)的url
+	optional string livepullurl   = 6;//livesvrtype等于0时直播(拉流)的url
+	optional string liveplayurl   = 7;//直播(播放)的url
+	optional LiveSetting livesetinfo	= 8;//每次直播的参数设置
+	optional uint64 confreportid  = 9;
+	optional uint32	livesvrtype	 = 10;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
+	repeated LiveAddr liveaddrs	 = 11;//livesvrtype大于0时的直播地址信息
+}
+//MC专用,结束会议直播
+message IndCRSStopLive
+{
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 crsid  = 4;//录制服务设备id
+	optional string liveurl   = 5;//CRS直播(推流)的url
+    optional uint64 confreportid  = 6;
+}
+//MC专用,增删改会议点名名单
+message IndModifyConfCallList
+{
+    message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 		= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 	= 2;//终端昵称、别名
+	}
+	message RollCallInfo 
+	{ 
+		optional uint64 	rcid 		   = 1;//名单id
+		optional string 	rcname 		   = 2;//名单名称
+		repeated ParticipantInfo parts     = 3;//名单成员,optype=2删除时不必关注,optype=1、3时为设置好的成员
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint32 optype = 4;//0-未知、1-新增、2-删除、3-修改
+	optional RollCallInfo   rollcalllist  = 5;//点名名单列表
+}
+//MC专用,更新服务端收发某终端的统计信息
+message IndTerStatisticsInfo
+{
+	message FrameInfo
+	{
+		optional uint32 fsw = 1;// 分辨率 宽 frame size width
+		optional uint32 fsh = 2;// 分辨率 高 frame size height
+		optional uint32 fps = 3;// 帧率
+	}
+	message AdvanceInfo
+	{
+		optional uint32 delay = 1; // 延时,单位ms
+		optional uint32 jitter = 2; // 抖动,单位ms
+		optional uint32 loss = 3; // 丢包率
+	}
+	message BaseInfo
+	{
+		optional uint32 format = 1;	// 媒体格式,参考SRMediaCommon.h的音视频格式定义
+		optional uint32 bitrate = 2; // 码率,单位kbps
+	}
+	message AudioInfo
+	{
+	    optional uint32    atype = 1;//音频类型,0-主音频、1-共享音频(目前复用在主音频通道,待独立通道时再加)
+		optional uint32    atersuid = 2;//相关终端terid
+		optional string    ateralias = 3;//相关终端别名
+		optional BaseInfo  baseinfo  = 4;//基本信息
+		optional AdvanceInfo  advinfo = 5;//高级信息
+	}
+	message VideoInfo
+	{
+	    optional uint32    vtype = 1;//视频类型,0-主流、1-辅流(双流共享)
+		optional uint32    vtersuid = 2;//相关终端tersuid
+		optional string    vteralias = 3;//相关终端别名
+		optional BaseInfo  baseinfo = 4;//基本信息
+		optional AdvanceInfo  advinfo = 5;//高级信息
+		repeated FrameInfo  frameinfo  = 6;//多层分辨率和帧率的信息(目前只填最大分辨率那层)
+	}
+	message XfeInfo
+	{
+	    repeated AudioInfo  ainfo  = 1;//音频信息
+	    repeated VideoInfo  vinfo  = 2;//视频信息
+	}
+	message TerStatisticsInfo
+	{
+	    optional uint32 suid  = 1;//被统计终端suid
+		optional string alias = 2;//被统计终端别名
+	    repeated XfeInfo  txinfo  = 3;//服务端给被统计终端发送的统计信息(可支持多路多层)
+	    repeated XfeInfo  rxinfo  = 4;//服务端接收被统计终端的统计信息
+	    optional uint32 fromtype  = 5;// 被统计终端分类,0-来自随锐平台(即随锐自有SR终端)、1-来自随锐网关(即H.323终端、SIP终端、监控实时流、监控录像)
+		optional uint32 termtype  = 6;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+		optional uint32 txbweresult  = 7;//服务端给被统计终端发送的带宽评估结果,0-unknown、1-较差、2-一般、3-良好
+		optional uint32 producttype = 8;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//设备序列号
+	optional uint64	 confid = 3;// 按照会议为单位上报终端统计信息
+	repeated TerStatisticsInfo tsinfo = 4;// 该会议下终端的统计信息,可同时上报多个终端的统计信息
+}
+// 将下级服务信息同步给上级devmgr
+message IndSubSvrInfoToDevmgr
+{
+	message IPPORTInfo
+	{
+		optional string  inner = 1;//内网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  outer = 2;//外网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  vpn   = 3;//VPN地址拼串(ip+port,高32位是ip,低32位是端口)
+	}
+	message ServerInfo 
+	{ 
+		optional uint32 svrtype = 1;//设备(服务)类型Relaymc=3、relayserver=4、stunserver=11
+		optional uint32 deviceid = 2;//设备id
+		optional IPPORTInfo  ipport = 3; //该设备的地址信息,addordel==2时可以不关注
+	}
+	message DomainInfo 
+	{ 
+		optional string domainname = 1;//本级域名
+		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
+		repeated ServerInfo  svrinfos = 3; //本级域各设备的地址信息
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint32 addordel = 3;// 1-add, 2-delete
+	repeated DomainInfo domaininfos = 4;//各级域信息
+}
+
+// 将下级服务心跳同步给上级devmgr
+message IndSubSvrHeartTodev
+{
+	message LoadInfo
+	{
+		optional uint32 ternum = 1; // 在线终端数,relaymc=3、relayserver=4 
+		optional uint32 tx = 2;	// 下行(发送)带宽,relayserver=4 
+		optional uint32 rx = 3; // 上行(接收)带宽
+		optional uint32 cpu = 4; // cpu使用率*10000
+	}
+	message ServerInfo 
+	{ 
+		optional uint32 svrtype = 1;//设备(服务)类型relaymc=3、relayserver=4 
+		optional uint32 deviceid = 2;//设备id
+		optional LoadInfo  loadinfos = 3;//负载信息
+	}
+	message DomainInfo 
+	{ 
+		optional string domainname = 1;//本级域名
+		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
+		repeated ServerInfo  svrinfos = 3; //本级域各设备的地址信息
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	repeated DomainInfo domaininfos = 3;//各级域信息
+}
+//MC专用,视频分析服务分析视频的匹配结果(目前只上报直播分析的状态)
+message IndVASAnalyVideoResult
+{
+	message videoMatch 
+	{
+		optional uint32 userid 	= 1;//人员(用户)ID
+		optional uint32 rate	= 2;// 1-100,人脸匹配相似度
+	}
+	message MatchResult 
+	{
+		optional bool   hasmismatch  = 1;// 有不匹配人员存在,false-没有不匹配人员存在(即都匹配上)、true-有不匹配人员存在
+		repeated videoMatch videoMatchs = 2;//图像识别结果
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint64 confid = 3;//会议ID
+	optional uint64 confreportid  = 4;
+	repeated MatchResult matchresults = 5;//分析多路视频的匹配结果(当前只有一路直播)
+}
+
+/////////end////////////
+
+////////////////////////////Device-->Ser///////////////////////////////////////////////////////
+/////Request////		
+message RspConfInfoToMC{			//MC专用
+	message AgcSetting
+	{
+		optional bool  	agc_enable  			= 1;   //true: 使能AGC，false: 不启用AGC
+		optional int32  target_level_dbfs 		= 2;  //AGC等级
+		optional int32  compression_gain_db  	= 3;  //AGC增益
+		optional bool  	limiter_enable 			= 4;  //AGC限幅器使能标志
+	}
+	message Confcfg
+	{
+		optional uint32		max_audiomix_num	= 1; //会议最大混音数
+		optional uint32		useVideoMixer		= 2; //是否启用视频混合器
+		optional uint32		useAudioMixer		= 3; //是否启用音频混合器
+		optional uint32		mixing_frequency 	= 4; //会议混音频率
+		optional uint32   	max_encoder_num		= 5; //会议中音频编码器最大个数
+		optional  AgcSetting  agc_setting 		= 6; //混音器AGC设置
+		optional uint32		videosize 	 		= 7;//期望MP编码流的大小(目前只有录制直播屏设置),0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 		= 2;//终端昵称、别名
+		optional string 	ip 				= 3;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+		optional uint32 	protocoltype 	= 4;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0
+		optional uint32 	bandwidth 		= 5;//终端呼叫带宽
+		optional uint32 	usertype 		= 6;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,7-监控前端录像,8-微信网页客户端
+		optional uint32 	devicetype 		= 7;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional string 	devicecode 		= 8;//监控设备编码,usertype==4或usertype==7时填入监控前端设备编码
+		optional string 	shortname 		= 9;//短号,一般是usertype==3标准终端注册时短号呼叫用
+		optional uint32 	orderno 		= 10;//终端排序序号
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	message RollCallInfo 
+	{ 
+		optional uint64 	rcid 		       = 1;//名单id
+		optional string 	rcname 		       = 2;//名单名称
+		repeated ParticipantInfo parts         = 3;//名单成员,只关注psuid、nickname
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+		optional string 	apname 		       = 2;//名单名称
+		repeated ParticipantInfo parts         = 3;//名单成员,只关注psuid、nickname
+	}
+	optional bool   isok = 1;//是否成功,若失败,就只需要填充后面的 confid 和 failurereason字段
+	optional uint32 suid = 2;//创建者标识
+	optional uint64 confid = 3;//会议ID
+	optional string confpwd = 4;//会议密码
+	optional string recvpwd = 5;
+	optional string begintime = 6;//会议开始时间
+	optional string endtime = 7;	//会议结束时间
+	optional bool islimited = 8;//限制入会
+	optional string subject = 9;//会议主题
+	optional uint32 conftype = 10;//会议类型（O）——1传统会议/2直播会议
+	optional uint32 confstartmethod = 11; //开启方式（O）——1定点开启/2有人进入开启/3管理员进入开启
+	optional uint32 mutetype = 12;//默认静音方式（直播会议：服务端静音，传统会议：客户端静音）
+	optional uint32 ternums = 13;//会议容纳的最大终端数量
+	optional Confcfg confcfg = 14;//会议配置信息
+	optional string failurereason = 15;
+	repeated ParticipantInfo participants = 16;//与会者
+	optional uint32 confctrlsuid = 17;//会议控制者标识
+	optional uint32 audioenable = 18;//会议是否支持音频，0-不支持，1-支持
+	optional uint32 videoenable = 19;//会议是否支持视频，0-不支持，1-支持
+	optional string confname = 20;//会议名称
+	optional uint32 encryptalg = 21; // 媒体流加密算法,0-不加密、1-AES-128、2-SM4、3-网安
+	optional LiveSetting livesetinfo = 22;//直播参数设置
+	optional uint32 autorec = 23;// 会议是否自动录制,0-不自动、1-自动
+	optional uint64 confreportid  = 24;
+	optional uint32 errorcode = 25;//错误提示对应的错误码
+	repeated RollCallInfo rollcalllist = 26;//点名名单列表
+	optional uint32 permanentenable = 27;// 是否是永久会议,0-一次性会议、1-永久性会议
+	repeated AutoPollInfo autopolllist = 28;//自动轮巡名单列表，如果为空表示不指定范围。
+}
+
+////////Indication////
+message IndDevtoserHeart {				//MC netmp通用
+	optional string token=1;//token组成自定义，唯一即可
+}
+
+// 将上级服务信息同步给下级devmgr
+message IndUpSvrInfoToDevmgr
+{
+	message IPPORTInfo
+	{
+		optional string  inner = 1;//内网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  outer = 2;//外网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  vpn   = 3;//VPN地址拼串(ip+port,高32位是ip,低32位是端口)
+	}
+	message ServerInfo 
+	{ 
+		optional uint32 svrtype = 1;//设备(服务)类型Relaymc=3、relayserver=4、stunserver=11
+		optional uint32 deviceid = 2;//设备id
+		optional IPPORTInfo  ipport = 3; //该设备的地址信息,addordel==2时可以不关注
+	}
+	message DomainInfo 
+	{ 
+		optional string domainname = 1;//本级域名
+		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
+		repeated ServerInfo  svrinfos = 3; //本级域各设备的地址信息
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint32 addordel = 3;// 1-add, 2-delete
+	repeated DomainInfo domaininfos = 4;//各级域信息
+}
+
+// 将上级服务心跳同步给下级devmgr
+message IndUpSvrHeartTodev
+{
+	message LoadInfo
+	{
+		optional uint32 ternum = 1; // 在线终端数,relaymc=3、relayserver=4、stunserver=11
+		optional uint32 tx = 2;	// 下行(发送)带宽,relayserver=4、stunserver=11
+		optional uint32 rx = 3; // 上行(接收)带宽
+		optional uint32 cpu = 4; // cpu使用率*10000
+	}
+	message ServerInfo 
+	{ 
+		optional uint32 svrtype = 1;//设备(服务)类型relaymc=3、relayserver=4、stunserver=11
+		optional uint32 deviceid = 2;//设备id
+		optional LoadInfo  loadinfos = 3;//负载信息
+	}
+	message DomainInfo 
+	{ 
+		optional string domainname = 1;//本级域名
+		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
+		repeated ServerInfo  svrinfos = 3; //本级域各设备的地址信息
+	}
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	repeated DomainInfo domaininfos = 3;//各级域信息
+}
+
+////////////Respond/////////
+//MC netmp通用
+message RspRegister {
+	message Capset 
+	{ 
+		optional string fmt = 1;//音视频格式
+	}
+	message CapInfo 
+	{ 
+		optional uint32 captype = 1;//能力集类型,0-未知、1-音频、2-视频
+		repeated Capset capsets = 2; //音视频能力集合
+	}
+	optional bool isok=1; //
+	optional uint32 deviceid=2;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token=3;//token组成自定义，唯一即可
+	optional string failurereason=4; //
+	optional uint32 groupid=5;//该设备所属域分组id
+	optional string domainname=6; //该设备所属域名
+	optional uint32 errorcode=7;//错误提示对应的错误码
+	repeated CapInfo capinfos=8;//gw专用,云平台的音视频能力集配置信息
+}
+
+message RspUnRegister {					//MC netmp通用
+	optional bool isok=1; //
+	optional string failurereason=2; //
+}
+//mc、relayserver、relaymc、suiruigw通用
+// mc、relayserver获取netmp信息mc->netmp、relayserver->netmp;
+// relaymc、suiruigw获取mc信息relaymc -> mc、suiruigw -> mc;
+// mc获取mp、gw、crs、srs、relayserver信息mc->mp、mc->suiruigw、mc->crs、mc->srs、mc->relayserver;
+// relaymc获取所有relaymc的域信息relaymc->relaymc;
+message RspGetDeviceInfo 
+{
+	message MapIPInfo
+	{
+		optional string mapip = 1;
+	}
+	message DeviceInfo
+	{
+		optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+		optional uint32 svr_type = 2; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、CRS=9、SRS=10等 
+		optional uint32 get_svr_type = 3; // 获取的设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、CRS=9、SRS=10等 
+		optional uint32 ip = 4;
+		optional uint32 port = 5;
+		optional uint32 load = 6;//netmp:下行带宽；mp:上行带宽（netmp->mp）；mc、relaymc、stunserver、gw、vas：终端连接数；srs：是否根节点,0-不是,1-是；crs：磁盘使用率（高16位是总容量,低16位是剩余容量,单位：GB）
+		optional uint32 load2 = 7;//netmp:终端连接数；relayserver、stunserver:下行带宽；mp、mc、gw、crs、vas:cpu负载；srs不必关注
+		optional uint32 groupid = 8;// deviceid对应设备所属媒体域分组id
+		optional string domainname = 9;// relaymc deviceid对应设备所属域名
+		repeated MapIPInfo mapinternetips = 10;//单一会见系统mc、devmgr部署外网,svr_type为2(netmp)、3(relaymc)部署内网时映射的外网ip列表(若服务本身在外网不必关注)
+	}
+	optional string token=2;//token组成自定义，唯一即可
+	repeated DeviceInfo deviceinfolist=3;
+}
+
+// 目前仅限于上级devmgr给下级devmgr回复
+// 上级devmgr给下级devmgr回复relaymc、relayserver、stunserver信息up relaymc->up devmgr->sub devmgr、up relayserver->up devmgr->sub devmgr、up stunserver->up devmgr->sub devmgr;
+message RspGetSysDeviceInfo 
+{
+	message LoadInfo
+	{
+		optional uint32 ternum = 1; // 在线终端数,relaymc=3、stunserver=11
+		optional uint32 tx = 2;	// 下行(发送)带宽,stunserver=11
+		optional uint32 rx = 3; // 上行(接收)带宽
+		optional uint32 cpu = 4; // cpu使用率*10000
+	}
+	message IPPORTInfo
+	{
+		optional string  inner = 1;//内网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  outer = 2;//外网地址拼串(ip+port,高32位是ip,低32位是端口)
+		optional string  vpn   = 3;//VPN地址拼串(ip+port,高32位是ip,低32位是端口)
+	}
+	message DeviceInfo 
+	{
+		optional uint32 deviceid = 1;//设备id
+		optional IPPORTInfo  ipport = 2; //该设备的地址信息
+		optional LoadInfo  loadinfos = 3;//负载信息
+	}
+	message DomainInfo 
+	{ 
+		optional string domainname = 1;//本级域名
+		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
+		repeated DeviceInfo devices = 3;//
+	}
+	optional uint32 deviceid = 1;//接收消息的设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//接收消息的设备token，唯一即可
+	optional uint32 svrtype = 3;//设备(服务)类型relaymc=3、relayserver=4、stunserver=11
+	repeated DomainInfo domaininfos = 4;//按照域分组方式返回设备信息集合,目前只返回上级devmgr所属域的所有设备,返给下级devmgr时排除下级devmgr所属域
+}
+
+// 将系统当前负载信息回复给mc
+message RspGetSystemCurLoad 
+{
+	optional string token       = 1;//token组成自定义，唯一即可
+	optional uint32 curconfcnt  = 2;
+	optional uint32 curreccnt   = 3;
+	optional uint32 curlivecnt  = 4;
+	optional uint32 curanalycnt  = 5;
+}
+
+message RspUpdateDeviceInfo {					//MC netmp通用
+	message DeviceInfo
+	{
+		optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+		optional uint32 svr_type = 2; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、CRS=9等
+		optional uint32 ip = 4;
+		optional uint32 port = 5;
+		optional uint32 load = 6;//netmp:下行行带宽；mp:上行带宽（netmp->mp）；mc：终端连接数
+		optional uint32 load2 = 7;//netmp:终端连接数；mp:cpu负载
+	}
+	optional string token=2;//token组成自定义，唯一即可
+	repeated DeviceInfo update_devices =3;
+}
+
+////////////cmd/////////
+//GW专用,devmgr广播给所有gw
+message CmdGWOPMonitor
+{
+	optional string  token           = 1;// 必填项,网关token
+	optional uint32  optype          = 2;// 必填项,操作类型,0-未定义、1-同步、2-修改、3-删除
+	optional string  platformcode    = 3;// 必填项,平台编码(20位)	
+	optional string  dsturl          = 4;// 当optype等于1时必填项,告诉网关往该目的地址进行同步
+	optional string  platformnewcode = 5;// 当optype等于2时,告诉网关修改某平台(20位)编码
+	optional string  platformnewkey  = 6;// 当optype等于2时,告诉网关修改某平台的密钥
+}
+//GW专用,devmgr广播给所有gw
+message CmdGWOPAVConfig
+{
+	message Capset 
+	{ 
+		optional string fmt = 1;//音视频格式
+	}
+	message CapInfo 
+	{ 
+		optional uint32 captype = 1;//能力集类型,0-未知、1-音频、2-视频
+		repeated Capset capsets = 2;//音视频能力集合
+	}
+	optional string  token       = 1;// 必填项,网关token
+	optional uint32  optype      = 2;// 必填项,操作类型,0-未定义、1-增加、2-删除、3-修改
+	repeated CapInfo capinfos    = 3;// 云平台的能力集配置信息,代表更新后的能力集(覆盖式)
+}
+
+////////end///////////
+
+//[END] Device_ser/////////////////////////////////////////////////////////////////////////

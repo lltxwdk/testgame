@@ -1,0 +1,169 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+
+package SRMsgs;
+//消息命名方式:
+//1.Req、Cmd、Ind、Rsp四种前缀
+//主要是为MC
+//
+//[BEGIN] GW<->MC////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->GW/////////////////////////////////////
+
+// 通知网关同步监控点信息
+message CmdGWSyncMonitorInfo
+{
+	optional uint32		mcid			= 1;//发送消息的mc_deviceid
+	optional uint32		gwid			= 2;//接收消息的gw_deviceid
+	optional string 	dsturl    		= 3;//监控点同步的目的地址
+}
+
+// mc透传,不用记录状态,查询监控录像,H5-->ConfCtrlSvr-->MC-->gw/ter-->MC-->gw
+message CmdGWQueryMonitorRec
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message MonitorInfo 
+	{ 
+		optional string 	devicecode 		= 1;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional TimeInfo   totaltimespan   = 2;//查询的总时间段信息,usertype==7-监控前端录像
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		gwid			= 3;//接收消息的gw_deviceid
+	repeated MonitorInfo queryinfos     = 4;//查询对应监控前端录像的信息
+}
+
+message CmdGWInvitParticipants
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 		= 2;//终端昵称、别名
+		optional string 	ip 				= 3;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+		optional uint32 	protocoltype 	= 4;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP
+		optional uint32 	bandwidth 		= 5;//终端呼叫带宽
+		optional uint32 	devicetype 		= 6;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional string 	calloption		= 7;//呼叫选项,一般是通知给gw供devicetype==0(标准终端)、1(MCU)、2(监控前端实时流)、4(流媒体实时流)、5(Trunk)情况分析用
+		optional string 	devicecode 		= 8;//监控设备编码,即devicetype==2-监控时填入监控前端设备编码
+		optional uint32 	usertype 		= 9;//用户类型,3-标准终端(H.323/sip),4-监控前端实时流,7-监控前端录像,8-微信网页客户端
+		optional TimeInfo   totaltimespan   = 10;//总时间段信息,usertype==7-监控前端录像
+		repeated TimeInfo   subtimespans    = 11;//子时间段信息,usertype==7-监控前端录像	
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		gwid			= 3;//接收消息的gw_deviceid
+	repeated ParticipantInfo ivtparticipants = 4;//邀请的与会者
+	optional string		confsubject		= 5;
+	optional string		confpwd			= 6;//会议密码
+}
+
+
+message IndMCHeartBeatToGW
+{ 
+	optional uint32		mcid				= 1;//发送消息的mc_deviceid
+	optional uint32 	gwid				= 2;//接收消息的gw_deviceid
+}
+
+
+/////////////////////////////////GW-->MC/////////////////////////////////////
+
+message IndGWHeartBeatToMC
+{ 
+	optional uint32		mcid			= 1;//mc_deviceid
+	optional uint32		gwid			= 2;//gw_deviceid	
+}
+
+// 查询监控录像文件结果,gw-->MC-->ConfCtrlSvr-->H5/gw-->MC-->ter,mc透传,不用记录状态
+message IndGWQueryMonitorRecToMC
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message MonitorInfo 
+	{ 
+		optional string 	devicecode 		= 1;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional uint32     querystate      = 2;//查询结果,0-文件不存在,1-文件存在
+		optional TimeInfo   totaltimespan   = 3;//总时间段信息
+		repeated TimeInfo   subtimespans    = 4;//子时间段信息,querystate==0不填入
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//mc_deviceid
+	optional uint32		gwid			= 3;//gw_deviceid
+	repeated MonitorInfo queryinfos     = 4;//网关查询对应监控录像的信息
+}
+// 上报gw服务收发终端的统计信息
+message IndTerStatisticsInfoFromGW
+{
+	message FrameInfo
+	{
+		optional uint32 fsw = 1;// 分辨率 宽 frame size width
+		optional uint32 fsh = 2;// 分辨率 高 frame size height
+		optional uint32 fps = 3;// 帧率
+	}
+	message AdvanceInfo
+	{
+		optional uint32 delay = 1; // 延时,单位ms
+		optional uint32 jitter = 2; // 抖动,单位ms
+		optional uint32 loss = 3; // 丢包率
+	}
+	message BaseInfo
+	{
+		optional uint32 format = 1;	// 媒体格式,参考SRMediaCommon.h的音视频格式定义
+		optional uint32 bitrate = 2; // 码率,单位kbps
+	}
+	message AudioInfo
+	{
+	    optional uint32    atype = 1;//音频类型,0-主音频、1-共享音频(目前复用在主音频通道,待独立通道时再加)
+		optional uint32    aterid = 2;//相关终端terid
+		optional BaseInfo  baseinfo  = 3;//基本信息
+		optional AdvanceInfo  advinfo = 4;//高级信息
+	}
+	message VideoInfo
+	{
+	    optional uint32    vtype = 1;//视频类型,0-主流、1-辅流(双流共享)
+		optional uint32    vterid = 2;//相关终端terid
+		optional BaseInfo  baseinfo = 3;//基本信息
+		optional AdvanceInfo  advinfo = 4;//高级信息
+		repeated FrameInfo  frameinfo  = 5;//多层分辨率和帧率的信息(目前只填最大分辨率那层)
+	}
+	message XfeInfo
+	{
+	    repeated AudioInfo  ainfo  = 1;//音频信息
+	    repeated VideoInfo  vinfo  = 2;//视频信息
+	}
+	message TerStatisticsInfo
+	{
+	    optional uint32 terid  = 1;//被统计终端terid
+	    repeated XfeInfo  txinfo  = 2;//服务端给被统计终端发送的统计信息(可支持多路多层)
+	    repeated XfeInfo  rxinfo  = 3;//服务端接收被统计终端的统计信息
+		optional uint32   txbweresult  = 4;//服务端给被统计终端发送的带宽评估结果,0-unknown、1-较差、2-一般、3-良好
+	}
+	optional uint64	 confid = 1;// 按照会议为单位上报终端统计信息
+	optional uint32	 mcid	= 2;//mc_deviceid
+	optional uint32	 gwid	= 3;//gw_deviceid
+	repeated TerStatisticsInfo tsinfo = 4;// 该会议下终端的统计信息,可同时上报多个终端的统计信息
+}
+
+//[END] GW<->MC////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+

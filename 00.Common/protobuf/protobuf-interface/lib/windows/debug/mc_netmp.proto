@@ -1,0 +1,466 @@
+//window(换行符为"\r\n",unix "\n")+ UTF-8 无BOM 编码
+package SRMsgs;
+//修改日期：2015.05.11
+//修改内容:
+//1)confid类型由string改为uint64
+//2)增加 IndDeleteConf 消息，会议删除时通知NetMP
+//3)所有发送到NetMP的消息均使用confid+mcid
+//4)删除 CmdNetMPTerVideoSelect 消息中repeated TerVideoSend字段里的停止或开始转发
+//5)增加 CmdNetMPStopVideoSelect 消息，配合4），使消息职责单一
+//06.18 去掉 CmdNetMPStopVideoSelect,在 CmdNetMPTerVideoSelect 字段中加入开始或停止
+//10.19 增加 RspMCConfCreate(mc->netmp) 消息字段(video3datarecvport,video3ctrlrecvport)
+//10.19 删除 CmdNetMPTerVideoSelect(mc->netmp) 消息字段 addordel,定义videosize
+//11.12 新增 单会议多netmp流程消息 
+//	MC->NetMP: IndConfAddNewNetMP IndConfDelNetMP (ReqNetMP EstimateCap --暂不加)
+//	NetMP->MC：IndNetMPLoadHigh (RspNetMP EstimateCap --暂不加)
+//11.13：1) 删除 IndNetMPLoadHigh,每条消息 均有 mcid 和 netmpid (类似于 src ip & dst ip),与 设备管理器的token含义一致
+//       2) 增加 IndConfAllNetMPs 消息
+//12.9  增加 NetMP->MC RspMCConfCreate 消息字段 netmpip
+//[BEGIN] NetMP<->MC////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->NetMP/////////////////////////////////////
+message ReqNetMPCreateConf
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_token
+	optional uint32		maxterms			= 4;
+	optional uint32     netmpno             = 5;//mc给会议netmp预分配的编号
+}
+//告诉NetMP 会议中有其他NetMP被删除
+message IndDeleteOtherNetMP //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32     delnetmpid			= 4;//confid上delnetmpid被删除
+	optional uint32     delnetmpno			= 5;//confid上delnetmpid对应编号
+}
+
+message IndNetMPTerJoined //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		terid				= 4;
+	optional uint32     relatednetmpid		= 5;//该终端关联的netmpid
+	optional uint32		channelid			= 6;//0xffffffff表示上传通道已满,保证在单个netmp上分配的通道不超过200个
+	optional uint32 	termtype			= 7;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 	fromtype 			= 8;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 	gmrtype 		    = 9;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		        = 10;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	            = 11;//分组会议的分组名
+	optional uint32 	producttype         = 12;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+}
+
+message IndNetMPTerLeft //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		terid				= 4;
+	optional uint32     relatednetmpid		= 5;//该终端关联的netmpid
+	optional uint32		channelid			= 6;//终端对应的channelid 2015-11-19
+	optional uint32 	gmrtype 		    = 7;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		        = 8;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	            = 9;//分组会议的分组名
+}
+// 同账号(当前仅依据suid)入会终端信息发生变化,MC将该消息群发到所有参会的netmp
+message IndNetMPChangeTerInfo
+{
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		terid		    	= 4;//发生变化的终端
+	optional uint32		channelid			= 5;//发生变化的终端通道
+	optional uint32     relatednetmpid		= 6;//发生变化的终端关联的netmpid
+	optional uint32 	termtype			= 7;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 	fromtype 			= 8;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 	producttype         = 9;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	optional uint32 	gmrtype 		    = 10;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		        = 11;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	            = 12;//分组会议的分组名
+}
+
+message IndConfAllTerMediaFormatToNetMP
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端音频格式
+		optional uint32 audiofrequency	= 2; //终端音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端音频通道数
+		optional uint32 audioframelen	= 4; //终端音频帧长
+		optional uint32 audiopt         = 5; //终端音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端主视频格式
+		optional uint32 videopt         = 7; //终端主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端辅流视频格式
+        optional uint32 duovideopt      = 9; //终端辅流负载类型payload type
+		optional uint32 videobandwidth  = 10;//终端主流带宽
+	}
+	message TermsMediaFmt
+	{
+		optional uint32 terid 						= 1;
+		optional MediaTypeAndFormat sendmediaformat = 2;
+		optional MediaTypeAndFormat recvmediaformat = 3;		
+	}	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	repeated TermsMediaFmt tersmediainfo	= 4; 
+}
+
+message IndNetMPTerMediaFormat
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端音频格式
+		optional uint32 audiofrequency	= 2; //终端音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端音频通道数
+		optional uint32 audioframelen	= 4; //终端音频帧长
+		optional uint32 audiopt         = 5; //终端音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端主视频格式
+		optional uint32 videopt         = 7; //终端主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端辅流视频格式
+        optional uint32 duovideopt      = 9; //终端辅流负载类型payload type
+		optional uint32 videobandwidth  = 10;//终端主流带宽
+	}	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32 	terid 				= 4;
+	optional uint32		channelid			= 5;//终端对应的channelid
+	optional MediaTypeAndFormat sendmediaformat = 6;
+	optional MediaTypeAndFormat recvmediaformat = 7;
+}
+
+message IndNetMPTerSendMediaFormat
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端发送音频格式
+		optional uint32 audiofrequency	= 2; //终端发送音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端发送音频通道数
+		optional uint32 audioframelen	= 4; //终端发送音频帧长
+		optional uint32 audiopt         = 5; //终端发送音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端发送主视频格式
+		optional uint32 videopt         = 7; //终端发送主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端发送辅流视频格式
+        optional uint32 duovideopt      = 9; //终端发送辅流负载类型payload type
+		optional uint32 videobandwidth  = 10; //终端发送主流带宽
+	}
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		terid				= 4;
+	optional uint32		channelid			= 5;//终端对应的channelid
+	optional MediaTypeAndFormat sendmediaformat = 6;
+}
+
+message IndNetMPTerRecvMediaFormat
+{
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端接收音频格式
+		optional uint32 audiofrequency	= 2; //终端接收音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端接收音频通道数
+		optional uint32 audioframelen	= 4; //终端接收音频帧长
+		optional uint32 audiopt         = 5; //终端接收音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端接收主视频格式
+		optional uint32 videopt         = 7; //终端接收主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端接收辅流视频格式
+        optional uint32 duovideopt      = 9; //终端接收辅流负载类型payload type
+		optional uint32 videobandwidth  = 10; //终端接收主流带宽
+	}
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		terid				= 4;
+	optional uint32		channelid			= 5;//终端对应的channelid
+	optional MediaTypeAndFormat recvmediaformat = 6;
+}
+
+message IndNetMPTerAssistVideoOn //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		duoVideoid			= 4;//在发送双流的终端
+	optional uint32 	avtype 		        = 5;//发送的双流模式,默认0-AVC清晰模式,1-SVC流畅模式
+	optional uint32     sharedaudio         = 6;//共享音频,默认0-不共享音频,1-共享音频
+}
+message IndNetMPTerAssistVideoOff //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional uint32		duoVideoid			= 4;
+}
+message CmdNetMPTerVideoSelect //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{ 
+	message TerVideoSend 
+	{ 
+		optional uint32 terid 		 = 1; 
+		optional uint32 channelid	 = 2;//终端通道id或者MPI媒体处理实例id
+		optional uint32	videosize 	 = 3;//期望流的大小， 0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+		optional uint32 netmpid      = 4;//被选看terid所属的netmp的 id
+		optional uint32 screenid	 = 5;//非0-代表选看对应的混屏
+		optional uint32 delayopt	 = 6;//0:立即操作 1:延时操作
+		optional uint32 replaceterid = 7;//delayopt等于0时赋值为0;delayopt等于1时延时替换的终端id,或转码屏对应标准终端id,或会议混屏、双流屏所属MPI媒体处理实例id(即发起选看者等到期望的selterv::terid终端videosize大小第一个I帧包后去替换的终端,或转码屏对应标准终端id,或会议混屏、双流屏所属MPI媒体处理实例id)
+		optional uint32 recvfps		 = 8;//期望的帧率大小，0:0 1:8 2:16 3:24 4:30 5:60.如果终端选看没填该选项，透传给netmp强制使用默认3:24
+		optional uint32 replacescreenid = 9;//delayopt等于0时赋值为0，delayopt等于1时延时替换的是SR终端赋值为0,延时替换的是标准终端转码屏、会议混屏、双流屏时才填入屏幕id
+	} 
+	optional uint64			confid			= 1;
+	optional uint32			mcid			= 2;//mc_deviceid
+	optional uint32     	netmpid         = 3;//netmp_deviceid	
+	optional uint32			terid			= 4;
+	optional uint32 		channelid		= 5;
+	optional uint32     	relatednetmpid  = 6;//发起选看的terid所属的netmp id
+	repeated TerVideoSend   tervideoneed	= 7;
+}
+//终端选看双流,若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+message CmdNetMPTerSelectAssistVideo
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//mc_deviceid
+	optional uint32     netmpid         = 3;//netmp_deviceid,接收消息的netmp
+	optional uint32		terid			= 4;//发起选看ter的terid
+	optional uint32 	channelid		= 5;//发起选看ter的channelid
+	optional uint32     relatednetmpid  = 6;//发起选看的terid所属的netmp id	
+	optional uint32 	needvideofmt 	= 7;//发起选看者接收(所需)双流的格式
+	optional uint32 	needvideosize  	= 8;//发起选看者接收(所需)双流的格式等级,0:不看 1:level-1 2:level-2 3:level-3.......n:level-n	
+	optional uint32 	beselterid 	 			= 9;//被选看双流终端terid(若是被选看双流屏幕,该值对应被选看屏幕所属的MPI媒体处理实例channelid)
+	optional uint32 	beselchannelid	 		= 10;//被选看双流终端通道id(等于terid),或者被选看双流屏幕所属的MPI媒体处理实例channelid
+	optional uint32 	beselrelatednetmpid     = 11;//被选看selterid所属的netmp的id
+	optional uint32 	beselscreenid	 		= 12;//如果被选看的是双流终端,该值为0;非0-代表选看对应的双流屏幕
+}
+message CmdNetMPConfDestroy //删除当前NetMP的 confid会议
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//mc_deviceid
+	optional uint32     netmpid             = 3;//netmp_deviceid
+	optional string		reason				= 4;
+}
+message IndNetMPHeartBeatOfMC
+{ 
+	optional uint32		mcid				= 1;//mc_deviceid
+	optional uint32 	netmpid				= 2;//netmp_deviceid
+}
+
+//发送到新添加到会议的NetMP
+message IndConfAllNetMPs//在MC收到NetMP创建会议成功之后,向其发送该会议所有NetMP信息(包含在该NetMP上分配的终端信息)
+{
+	message TersInNetMP
+	{
+		optional uint32 terid     = 1;
+		optional uint32 channelid = 2;
+	}
+	message NetMPsInConf
+	{
+		optional uint32 netmpid 			= 1;
+		optional string netmpip				= 2;
+		repeated TersInNetMP 	terids		= 3;
+		optional uint32	audiodatarecvport	= 4;
+		optional uint32	audioctrlrecvport	= 5;
+		optional uint32	videodatarecvport	= 6;
+		optional uint32	videoctrlrecvport	= 7;
+		optional uint32	video2datarecvport	= 8;
+		optional uint32	video2ctrlrecvport	= 9;
+		optional uint32	video3datarecvport	= 10;
+		optional uint32	video3ctrlrecvport	= 11;	
+		optional uint32	desktopdatarecvport = 12;
+		optional uint32	desktopctrlrecvport	= 13;
+		optional uint32 netmpno             = 14;//mc给会议netmp预分配的编号
+	}	
+	optional uint32		mcid			= 1;
+	optional uint32		netmpid			= 2;
+	optional uint64		confid			= 3;
+	repeated NetMPsInConf netmps		= 4; 
+}
+//发送到已经在会议中的NetMP
+message IndConfAddNewNetMP //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
+{
+	optional uint32		mcid			= 1;
+	optional uint32		netmpid			= 2;
+	optional uint64		confid			= 3;
+	optional uint32  	newnetmpid		= 4;
+	optional string  	newnetmpip		= 5;
+	optional uint32	audiodatarecvport	= 6;
+	optional uint32	audioctrlrecvport	= 7;
+	optional uint32	videodatarecvport	= 8;
+	optional uint32	videoctrlrecvport	= 9;
+	optional uint32	video2datarecvport	= 10;
+	optional uint32	video2ctrlrecvport	= 11;
+	optional uint32	video3datarecvport	= 12;
+	optional uint32	video3ctrlrecvport	= 13;	
+	optional uint32	desktopdatarecvport = 14;
+	optional uint32	desktopctrlrecvport	= 15;
+	optional uint32 newnetmpno          = 16;//mc给会议netmp预分配的编号
+}
+
+//发送到新添加到会议的NetMP
+message IndConfAllMPIInfoToNetMp //若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+{	
+	message ScreensInMPI
+	{
+		optional uint32 screenid	= 1;//屏幕id
+		optional uint32 screentype	= 2;//屏幕类型，1-会议屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+		optional uint32	relatedterid = 3;// 为某标准终端创建的转码屏,screentype为2终端转码屏幕时该值填入对应terid,其它屏幕类型时填入0
+	}
+	message MPIsInConf
+	{
+		optional uint32 		mpichannelid 	= 1;
+		optional uint32     	relatedmpid		= 2;//该会议媒体处理实例关联的mpid
+		optional uint32     	relatednetmpid	= 3;//该会议媒体处理实例关联的netmpid
+		repeated ScreensInMPI	screens			= 4;
+	}	
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		netmpid			= 3;//接收消息的netmp_deviceid
+	repeated MPIsInConf mpis			= 4;//会议中所有MPI的信息（可能包含screen信息）
+}
+
+//告诉NETMP，在哪个MP上创建/删除了某会议的媒体处理实例
+message IndMPIChannelidToNetMp //若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     netmpid         = 3;//接收消息的netmp_deviceid
+	optional uint32     relatednetmpid	= 4;//该会议媒体处理实例关联的netmpid
+	optional uint32     relatedmpid		= 5;//该会议媒体处理实例的mpid
+	optional uint32		mpichannelid	= 6;//会议媒体处理实例对应的通道id
+	optional uint32		addordel		= 7;// 1-添加channelid，2-删除channelid
+}
+
+//告诉NETMP，在哪个MP上创建/删除什么类型的屏幕
+message IndConfScreenInfoInMP //若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     netmpid				= 3;//接收消息的netmp_deviceid
+	optional uint32     relatednetmpid		= 4;//该屏幕关联的netmpid
+	optional uint32     relatedmpid			= 5;//该屏幕关联的mpid
+	optional uint32		relatedmpichannelid	= 6;//该屏幕关联的媒体处理实例mpichannelid
+	optional uint32		screenid			= 7;//该屏幕id
+	optional uint32		screentype			= 8;//屏幕类型，1-会议屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32		addordel			= 9;// 1-添加screenid，2-删除screenid
+	optional uint32		relatedterid		= 10;// 为该标准终端创建的转码屏,screentype为2终端转码屏幕时该值填入对应terid,其它屏幕类型时填入0
+}
+
+//告诉NETMP,更新MPIChannelid关联netmpid、mpid
+message IndUpdateMPIChannelInfoToNetMp //若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     netmpid				= 3;//接收消息的netmp_deviceid
+	optional uint32     mpichannelid		= 4;//该会议媒体处理实例对应的通道id
+	optional uint32     newrelatedmpid		= 5;//该会议媒体处理实例关联的新mpid
+	optional uint32		newrelatednetmpid	= 6;//该会议媒体处理实例关联的新netmpid
+}
+
+//告诉NETMP，在哪个CRS上创建/删除crschannelid
+//若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+message IndCRSChannelidToNetMp
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     netmpid         = 3;//接收消息的netmp_deviceid
+	optional uint32     relatednetmpid	= 4;//CRS关联的netmpid
+	optional uint32     crsid			= 5;//CRS的设备id
+	optional uint32		crschannelid	= 6;//CRS对应的通道id
+	optional uint32		addordel		= 7;//1-添加channelid，2-删除channelid
+}
+//告诉NETMP，在哪个VAS上创建/删除vaschannelid
+//若一个会议在多个NETMP上召开,群发该消息到该会议上所有的NETMP
+message IndVASChannelidToNetMp
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     netmpid         = 3;//接收消息的netmp_deviceid
+	optional uint32     relatednetmpid	= 4;//VAS关联的netmpid
+	optional uint32     vasid			= 5;//VAS的设备id
+	optional uint32		vaschannelid	= 6;//VAS对应的通道id
+	optional uint32		addordel		= 7;//1-添加channelid，2-删除channelid
+}
+
+/////////////////////////////////NetMP-->MC/////////////////////////////////////
+message RspMCConfCreate
+{ 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;
+	optional uint32		netmpid				= 4;//netmp_deviceid
+	optional string     netmpip				= 5;
+	optional uint32		audiodatarecvport	= 6;
+	optional uint32		audioctrlrecvport	= 7;
+	optional uint32		videodatarecvport	= 8;
+	optional uint32		videoctrlrecvport	= 9;
+	optional uint32		video2datarecvport	= 10;
+	optional uint32		video2ctrlrecvport	= 11;
+	optional uint32		video3datarecvport	= 12;
+	optional uint32		video3ctrlrecvport	= 13;	
+	optional uint32		desktopdatarecvport	= 14;
+	optional uint32		desktopctrlrecvport	= 15;
+	optional string 	failreason			= 16; //若失败，则会有失败说明	
+	optional uint32     netmpno             = 17;//mc给会议netmp预分配的编号
+	optional uint32     errorcode           = 18;//错误提示对应的错误码
+}
+
+message IndMCHeartBeatOfNetMP
+{ 
+	optional uint32		mcid			= 1;//mc_deviceid
+	optional uint32		netmpid			= 2;//netmp_deviceid	
+}
+
+// 上报netmp服务收发终端的统计信息
+message IndTerStatisticsInfoFromNetmp
+{
+	message FrameInfo
+	{
+		optional uint32 fsw = 1;// 分辨率 宽 frame size width
+		optional uint32 fsh = 2;// 分辨率 高 frame size height
+		optional uint32 fps = 3;// 帧率
+	}
+	message AdvanceInfo
+	{
+		optional uint32 delay = 1; // 延时,单位ms
+		optional uint32 jitter = 2; // 抖动,单位ms
+		optional uint32 loss = 3; // 丢包率
+	}
+	message BaseInfo
+	{
+		optional uint32 format = 1;	// 媒体格式,参考SRMediaCommon.h的音视频格式定义
+		optional uint32 bitrate = 2; // 码率,单位kbps
+	}
+	message AudioInfo
+	{
+	    optional uint32    atype = 1;//音频类型,0-主音频、1-共享音频(目前复用在主音频通道,待独立通道时再加)
+		optional uint32    aterid = 2;//相关终端terid
+		optional BaseInfo  baseinfo  = 3;//基本信息
+		optional AdvanceInfo  advinfo = 4;//高级信息
+	}
+	message VideoInfo
+	{
+	    optional uint32    vtype = 1;//视频类型,0-主流、1-辅流(双流共享)
+		optional uint32    vterid = 2;//相关终端terid
+		optional BaseInfo  baseinfo = 3;//基本信息
+		optional AdvanceInfo  advinfo = 4;//高级信息
+		repeated FrameInfo  frameinfo  = 5;//多层分辨率和帧率的信息(目前只填最大分辨率那层)
+	}
+	message XfeInfo
+	{
+	    repeated AudioInfo  ainfo  = 1;//音频信息
+	    repeated VideoInfo  vinfo  = 2;//视频信息
+	}
+	message TerStatisticsInfo
+	{
+	    optional uint32 terid  = 1;//被统计终端terid
+	    repeated XfeInfo  txinfo  = 2;//服务端给被统计终端发送的统计信息(可支持多路多层)
+	    repeated XfeInfo  rxinfo  = 3;//服务端接收被统计终端的统计信息
+		optional uint32   txbweresult  = 4;//服务端给被统计终端发送的带宽评估结果,0-unknown、1-较差、2-一般、3-良好
+	}
+	optional uint64	 confid = 1;// 按照会议为单位上报终端统计信息
+	optional uint32	 mcid	= 2;//mc_deviceid
+	optional uint32	netmpid	= 3;//netmp_deviceid
+	repeated TerStatisticsInfo tsinfo = 4;// 该会议下终端的统计信息,可同时上报多个终端的统计信息
+}
+
+//[END] NetMP<->MC////////////////////////////////////////////////////////////////////////////////////////

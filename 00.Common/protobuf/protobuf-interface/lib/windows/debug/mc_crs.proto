@@ -1,0 +1,341 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+//单会议单MP
+//
+//[BEGIN] CRS<->MC////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->CRS/////////////////////////////////////
+
+message ReqCRSCreateConf //
+{ 
+	message NetMpAddr
+	{
+		optional uint32		netmpid				= 1;//netmp_deviceid
+		optional string 	netmpmediaip		= 2;// 一般是netmp内网地址
+		optional uint32		audiodatarecvport	= 3;
+		optional uint32		audioctrlrecvport	= 4;
+		optional uint32		videodatarecvport	= 5;
+		optional uint32		videoctrlrecvport	= 6;
+		optional uint32		video2datarecvport	= 7;
+		optional uint32		video2ctrlrecvport	= 8;
+		optional uint32		video3datarecvport	= 9;
+		optional uint32		video3ctrlrecvport	= 10;
+		optional uint32		desktopdatarecvport	= 11;
+		optional uint32		desktopctrlrecvport	= 12;
+	}
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		crsid			= 3;//接收消息的crs_deviceid
+	optional uint32		crschannelid	= 4;//MC为CRS分配的通道id
+	optional uint32		mediaencryptalg = 5;//媒体数据加密算法
+	optional bytes		encryptkey		= 6;//加密秘钥
+	optional NetMpAddr netmpaddr 		= 7;//会议中netmp（多个中的随意一个netmp）的地址信息
+	optional uint32		videosize 	 	= 8;//选看MP编码流的大小(目前只有录制直播屏设置),0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+}
+
+message CmdCRSDestroyConf
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		crsid			= 3;//接收消息的crs_deviceid
+	optional uint32		crschannelid	= 4;//MC为CRS分配的通道id 
+	optional string		reason			= 5;//销毁CRS通道的原因
+}
+
+message IndCRSTerJoined 
+{
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32     crsid           = 3;//接收消息的crs_deviceid
+	optional uint32		terid			= 4;//新加入confid会议的终端terid
+	optional uint32		channelid		= 5;//该终端的channelid
+	optional string 	tername			= 6;
+}
+message IndCRSTerLeft 
+{	
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//发送消息的mc_deviceid
+	optional uint32     crsid            	= 3;//接收消息的crs_deviceid
+	optional uint32		terid				= 4;//退出confid会议的终端terid
+	optional uint32		channelid			= 5;//该终端的channelid
+}
+
+message IndConfAllMPIInfoToCRS
+{	
+	message ScreensInMPI
+	{
+		optional uint32 screenid	= 1;//屏幕id
+		optional uint32 screentype	= 2;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	}
+	message MPIsInConf
+	{
+		optional uint32 		mpichannelid 	= 1;
+		repeated ScreensInMPI	screens			= 2;
+	}	
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		crsid			= 3;//接收消息的crsid
+	repeated MPIsInConf mpis			= 4;//会议中所有MPI的信息（可能包含screen信息）
+}
+
+message IndMPIInfoToCRS 
+{ 
+	optional uint64		confid			= 1;
+	optional uint32		mpichannelid	= 2;// MC为会议媒体处理实例MPI分配的通道id
+	optional uint32		addordel		= 3;// 1-添加screenid，2-删除screenid
+	optional uint32 	crsid 			= 4;// 接收消息的crsid
+}
+
+message IndScreenInfoToCRS 
+{ 
+	optional uint64		confid			= 1;
+	optional uint32		mpichannelid	= 2; //MC为会议媒体处理实例MPI分配的通道id
+	optional uint32		screenid		= 3; //屏幕id
+	optional uint32		screentype		= 4;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32		addordel		= 5;// 1-添加screenid，2-删除screenid
+	optional uint32 	crsid 			= 6;//接收消息的crsid
+}
+//告诉crs选看vas的信息
+message IndCRSSelectVasVideo
+{
+	message AnalyInfo
+	{
+		optional uint32  terid 	   	   = 1;//待分析视频源,混会议媒体处理实例的通道id与其对应的terid相同或者是CRS的通道id
+		optional uint32  screenid	   = 2;//待分析视频源,非0-代表选看对应的屏幕
+		optional uint32	 vaschannelid  = 3;//待分析视频源关联的VAS通道id(由MC预分配)
+		optional uint32  srcmapid	   = 4;//待分析视频源在VAS上映射id(由MC预分配)
+		optional bool    isselect      = 5;//是否选看VAS分析后的流,ture-选看、false-不选看(恢复选看录制直播屏)
+	}
+	optional uint64		confid 			  = 1;
+	optional uint32 	crsid 	 		  = 2;//CRS的id
+	repeated AnalyInfo	selectvasinfos    = 3;//选看指定视频源分析后视频信息
+}
+// 请求CRS开始录制相应通道某路媒体流
+message ReqCRSStartRec
+{
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	crsid			 = 3;//接收消息的crsid
+	optional uint32	crschannelid	 = 4;//接收消息crsid的通道id
+	optional uint32	channelid	 	 = 5;//需要录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	screenid		 = 6;//需要录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	screentype		 = 7;//需要录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	seqnum		     = 8;
+}
+// 请求CRS停止录制相应通道某路媒体流
+message ReqCRSStopRec
+{
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	crsid			 = 3;//接收消息的crsid
+	optional uint32	crschannelid	 = 4;//接收消息crsid的通道id
+	optional uint32	channelid	 	 = 5;//停止录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	screenid		 = 6;//停止录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	screentype		 = 7;//停止录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	seqnum		     = 8;
+}
+
+//告诉crs重新选择netmp打开通道
+message CmdCRSReOpenNetMPMediaPort
+{
+	optional string 	netmpip 			= 1;//一般是netmp内网地址
+	optional uint32		audiodatarecvport	= 2;
+	optional uint32		audioctrlrecvport	= 3;
+	optional uint32		videodatarecvport	= 4;
+	optional uint32		videoctrlrecvport	= 5;
+	optional uint32		video2datarecvport	= 6;
+	optional uint32		video2ctrlrecvport	= 7;
+	optional uint32		video3datarecvport	= 8;
+	optional uint32		video3ctrlrecvport	= 9;
+	optional uint32		desktopdatarecvport = 10;
+	optional uint32		desktopctrlrecvport	= 11;	
+	optional uint64		confid 			    = 12;
+	optional uint32		mcid				= 13;//发送消息的mc_deviceid
+	optional uint32 	crsid 			    = 14;//接收消息的crs_deviceid
+	optional uint32   	crschannelid        = 15;//MC为CRS分配的通道id	 
+}
+
+message IndMCHeartBeatToCRS
+{ 
+	optional uint32		mcid				= 1;//发送消息的mc_deviceid
+	optional uint32 	crsid				= 2;//接收消息的crs_deviceid
+}
+
+// 请求CRS开始直播crs某通道某路媒体流
+message ReqCRSStartLive
+{
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	crsid			 = 3;//接收消息的crsid
+	optional uint32	crschannelid	 = 4;//接收消息crsid的通道id
+	optional uint32	channelid	 	 = 5;//需要直播(推流)的MPI对应通道id或者终端对应的通道id
+	optional uint32	screenid		 = 6;//需要直播(推流)的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	screentype		 = 7;//需要直播(推流)的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	seqnum		     = 8;
+	optional uint32	relatedsrsid	 = 9;//livesvrtype等于0时CRS所选的SRS服务
+	optional string	liveurl		     = 10;//livesvrtype等于0时请求CRS向该url内的地址去创建SRS直播站点,并向该地址推送channelid的rtmp流
+	optional uint32	livesvrtype	     = 11;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
+}
+
+// 命令CRS停止直播crs某通道某路媒体流
+message CmdCRSStopLive
+{
+	optional uint64	confid 			 = 1;
+	optional uint32	mcid			 = 2;//发送消息的mc_deviceid
+	optional uint32	crsid			 = 3;//接收消息的crsid
+	optional uint32	crschannelid	 = 4;//接收消息crsid的通道id
+	optional uint32	channelid	 	 = 5;//停止直播(推流)的MPI对应通道id或者终端对应的通道id
+	optional uint32	screenid		 = 6;//停止直播(推流)的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	screentype		 = 7;//停止直播(推流)的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string	liveurl		     = 8;//命令CRS停止将channelid的流推向该url内的地址
+}
+
+/////////////////////////////////CRS-->MC/////////////////////////////////////
+
+message RspCRSCreateConf
+{ 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;//接收消息的mc_deviceid 
+	optional uint32		crsid				= 4;//创建会议的crs_deviceid 
+	optional uint32		crschannelid		= 5;//创建会议的crs通道id
+	optional uint32     relatednetmpid		= 6;//该CRS通道关联的netmpid
+	optional string 	failreason			= 7;//若失败，则会有失败说明
+	optional uint32     errorcode           = 8;//错误提示对应的错误码
+}
+
+message RspCRSStartRec
+{ 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;//接收消息的mc_deviceid 
+	optional uint32		crsid				= 4;//开始录制的crs_deviceid 
+	optional uint32		crschannelid		= 5;//开始录制crs通道id
+	optional uint32	    channelid	 	    = 6;//CRS录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		    = 7;//CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		    = 8;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string     filestorsvrip   	= 9;//CRS录制文件存放服务的ip
+	optional string 	filestorpath		= 10;//CRS录制文件存放相对路径
+	optional string 	sdefilepath			= 11;//CRS录制的加密文件存放相对路径
+	optional string 	failreason			= 12;//若失败，则会有失败说明
+	optional string 	relativepath		= 13;//CRS录制文件存放根路径
+	optional uint32		seqnum		     	= 14;
+	optional uint32     errorcode           = 15;//错误提示对应的错误码
+}
+
+message RspCRSStopRec
+{ 
+	optional bool 		isok			= 1;
+	optional uint64		confid			= 2;
+	optional uint32		mcid			= 3;//接收消息的mc_deviceid 
+	optional uint32		crsid			= 4;//停止录制的crs_deviceid 
+	optional uint32		crschannelid	= 5;//停止录制crs通道id
+	optional uint32	    channelid		= 6;//CRS停止录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		= 7;//CRS停止录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		= 8;//CRS停止录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string     filestorsvrip   = 9;//CRS停止录制文件存放服务的ip
+	optional string 	filestorpath	= 10;//CRS停止录制文件存放相对路径
+	optional string 	sdefilepath		= 11;//CRS停止录制的加密文件存放相对路径
+	optional string 	failreason		= 12;//若失败，则会有失败说明
+	optional string 	relativepath	= 13;//CRS录制文件存放根路径
+	optional uint32		seqnum		    = 14;
+	optional uint64		filesize		= 15;//文件大小,单位：MB
+	optional uint32     errorcode       = 16;//错误提示对应的错误码
+}
+
+message RspCRSStartLive
+{ 
+	message LiveAddr
+	{ 		
+		optional uint32 type  = 1;//0-未知,1-RTMP,2-FLV,3-HLS
+		optional string url	  = 2;//对应type的直播地址
+	} 
+	optional bool 		isok				= 1;
+	optional uint64		confid				= 2;
+	optional uint32		mcid				= 3;//接收消息的mc_deviceid 
+	optional uint32		crsid				= 4;//开始直播的crs_deviceid 
+	optional uint32		crschannelid		= 5;//开始直播的crs通道id
+	optional uint32	    channelid	 	    = 6;//CRS直播(推流)的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		    = 7;//CRS直播(推流)的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		    = 8;//CRS直播(推流)的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional uint32		relatedsrsid	 	= 9;//livesvrtype等于0时CRS所选的SRS服务
+	optional string     liveurl			   	= 10;//livesvrtype等于0时CRS直播(推流)的url(即crs向srs推流地址),ReqCRSStartLive请求时选定srs后进行拼接的url
+	optional uint32		seqnum		     	= 11;
+	optional string 	failreason			= 12;//若失败，则会有失败说明
+	optional uint32     errorcode           = 13;//错误提示对应的错误码
+	optional uint32	    livesvrtype	        = 14;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
+	repeated LiveAddr  	liveaddrs	        = 15;//livesvrtype大于0时的直播地址信息
+}
+
+message CmdCRSSeleteVideo
+{ 
+	message TermInfo
+	{ 		
+		optional uint32 terid 	 	 = 1;//被选看的终端id或者mp媒体处理实例的通道id
+		optional uint32 screenid	 = 2;//被选看的是终端则填入0,被选看的是mp媒体处理实例则填入具体的屏幕id（即非0-代表选看对应的屏幕）
+		optional uint32 videosize  	 = 3;//期望流的大小， 0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+		optional uint32 recvfps		 = 4;//期望的帧率大小，0:0 1:8 2:16 3:24 4:30 5:60.如果终端选看没填该选项，透传给netmp强制使用默认3:24
+	} 
+	optional uint64		confid		= 1;
+	optional uint32		mcid		= 2;//接收消息的mc_deviceid
+	optional uint32     crsid		= 3;//发起选看CRS的crs_deviceid
+	optional uint32 	crschannelid	= 4;//发起选看CRS的通道id
+	repeated TermInfo  	seleteterinfo	= 5;
+}
+
+
+message IndCRSHeartBeatToMC
+{ 
+	optional uint32		mcid			= 1;//mc_deviceid
+	optional uint32		crsid			= 2;//crs_deviceid	
+}
+
+// 单会议录制多文件,不是开始、结束录制操作关联的文件需要调用该消息另行通知
+message IndCRSFileStorPathToMC
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//接收消息的mc_deviceid 
+	optional uint32		crsid				= 3;//录制服务的crs_deviceid 
+	optional uint32		crschannelid		= 4;//crs通道id
+	optional uint32	    channelid	 	    = 5;//CRS录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		    = 6;//CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		    = 7;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string     filestorsvrip   	= 8;//CRS录制文件存放服务的ip
+	optional string 	filestorpath		= 9;//CRS录制文件存放相对路径
+	optional string 	sdefilepath			= 10;//CRS录制的加密文件存放相对路径
+	optional string 	relativepath		= 11;//CRS录制文件存放根路径
+	optional uint32	    recordstate		    = 12;//该文件录制状态,1-录制开始、2-录制结束
+	optional uint64		filesize	    = 13;//文件大小,单位：MB
+}
+
+// 直播开启成功之后,出现直播异常主动通知
+message IndCRSLiveStateToMC
+{ 
+	optional uint64		confid				= 1;
+	optional uint32		mcid				= 2;//接收消息的mc_deviceid 
+	optional uint32		crsid				= 3;//录制服务的crs_deviceid 
+	optional uint32		crschannelid		= 4;//crs通道id
+	optional uint32	    channelid	 	    = 5;//CRS录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		    = 6;//CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		    = 7;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    livestate		    = 8;//直播状态,1-直播成功、2-直播失败
+	optional string 	statecont			= 9;//若直播失败，则填入失败内容
+	optional uint32     errorcode           = 10;//失败内容对应的错误码
+}
+
+//[END] CRS<->MC////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+

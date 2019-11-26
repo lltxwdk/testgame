@@ -1,0 +1,4066 @@
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+//修改日期 2015.05.08
+//修改内容:
+//1)confid类型由string改为uint64
+//2)增加 CmdTerAlterSelectVideo 消息，当终端只需更改其中一部分选看时使用
+//3)增加终端列表响应的返回内容，主持人，静音状态，是否举手
+//4)增加 指示终端有双流在发送消息
+//5)删除重复名称消息CmdTerMute
+//6)2015.05.11 RspTerJoinConf 消息 增加 channelid字段
+//7)2015.05.12 增加 IndTersCloseCamera 和 IndTersOpenCamera 消息。
+//特殊化处理 取消/禁音处理流程。因为此处有主持人操作，故MC群发消息到所有终端(包括主持人和指定的终端)，指定的终端收到指示后，执行相关操作.类似的还有 IndChairTransfer 消息
+//其他所有MC->ter的群发指示均不包含发起者
+//2015.06.05 修改 RspConfTerLists TerIdAndName里的 tername 为 string 类型
+//8)添加终端关闭双流的消息 MC->TER 的消息 IndAssistVideoOff
+//9)所有MC->ter群发消息需要两个terid，一个表示消息发送终端，一个表示内容终端
+//10)06.16增加 CmdChairUnLockVideo IndChairLock IndChairUnLock 三条消息
+//06.18 在 CmdTerAlterSelectVideo消息中加入 addordel字段表明增加或删除
+//06.29 IndTerMuter和IndCancelMute消息增加sponsorid字段，明确该操作的发起者
+//终端列表中增加isCameraOn 和 duoVideoid 字段
+//07.06 添加两个消息IndTerSendLimit 终端告诉MC自己的上行带宽不足。IndSendLimits MC群发终端
+//07.16 增加 ReqTerJoinConf 和 IndNewTerJoinedConf 的消息字段 ismuted,isCameraOn
+//10.19 增加 RspTerJoinConf(mc->ter) 消息字段(video3datarecvport,video3ctrlrecvport)
+//10.19 删除 CmdTerSelectVideo(mc->ter) 消息字段 addordel
+//10.21 明确 CmdStartSendVideo含义(MC->ter) 发送大流(终端自动发送大中小),发送中流(终端关闭大流，只发送中小流)
+//不再使用 CmdStopSendVideo
+//10.21 使用 UTF-8 无BOM 格式编码
+//10.27 增加主席结束会议CmdChairEndConf，MC通知其他终端IndChairEndConf 两条消息
+// 增加 CmdReOpenMediaPort消息,迁移netmp
+//11.03 修改 ReqTerJoinConf suid 类型
+//11.10 p2p传输 新增消息 IndP2PInfoToMC,IndP2PInfoToTer,CmdTerStartP2P,CmdTerStopP2P
+//2016.03.02 更改消息字段顺序
+// ter -> MC 的消息 均以 confid:1+terid:2 (或confid:1+suid:2) 开始
+// ter -> MC 的消息最好以 varint 类型结束(解析的时候不用针对每个字段检查边界)
+// MC -> ter 的群发消息 最后两项均为 confid + terid
+// 新增会议中发送消息信令 ter->MC CmdTextToOtherTer  MC->Ter IndTextMsgToTers
+//2016.12.01 去掉 ReqTerJoinConf 消息中 JoinConfCapabilityset类型
+// 新增 网关->MC IndStdTerSendMediaFormat
+// 新增 网关->MC IndStdTerRecvMediaFormat
+//[BEGIN] Ter<->MC/////////////////////////////////////////////////////////////////////////
+////////////////////////////Ter-->MC///////////////////////////
+/////Request////
+//终端请求加入会议,Ter-->MC
+message ReqTerJoinConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3、stunserver=11
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message GMRInfo 
+	{ 
+		optional string		gmrdname	= 1;//分组会议所属域名
+		optional uint64		gmrconfid	= 2;//分组会议号
+		optional uint32 	gmrtype     = 3;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+		optional uint32		gmrid 		= 4;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+		optional string		gmrname	    = 5;//分组会议的名称
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	message DeviceInfo 
+	{ 
+	    optional uint32	  type        = 1;//0-音频设备、1-视频设备
+		repeated SourceInfo  srcinfos = 2;//音视频源信息
+	}
+	message PresetInfo 
+	{ 
+	    optional uint32	 presetid  = 1;//预置位编号
+		optional string	 presetname = 2;//预置位名称
+		optional uint32	 relatedvsrcid  = 3;//相关视频源
+	}
+	optional uint64		confid 		= 1;//会议号,对应数据库conference表中的conf_id或者conf_subject
+	optional uint32 	suid 		= 2;//终端唯一标识(由终端产生)
+	optional string 	password 	= 3;//会议密码
+	optional string 	tername 	= 4;//终端名称
+	optional bool   	ismuted 	= 5;//默认主音频状态
+	optional bool   	isCameraOn  = 6;//默认主摄像头状态
+	optional uint32 	termtype 	= 7;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 	fromtype 	= 8;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 	usertype 	= 9;//用户类型,0-临时(匿名)用户,1-正式(注册)用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
+	optional uint32 	groupid 	= 10;//该终端所属域分组id
+	optional string 	systemload  = 11;//当前系统所有设备(mc)负载信息(AES密文),终端入会时restful获取该密文信息透传给mc
+	optional uint32 	specialtype	= 12;//特殊类型, 0-普通终端类型,1-投屏终端类型
+	optional string 	protodefver = 13;//protobuf接口定义的版本号,12位时间日期值的字符串(格式为：YYYYMMDDHHMM),如：201808101949
+	optional string 	version 	= 14;//终端的版本信息
+	repeated IPPORT      selfaddrs  = 15;//终端自己的内外地址信息
+	optional string 	domainname 	= 16;//终端所属域的域名
+	repeated AddrInfo    svraddrs   = 17;//终端相关服务地址信息
+	repeated DomainInfo  domains    = 18;//终端相关的域名路径信息
+	optional string 	confdname 	= 19;//会议confid所属域的域名
+	optional bool   	isSimulateReq  = 20;//目前客户端侧正常入会请求不需要关注该字段,mc模拟构造信令用,默认false-是正常入会请求,true-是模拟入会请求
+	optional GMRInfo    fromgmrinfo	   = 21;//目前客户端侧正常入会请求不需要关注该字段,mc模拟构造信令用,isSimulateReq为true时表示该终端原会议分组信息
+	optional GMRInfo	togmrinfo	   = 22;//目前客户端侧正常入会请求不需要关注该字段,mc模拟构造信令用,isSimulateReq为true时表示该终端新分组会议信息
+	repeated DeviceInfo  devinfos      = 23;//终端的设备信息,如音视频设备,如果未携带该字段就认为不支持多摄像头功能直接拒绝入会
+	repeated PresetInfo  presetinfos   = 24;//终端摄像头预置位信息,为空表示没有设置预置位
+	optional uint32 	producttype    = 25;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+}
+//会控者获取会议状态与RspConfStatus对应,H5-->ConfCtrlSvr-->MC
+message ReqConfStatus
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;//请求的会议号
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional string 	domainname 	    = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//获取在线终端列表,终端和会控服务复用该接口ter-->MC/H5-->ConfCtrlSvr-->MC
+message ReqConfTerLists
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;//请求的会议号
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	sponsortype = 3;//发起者类型,1-ter、2-web
+	optional string 	domainname 	= 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者获取终端呼叫信息(主要包含收、发丢包率)????????统计信息是mc统计吗还是由netmp统计汇报给mc????????
+message ReqTerCallDetail
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	dtlterid 		= 4;//获取终端
+	optional string 	domainname 	    = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者请求创建屏幕(会议混屏、双流屏),H5-->ConfCtrlSvr-->MC
+//暂时由MC自己触发创建(成功创建媒体处理实例MPI后立即创建会议混屏)
+message ReqMCCreateScreen
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message TextATTR
+	{ 
+		optional uint32		textpos			= 1;//文本位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+		optional string		textcolor		= 2;//文本颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+		optional uint32		textFontsize	= 3;//文本字体大小：1-大、2-中、3-小
+		optional bool		enableTextBg	= 4;//使能文本背景
+		optional string		textBgColor		= 5;//文本背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	}
+	message TernameATTR
+	{
+		optional bool		enableTername	= 1; //使能会场名称
+		optional TextATTR	ternametextattr	= 2; //终端名称文本属性
+	}
+	optional uint32 	sponsortype 		= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid				= 2;//会议号
+	optional uint32 	terid 				= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32		seqnum				= 4;//发起请求的序列号，由发起请求的终端或者web维护
+	optional uint32		channelid			= 5;//请求在某会议媒体处理实例通道channelid上创建屏幕
+	optional uint32		screentype			= 6;//请求创建的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+    optional bool   	voiceActiveInd		= 7;//请求创建屏幕的属性：发言激活指示
+	optional string  	voiceActiveColor	= 8;//请求创建屏幕的属性：发言激活颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional string		chairFeccColor		= 9;//请求创建屏幕的属性：远程控制指示颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional TernameATTR ternameattr		= 10;//请求创建屏幕的属性：终端名属性
+	optional string 	domainname 	        = 11;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 12;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains            = 13;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者获取分屏布局信息与RspLayoutInfo对应,H5-->ConfCtrlSvr/ter-->MC
+message ReqLayoutInfo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;//请求的会议号
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	layouttype		= 4;//分屏布局类型，0-转发布局、1-混屏布局
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//终端请求获取主席权限,ter-->MC
+message ReqObtainChairmanAuthority
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+/////////end////////////
+
+////Response///////////
+//(主席)终端回复MC的代理请求,ter-->MC
+message RspObtainChairmanAuthorityProxy
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	confid 		    = 1;
+	optional uint32 terid 		    = 2;//主席终端
+	optional bool 	isok 		    = 3;//成功返回true，失败返回false
+	optional uint32 ocaterid 	    = 4;//MC代理请求获取主席权限的终端
+	optional string failreason 	    = 5;
+	optional string domainname      = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+////end////////////////
+
+////////Indication////
+//在线终端主动挂断,ter-->MC
+message IndTerExitConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid		= 2;
+	optional string 	exitreason 	= 3;//TODO:替换成错误码
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32     errorcode   = 7;//错误提示对应的错误码
+}
+//终端举手发言,ter-->MC
+message IndTerRaiseHand
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional bool 		ishandup 	= 3;//true表示举手，false表示放手
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//终端关闭摄像头,ter-->MC
+message IndCloseCamera
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 6;//视频源信息
+}
+//终端打开摄像头,ter-->MC
+message IndOpenCamera
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 6;//视频源信息
+}
+//终端告诉自己的状态给MC,MC将该终端的状态透传给其它终端(非SR终端可以不透传)
+message IndTermStatusToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 				= 1;
+	optional uint32 	terid 				= 2;
+	optional uint32 	statusClass			= 3;
+	optional uint32 	statusSubclass		= 4;
+	optional string     statusText			= 5;
+	optional string 	domainname          = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains            = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//终端给MC发送的心跳,ter-->MC
+message IndTerBeatToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会议控制者给MC发送的心跳,ConfCtrlSvr-->MC
+message IndCCSBeatToMC
+{
+	optional uint32 mcid = 1;//接收消息的mc设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+}
+message IndTerSendLimit
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndP2PInfoToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message InetAddress
+	{
+		optional uint32 ip   = 1;
+		optional uint32 port = 2; //uint16 is not defined
+	}
+	optional uint64 	  confid      = 1;
+	optional uint32 	  terid		  = 2;
+	optional uint32       p2pid		  = 3;
+	optional uint32       nat_type	  = 4;//uint8 is not defined
+	optional InetAddress  mapped_addr = 5;
+	repeated InetAddress  local_addrs = 6;
+	optional string 	  domainname  = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo     svraddrs    = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains      = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndStdTerSendMediaFormat //网关->MC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端发送音频格式
+		optional uint32 audiofrequency	= 2; //终端发送音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端发送音频通道数
+		optional uint32 audioframelen	= 4; //终端发送音频帧长
+		optional uint32 audiopt         = 5; //终端发送音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端发送主视频格式
+		optional uint32 videopt         = 7; //终端发送主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端发送辅流视频格式
+        optional uint32 duovideopt      = 9; //终端发送辅流负载类型payload type
+		optional uint32 videobandwidth  = 10;//终端主流带宽
+	}
+	optional uint64	            confid 		  		= 1;
+	optional uint32 	        terid 		  		= 2;
+	optional MediaTypeAndFormat sendmediaformat 	= 3;
+	optional string 	        domainname          = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo           svraddrs            = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo         domains             = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndStdTerRecvMediaFormat //网关->MC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message MediaTypeAndFormat
+	{
+		optional uint32 audiofmt		= 1; //终端接收音频格式
+		optional uint32 audiofrequency	= 2; //终端接收音频采样频率
+		optional uint32 audiochannelnum	= 3; //终端接收音频通道数
+		optional uint32 audioframelen	= 4; //终端接收音频帧长
+		optional uint32 audiopt         = 5; //终端接收音频负载类型payload type
+		optional uint32 videofmt		= 6; //终端接收主视频格式
+		optional uint32 videopt         = 7; //终端接收主视频负载类型payload type
+		optional uint32 duovideofmt		= 8; //终端接收辅流视频格式
+        optional uint32 duovideopt      = 9; //终端接收辅流负载类型payload type
+		optional uint32 videobandwidth  = 10;//终端接收主流带宽
+	}
+	optional uint64	            confid 				= 1;
+	optional uint32 	        terid 				= 2;
+	optional MediaTypeAndFormat recvmediaformat 	= 3; 
+	optional string 	        domainname          = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo           svraddrs            = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo         domains             = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控或者主持人更改直播设置,ter/ConfCtrlSvr-->MC
+message IndLiveSettingToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional LiveSetting livesetinfo 	= 4;//直播参数设置
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo    svraddrs       = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// mc透传,不用记录状态,监控录像回放状态,ter(gw)-->MC
+message IndTerPlaybackMonitorRecStateToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//发送消息的终端，0-web、其它为对应终端的id
+	optional string 	devicecode 		= 3;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+	optional string 	playbackparm	= 4;//回放参数,如回放操作：播放、暂停、快进，以及快进的倍数，时间刻度(相对时间)
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo    svraddrs       = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+/////////end////////////
+
+//////////Cmmand///////
+//挂断某终端,H5、会控服务和终端复用该接口H5-->ConfCtrlSvr-->MC/ter-->MC
+//通过IndTerLeaveConf来告诉被挂断的终端,挂断原因“主席(会控)挂断你”,等到终端(或者GW)回复IndTerExitConf
+message CmdChairDropTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	drpterid 	= 3;//被挂断的终端
+	optional uint32 	sponsortype = 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者切换会议模式,H5-->ConfCtrlSvr-->MC
+message CmdChangeConfMode
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	newconfmode		= 4;//new conf mode,0-自由模式、1-主席模式、
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者设置白名单,H5-->ConfCtrlSvr-->MC
+message CmdSetWhitelist
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message TerInfo
+	{
+		optional uint32 suid 	   	 	= 1;//终端唯一标识(由终端产生)
+	}
+	message WhiteListInfo
+	{
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		repeated TerInfo term	 		= 2;//白名单列表
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional WhiteListInfo whitelists 	= 4; 
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者设置新主席,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdSetChairman
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	nchterid 		= 4;//new chair terid,0-代表取消主席
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人转让主持人身份,ter-->MC
+message CmdChairTransfer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid		= 2;//chair terid
+	optional uint32 	nchterid 	= 3;//new chair terid
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人使所有终端看同一画面命令(与传统视频会议中的广播者是一个概念),ter-->MC/H5-->ConfCtrlSvr-->MC
+message CmdChairLockVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32	 	lvterid 	= 3;//所有终端看lvterid(lockedvideo)的大流
+	optional uint32 	sponsortype = 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 8;//视频源信息
+}
+//主持人取消所有终端看同一画面命令(与传统视频会议中的广播者是一个概念,取消广播者),ter-->MC/H5-->ConfCtrlSvr-->MC
+message CmdChairUnLockVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32	 	unlvterid 	= 3;
+	optional uint32 	sponsortype = 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 8;//视频源信息
+}
+//主持人锁定会议,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChairLockConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64 confid			= 1;
+	optional uint32 terid 			= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 sponsortype 	= 3;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人取消锁定会议,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChairUnLockConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64 confid			= 1;
+	optional uint32 terid 			= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 sponsortype 	= 3;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主席结束会议,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChairEndConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64 confid			= 1;
+	optional uint32 terid 			= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 sponsortype 	= 3;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者设置/取消强制静音,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdForceMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional bool 		isforcemute		= 4;//true表示设置，false表示取消
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人或终端禁音命令,H5-->ConfCtrlSvr-->MC/ter-->MC
+//MC对比terid和muterid即可知道该终端是否为被禁音终端
+//即当terid==muterid时说明该操作是terid自己本地禁音,当terid!=muterid时会控(terid==0&&sponsortype==2)、主席(terid!=0&&sponsortype==1)禁音muterid
+message CmdTerMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
+	optional uint32 	muterid 	= 3;//被禁音的终端terid
+	optional uint32 sponsortype 	= 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人或终端取消禁音命令,H5-->ConfCtrlSvr-->MC/ter-->MC
+//MC对比terid和cmuterid即可知道该终端是否为被禁音终端
+//即当terid==cmuterid时说明该操作是terid自己本地取消禁音,当terid!=cmuterid时会控(terid==0&&sponsortype==2)、主席(terid!=0&&sponsortype==1)取消禁音cmuterid
+message CmdCancelMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
+	optional uint32 	cmuterid 	= 3;//被取消禁音的终端terid
+	optional uint32 sponsortype 	= 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人将全部人静音,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChairMuteAll
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 sponsortype 	= 3;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人将全部人混音,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChairMixSoundAll
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 sponsortype 	= 3;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+
+//主持人或终端打开摄像头命令,H5-->ConfCtrlSvr-->MC/ter-->MC
+//MC对比terid和octerid即可知道该终端是否为被打开摄像头终端
+//即当terid==octerid时说明该操作是terid自己本地打开操作(等同IndOpenCamera消息),
+//当terid!=octerid时是会控(terid==0&&sponsortype==2)或者主席(terid!=0&&sponsortype==1)打开octerid摄像头
+message CmdOpenCamera
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
+	optional uint32 	octerid 	= 3;//被打开摄像头的终端terid
+	optional uint32 sponsortype 	= 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 8;//视频源信息
+}
+//主持人或终端关闭摄像头命令,H5-->ConfCtrlSvr-->MC/ter-->MC
+//MC对比terid和ccterid即可知道该终端是否为被关闭摄像头终端
+//即当terid==ccterid时说明该操作是terid自己本地关闭操作(等同IndCloseCamera消息),
+//当terid!=ccterid时会控(terid==0&&sponsortype==2)、主席(terid!=0&&sponsortype==1)关闭ccterid摄像头
+message CmdCloseCamera
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
+	optional uint32 	ccterid 	= 3;//被关闭摄像头的终端terid
+	optional uint32 sponsortype 	= 4;//发起者类型,1-ter、2-web
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos   = 8;//视频源信息
+}
+//表示当前的选看(与前一次选看无关),ter-->MC
+message CmdTerSelectVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message TerIdAndVideoSize
+	{
+		optional uint32 terid 	   	 = 1;//混会议媒体处理实例的通道id与其对应的terid相同
+		optional uint32 videosize  	 = 2;//期望流的大小， 0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+		optional uint32 screenid	 = 3;//对应terid的视频源编号,需将混屏、转码屏、SR终端视频源区别对待
+		optional uint32 delayopt	 = 4;//0:立即操作 1:延时操作
+		optional uint32 replaceterid = 5;//delayopt等于0时赋值为0;delayopt等于1时延时替换的终端id,或会议混屏、双流屏所属MPI媒体处理实例id(即发起选看者等到期望的selterv::terid终端videosize大小第一个I帧包后去替换的终端,或会议混屏、双流屏所属MPI媒体处理实例id)
+		optional uint32 recvfps		 = 6;//期望的帧率大小，0:0 1:8 2:16 3:24 4:30 5:60.如果终端选看没填该选项，透传给netmp强制使用默认3:24
+		optional uint32 replacescreenid = 7;//delayopt等于0时赋值为0，delayopt等于1时延时替换的是SR终端赋值为0,延时替换的是会议混屏、双流屏时才填入屏幕id
+	}
+	optional uint64				confid 		= 1;
+	optional uint32 			terid 		= 2;//发起选看者的terid，0-web、非0-具体终端
+	repeated TerIdAndVideoSize 	selterv 	= 3;//select ter video
+	optional string 	        domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo           svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo         domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+
+message CmdChangeName
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2; 
+    optional string 	ctername 	= 3;//changed Name
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//主持人或主席发送字符串消息,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdTextToOtherTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype = 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 		= 2;
+	optional uint32 	terid 		= 3;//发送命令的终端，0-web、其它为对应终端的id
+	repeated uint32     otherterid  = 4;//指定消息接受者,若otherterid 为空表示群发所有
+	optional string     textstr		= 5;
+	optional string 	domainname  = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 终端发送字符串消息,临时IM功能接口,ter-->MC
+message CmdMsgToOtherTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//发送命令的终端id
+	repeated uint32     dstterid    = 3;//目的终端id集合,dstterid 为空表示群发所有
+	optional string     msgstr		= 4;
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//释放屏幕,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCDestoryScreen
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;
+	optional uint32		terid			= 3;//发送请求的终端，0-web、其它为对应终端的id
+	optional uint32		channelid		= 4;//请求销毁屏幕所在的会议媒体处理实例通道id
+	optional uint32		screenid		= 5;//请求销毁的屏幕id
+	optional string 	domainname      = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//设置分屏,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCSetMultiScreen 
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message ScreenPaneInfo 
+	{ 
+		optional uint32 paneindex	= 1;//分屏id,从0开始
+		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    	= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 	= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 	= 7;//终端名称
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头		
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
+	}
+	optional uint32 			sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64				confid			= 2;//被设置的会议
+	optional uint32 			terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32 			layouttype		= 4;//分屏布局类型，0-转发布局、1-混屏布局
+	optional uint32 			layoutmode		= 5;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+	repeated ScreenPaneInfo		screenpanelist	= 6;//分屏信息
+	optional uint32 			channelid		= 7;//被设置混屏布局对应屏幕的媒体处理实例通道id
+	optional uint32 			screenid		= 8;//被设置混屏布局对应屏幕id
+	optional uint32				screentype		= 9;//被设置混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional string 	        domainname      = 10;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo           svraddrs        = 11;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo         domains         = 12;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 			steplength		= 13;//layouttype=0时主席的步长
+	optional uint32       		chairfollow     = 14;//0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+}
+//增加滚动字幕,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCAddSubtitle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional string 	message			= 4;//滚动字幕内容
+	optional uint32 	msgpos  		= 5;//滚动字幕的位置：1-上、2-中、3-下
+	optional string		msgcolor  		= 6;//滚动字幕字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 7;//滚动字幕字体大小：1-大、2-中、3-小
+	optional bool		enablemsgbg		= 8;//使能滚动字幕背景
+	optional string 	msgbgcolor  	= 9;//滚动字幕背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	displaytime  	= 10;//字幕显示时间，单位：秒;0-永久显示,非零-确切显示时间
+	optional string 	domainname      = 11;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 12;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 13;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional bool		enablemsgroll	= 14;//字幕是否滚动显示:true-滚动显示(默认)、false-固定显示
+	optional uint32 	rollspeed   	= 15;//enablemsgroll为true时的滚动速度：1-缓慢、2-一般(默认)、3-稍快、4-快速
+}
+//停止字幕,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCStopSubtitle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional string 	domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//显示会场名,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCDisplayTername
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32 	msgpos  		= 4;//会场名的位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+	optional string		msgcolor  		= 5;//会场名字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 6;//会场名字体大小：1-大、2-中、3-小
+	optional bool		enableMsgBg		= 7;//使能会场名称背景
+	optional string 	msgbgcolor  	= 8;//会场名背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional string 	domainname      = 9;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 10;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 11;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//隐藏会场名,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCHideTername
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional string 	domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者修改会议密码(目前只有网安加密算法时调用),H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdChangeConfCryptoKey
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid 			= 2;//被设置的会议号
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、非零表示会议主席的terid
+	optional string 	cryptokey 		= 4;//对应加密算法(0-不支持加密、1-AES-128、2-SM4、3-网安)下新的会议密钥,网安加密算法时不关注该字段
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//会控者设置标准终端观看方式,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdSetStdTerSeeingStyle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32 	seeingstyle 	= 4;//观看方式，0-跟随主持人、1-仅显示主席会场、2-标准终端观看网关分屏布局
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//增加参会者,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCAddParticipants
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 		= 2;//终端昵称、别名
+		optional string 	ip 				= 3;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+		optional uint32 	protocoltype 	= 4;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0
+		optional uint32 	bandwidth 		= 5;//终端呼叫带宽
+		optional uint32 	usertype 		= 6;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
+		optional uint32 	devicetype 		= 7;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional string 	devicecode 		= 8;//监控设备编码,即usertype==4-监控前端时填入监控前端设备编码
+		optional string 	shortname 		= 9;//短号,一般是usertype==3时标准终端注册时短号呼叫用
+		optional TimeInfo   totaltimespan   = 10;//总时间段信息,usertype==7-监控前端录像
+		repeated TimeInfo   subtimespans    = 11;//子时间段信息,usertype==7-监控前端录像,如果有值说明有录像文件
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	repeated ParticipantInfo addparticipants = 4;//增加的与会者
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//删除参会者,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCDelParticipants
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	repeated ParticipantInfo delparticipants = 4;//删除的与会者
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 邀请参会者,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCInvitParticipants
+{
+    message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 		= 2;//终端昵称、别名
+		optional string 	ip 				= 3;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+		optional uint32 	protocoltype 	= 4;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0
+		optional uint32 	bandwidth 		= 5;//终端呼叫带宽
+		optional uint32 	usertype 		= 6;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
+		optional uint32 	devicetype 		= 7;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional string 	calloption		= 8;//呼叫选项,一般是通知给gw供usertype==3(devicetype为0、4、5),devicetype==1,usertype==4(devicetype==2或devicetype==4)情况分析用
+		optional string 	devicecode 		= 9;//监控设备编码,即usertype==4-监控前端时填入监控前端设备编码
+		optional string 	shortname 		= 10;//短号,一般是usertype==3标准终端注册时短号呼叫用
+		optional TimeInfo   totaltimespan   = 11;//总时间段信息,usertype==7-监控前端录像
+		repeated TimeInfo   subtimespans    = 12;//子时间段信息,usertype==7-监控前端录像,如果有值说明有录像文件
+		optional uint32 	relatedgwid 	= 13;//终端关联的网关id,usertype为3、4、7注册某网关时对应的网关id,为0时需由MC进行分配
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	repeated ParticipantInfo ivtparticipants = 4;//邀请的与会者
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// mc透传,不用记录状态,查询监控录像,H5-->ConfCtrlSvr-->MC-->gw/ter-->MC-->gw
+message CmdMCQueryMonitorRec
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message MonitorInfo 
+	{ 
+		optional string 	devicecode 		= 1;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional TimeInfo   totaltimespan   = 2;//查询的总时间段信息,usertype==7-监控前端录像
+		optional uint32 	relatedgwid 	= 3;//监控设备关联的网关id,usertype为7注册某网关时对应的网关id,为0时需由MC进行分配
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	repeated MonitorInfo queryinfos     = 4;//查询对应监控前端录像的信息
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 监控录像回放,H5-->ConfCtrlSvr-->MC-->ter(gw)/ter-->MC-->ter(gw)
+message CmdMCPlaybackMonitorRec
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message MonitorInfo 
+	{ 
+		optional string 	devicecode 		= 1;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional string 	playbackparm	= 2;//回放参数,如回放操作：播放、暂停、快进，以及快进的倍数，时间刻度(相对时间)
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	repeated MonitorInfo playbackinfos  = 4;//回放对应监控前端的录制文件信息,目前只支持同时操作一个录像文件
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 开始录制,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCStartRec
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32	    channelid	 	= 4;//需要录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		= 5;//需要录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		= 6;//需要录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string 	domainname      = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 停止录制,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCStopRec
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32	    channelid	 	= 4;//需要录制的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		= 5;//需要录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		= 6;//需要录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string 	domainname      = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//投屏终端类型转换,ter-->MC
+message CmdMCTransferSpecialtype
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid		= 2;// terid
+	optional uint32 	nspcltype 	= 3;//new special type, 0-普通终端类型,1-投屏终端类型
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 开始直播,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCStartLive
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32	    channelid	 	= 4;//需要直播的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		= 5;//需要直播的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		= 6;//需要直播的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional LiveSetting livesetinfo	= 7;//每次直播的参数设置
+	optional string 	pulladdrprefix	= 8;//直播的拉流地址前缀,与confid+channelid拼成拉流url
+	optional string 	playaddrprefix	= 9;//直播的播放地址前缀,与confid+channelid拼成播放url
+	optional string 	domainname      = 10;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 11;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 12;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32	   livesvrtype	    = 13;//直播服务类型,默认0-SRS直播、1-阿里云直播、2-腾讯云直播
+}
+// 停止直播,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCStopLive
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32	    channelid	 	= 4;//停止直播的MPI对应通道id或者终端对应的通道id
+	optional uint32	    screenid		= 5;//停止直播的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	optional uint32	    screentype		= 6;//停止直播的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕,如果channelid是终端通道id,该选项可以忽略
+	optional string 	domainname      = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 通知网关同步监控点信息,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCSyncMonitorInfo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional string 	dsturl    		= 4;// 监控点同步的目的地址
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 	relatedgwid 	= 8;//监控点关联的网关id,usertype为3、4、7注册某网关时对应的网关id,为0时需由MC进行分配
+}
+//主持人允许某人发言,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdPermissionRaiseHand
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;//被设置的会议
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id
+	optional uint32 	permterid 	    = 4;//被允许的终端terid
+	optional bool 		ispermission    = 5;//true表示同意，false表示拒绝
+	optional string 	domainname      = 6;//发送消息终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 7;//发送消息终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 8;//发送消息终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//取消所有发言,H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdMCPutAllHandDown
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
+	optional uint64		confid			= 2;
+	optional uint32 	terid 			= 3;//发送消息的终端，0-web、其它为对应终端的id	
+	optional string 	domainname      = 4;//发送消息终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//发送消息终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//发送消息终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+////////end///////////
+
+////////////////////////////MC-->Ter///////////////////////////////////////////////////////
+/////Request////
+//MC将该(获取主席权限)消息发到当前主席终端
+message ReqObtainChairmanAuthorityProxy
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+    optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;//当前主席终端
+	optional uint32 	ocaterid 	= 3;//被代理(请求获取主席权限)的终端
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+////////end///////////
+
+////////////Respond/////////
+message RspTerJoinConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3、relayserver=4 
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+    optional string 	netmpip 			= 1;//告诉终端netmp的地址和端口,gmrtype==1时不填写netmp地址和端口
+	optional uint32		audiodatarecvport	= 2;
+	optional uint32		audioctrlrecvport	= 3;
+	optional uint32		videodatarecvport	= 4;
+	optional uint32		videoctrlrecvport	= 5;
+	optional uint32		video2datarecvport	= 6;
+	optional uint32		video2ctrlrecvport	= 7;
+	optional uint32		video3datarecvport	= 8;
+	optional uint32		video3ctrlrecvport	= 9;
+	optional uint32		desktopdatarecvport	= 10;
+	optional uint32		desktopctrlrecvport	= 11;
+	optional uint32		channelid			= 12;//gmrtype==1时不填写	
+	optional string 	failreason 			= 13;
+	optional bool 		isok	 			= 14;//成功返回true，失败返回false
+	optional uint64		confid 				= 15;//请求参会时携带的会议号,对应数据库conference表中的conf_id或者conf_subject
+	optional uint32 	terid 				= 16;//mc allocated terid,gmrtype==1时不填写
+	optional uint32		mediaencryptionalgorithm = 17;//媒体数据加密算法
+	optional bytes		encryptionkey		= 18;//加密秘钥
+	optional string 	subject 			= 19;//会议主题值,目前网关使用该值做去重处理(subject+suid)
+	optional string 	domainname          = 20;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    		= 21;//服务地址信息
+	repeated DomainInfo  domains            = 22;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32      errorcode          = 23;//错误提示对应的错误码
+	optional uint32 	 suid 				= 24;//增加此字段是兼容还未分配terid的等候区终端
+	optional uint32      gmrtype            = 25;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		 gmrid 		        = 26;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	 gmrname            = 27;//分组会议的分组名
+}
+//回复会控者会议状态,MC-->Ter/MC-->ConfCtrlSvr
+message RspConfStatus
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SubtitleInfo 
+	{ 
+		optional string 	subtitlemsg			= 1;//滚动字幕内容	
+		optional uint32 	displaytime			= 2;//字幕滚动时间，单位：秒，设置为0，则永久显示
+		optional uint32 	msgpos				= 3;//滚动字幕的位置：1-上、2-中、3-下
+		optional string 	msgcolor			= 4;//消息字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+		optional uint32 	msgfontsize			= 5;//字体大小：1-大、2-中、3-小
+		optional bool		enableMsgBg			= 6;//使能会场名称背景
+		optional string 	msgbgcolor			= 7;//字体背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+		optional bool		enablemsgroll   	= 8;//字幕是否滚动显示:true-滚动显示(默认)、false-固定显示
+	    optional uint32 	rollspeed   	    = 9;//enablemsgroll为true时的滚动速度：1-缓慢、2-一般(默认)、3-稍快、4-快速
+	}
+	message WhiteListInfo
+	{
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		repeated uint32 terlist	 		= 2;//白名单列表,参会者suid集合
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	message LiveInfo
+	{
+		optional uint32 livestate 	= 1;//直播状态,0-停止直播,1-开始直播
+		optional string failreason	= 2;//用来表示livestate为0时的停止原因,为空或者"default"为正常停止,其它为具体原因
+		optional LiveSetting livesetinfo = 3;//直播参数设置
+		optional string liveplayurl	= 4;//livestate为1开始直播时,终端(主席)显示用
+	}
+	message RecInfo
+	{
+		optional uint32  recstate   = 1;//录制状态,0-停止录制,1-开始录制
+		optional string failreason	= 2;//用来表示recstate为0时的停止原因,为空或者"default"为正常停止,其它为具体原因
+	}
+	message VAInfo
+	{
+		optional uint32  vastate   = 1;//视频分析功能是否开启,0-停止,1-开始
+		optional uint32	analymode  = 2;//分析的模式,0-未知、1-人脸识别模式、2-虚拟桌牌模式；
+	}
+	optional bool 		isok				= 1;
+	optional uint64		confid 				= 2;//会议号
+	optional string 	confname			= 3;//会议名称,对应数据库中conf_subject会议主题
+	optional uint32 	confmode 			= 4;//conf mode,0-自由模式、1-主席模式、
+	repeated uint32 	participants 		= 5;//参会者列表,参会者suid集合
+	optional uint32 	chairmansuid		= 6;//会议主席,对应数据库里会议创建者的suid
+	repeated uint32 	assistchairmans		= 7;//辅助主席,参会者suid集合
+	optional uint32 	duovideoterid		= 8;//正在发送双流的双流发送者
+	optional uint32 	stdterseeingstyle	= 9;//标准终端观看方式，0-跟随主持人、1-仅显示主席会场、2-标准终端观看网关分屏布局
+	optional bool   	isduovideostart		= 10;//是否开启双流
+	optional bool   	isconflocked		= 11;//会议是否被锁定
+	optional bool   	isforcemute			= 12;//强制禁音是否开启，true表示设置，false表示取消
+	optional bool   	isdisplaytername	= 13;//是否显示会场名称，true表示显示，false表示隐藏
+	optional bool   	issubtitlestart		= 14;//滚动字幕是否开启，true表示开启，false表示关闭
+	optional SubtitleInfo subtitle 			= 15;//滚动字幕信息
+	repeated WhiteListInfo whitelists 		= 16;//会议白名单
+	optional string 	  failreason 		= 17;//会议失败原因
+	optional RecInfo 	recinfo 			= 18;//录制信息
+	optional LiveInfo 	liveinfo 			= 19;//直播信息
+	optional string 	domainname          = 20;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 21;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 	terid 			    = 22;//接收消息的终端，0-web、其它为对应终端的id
+	repeated DomainInfo  domains            = 23;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32      errorcode          = 24;//错误提示对应的错误码
+	optional bool   	iscallwaiting		= 25;//会议等候区是否开启，true表示开启，false表示关闭
+	optional uint32 	avtoterid 			= 26;//双流令牌拥有者终端,0-代表没人占用令牌,非0-代表对应终端,只有拥有双流令牌者才能发送双流
+	optional uint32 	avtype 		        = 27;//发送的双流模式,默认0-AVC清晰模式,1-SVC流畅模式
+	optional uint32     sharedaudio         = 28;//共享音频,默认0-不共享音频,1-共享音频
+	repeated VAInfo 	vainfos 	    	= 29;//视频分析功能的状态信息
+	optional uint32 	filternovideo 		= 30;//confmode为1时表示主席模式下各端“自动模式或轮询过滤无视频参会人”,默认0-关闭、1-开启；confmode为0时忽略该字段
+	optional uint32		  totalnums			= 31;//参会者列表里参会者的总数目
+	optional uint32		  alreadynums		= 32;//已经发送的参会者数目,若与totalnums一致则这次结束
+}
+//回复终端列表信息给终端(包括会控者),终端列表中增加suid属性便于接收端对比地址簿终端显示用
+//MC-->Ter/MC-->ConfCtrlSvr
+message RspConfTerLists
+{
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	message DeviceInfo 
+	{ 
+	    optional uint32	  type        = 1;//0-音频设备、1-视频设备
+		repeated SourceInfo  srcinfos = 2;//音视频源信息
+	}
+	message PresetInfo 
+	{ 
+	    optional uint32	 presetid  = 1;//预置位编号
+		optional string	 presetname = 2;//预置位名称
+		optional uint32	 relatedvsrcid  = 3;//相关视频源
+	}
+	message TerIdAndName
+	{
+		optional uint32 		terid 		= 1;//终端对应的terid
+		optional string 		tername		= 2;//终端名称
+		optional bool   		ismuted 	= 3;//是否禁音
+		optional bool   		isCameraOn 	= 4;//是否打开摄像头,无论该终端是否支持多摄像头,该字段表示0-0号摄像头状态(便于兼容接收端是旧版本终端时显示用)
+		optional bool   		ishandup	= 5;//是否在举手
+		optional uint32 		suid 		= 6;//终端唯一标识(由终端产生),便于接收端对比地址簿终端显示用
+		optional uint32 	usertype 		= 7;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
+		optional string 	ip 				= 8;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+		optional uint32 	protocoltype 	= 9;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0
+		optional uint32 	bandwidth 		= 10;//终端呼叫带宽
+		optional uint32 	devicetype 		= 11;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional uint32 	specialtype		= 12;//特殊类型, 0-普通终端类型,1-投屏终端类型(列表中隐藏该类型终端)
+		optional string 	devicecode 		= 13;//监控设备编码,usertype==4或usertype==7时填入监控前端设备编码
+		optional string 	shortname 		= 14;//短号,一般是usertype==3标准终端注册时短号呼叫用
+		optional TimeInfo   totaltimespan   = 15;//总时间段信息,usertype==7-监控前端录像
+		repeated TimeInfo   subtimespans    = 16;//子时间段信息,usertype==7-监控前端录像,如果有值说明有录像文件
+		optional uint32 	termtype 	    = 17;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+		optional uint32 	fromtype    	= 18;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+		repeated DeviceInfo  devinfos       = 19;//终端的设备信息,如音视频设备
+		repeated PresetInfo  presetinfos    = 20;//终端摄像头预置位信息,为空表示没有设置预置位
+		optional uint32 	orderno			= 21;//终端排序序号
+		optional uint32 	producttype     = 22;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	}
+	optional bool 		  isok 			= 1;
+	optional uint64		  confid 		= 2;
+	optional uint32 	  terid 		= 3;//接收消息的终端，0-web、其它为对应终端的id
+	optional uint32		  chairid		= 4;	
+	repeated TerIdAndName content 		= 5; // 在线,终端老版本仍然是关注TerIdAndName中1-6字段,终端新版本才考虑7-10字段
+	optional string 	  failreason 	= 6;
+	optional uint32		  duoVideoid    = 7;
+	optional uint32		  totalnums		= 8;//终端列表里终端的总数目
+	optional uint32		  alreadynums	= 9;//已经发送的终端数目,若与totalnums一致则这次结束
+	repeated TerIdAndName offlinelist	= 10; // 不在线,TerIdAndName中1、3、4、5、15、16、17、18、19、20字段不需关注,只需关注2、6、7-10字段
+	optional string 	  domainname    = 11;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo     svraddrs      = 12;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo   domains       = 13;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//回复终端请求获取主席权限的结果,MC-->Ter
+message RspObtainChairmanAuthority
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional bool 	isok 			= 1;//成功返回true，失败返回false
+	optional uint64	confid 			= 2;
+	optional uint32 terid 			= 3;
+	optional string failreason 		= 4;
+	optional string domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注 
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//回复创建屏幕的结果,MC-->Ter/MC-->ConfCtrlSvr
+message RspTerCreateScreen
+{ 
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional bool 		isok			= 1;
+	optional uint64		confid			= 2;
+	optional uint32 	terid 			= 3;
+	optional uint32		seqnum			= 4;//发起请求的序列号，由发起者（终端或者web）维护
+	optional uint32		channelid		= 5;//被创建屏幕所在的会议媒体处理实例通道id
+	optional uint32  	screenid   		= 6;//返回创建的屏幕id
+	optional uint32		screentype		= 7;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional string 	failreason		= 8;//若失败，则会有失败说明	
+	optional string 	domainname      = 9;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 10;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注 
+	repeated DomainInfo  domains        = 11;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32     errorcode       = 12;//错误提示对应的错误码
+}
+//回复分屏布局信息,MC-->Ter/MC-->ConfCtrlSvr
+message RspLayoutInfo
+{ 
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message PaneInfo
+	{ 
+		optional uint32 paneindex	= 1;//分屏id,从0开始
+		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    	= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 	= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 	= 7;//终端名称
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
+	}
+	message ConfPollInfo
+	{
+		optional uint32 terid   = 1;//轮询的终端id
+	}
+	message LayoutInfo
+	{
+		optional uint32 		layouttype		= 1;//分屏布局类型，0-转发布局、1-混屏布局
+		optional uint32 		layoutmode		= 2;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+		repeated PaneInfo 		panes			= 3;//分屏信息
+		optional uint32 		channelid		= 4;//混屏布局对应屏幕所属媒体处理实例通道
+		optional uint32 		screenid 		= 5;//混屏布局对应屏幕id
+		optional uint32			screentype		= 6;//混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+		repeated ConfPollInfo   confpolllist    = 7;//主席模式下会议布局轮询表
+		optional uint32       	chairfollow     = 8;//0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+	}
+	optional uint64		confid			= 1;
+	optional uint32 	terid 			= 2;//接收消息的终端，0-web、其它为对应终端的id
+	repeated LayoutInfo layoutinfos		= 3;//分屏布局信息
+	optional string 	domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注 
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+////////end///////////
+
+////////////Indication//////////////
+//会控服务CCS专用,MC将mc开始会议群发到所有的会控服务,MC-->ConfCtrlSvr
+message IndMCStartConfToCCS
+{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+	optional uint64 confid = 3;//会议ID
+	optional bool isok = 4;//开始会议结果,true-开始成功,false-开始失败
+	optional uint64 confreportid = 5;
+}
+//会控服务CCS专用,MC将mc结束会议群发到所有的会控服务,MC-->ConfCtrlSvr
+message IndMCEndConfToCCS
+{
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+	optional uint64 confid = 3;//会议ID
+}
+//会控服务CCS专用,MC将所有召开的会议发给当前连接的会控服务,MC-->ConfCtrlSvr
+message IndAllConfToCCS
+{
+	message ConfInfo
+	{
+		optional uint64 confid = 1;//会议ID
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+	repeated ConfInfo allconfs = 3;//所有召开会议信息
+}
+//通知终端或者会议控制者有新终端加入会议(终端上线),MC-->Ter/MC-->ConfCtrlSvr
+message IndNewTerJoinedConf//MC将该消息群发到其他所有在会终端
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+		optional string	  name	  = 2;//源名称
+		optional bool     isOn    = 3;//源是否打开
+		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
+	}
+	message DeviceInfo 
+	{ 
+	    optional uint32	  type        = 1;//0-音频设备、1-视频设备
+		repeated SourceInfo  srcinfos = 2;//音视频源信息
+	}
+	message PresetInfo 
+	{ 
+	    optional uint32	 presetid  = 1;//预置位编号
+		optional string	 presetname = 2;//预置位名称
+		optional uint32	 relatedvsrcid  = 3;//相关视频源
+	}
+	optional string 	tername		 = 1;
+	optional uint32		jointerid    = 2;
+	optional bool   	ismuted 	 = 3;
+	optional bool   	isCameraOn   = 4;//无论jointerid终端是否支持多摄像头,该字段表示0-0号摄像头状态(便于兼容接收端是旧版本终端时显示用)
+	optional uint64		confid 		 = 5;
+	optional uint32 	terid 		 = 6;//接收消息的终端，0-web、其它为对应终端的id
+	optional uint32 	suid 		 = 7;//jointerid对应的suid,便于接收端对比地址簿终端显示用
+	optional uint32 	usertype 	 = 8;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
+	optional string 	ip 			 = 9;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url
+	optional uint32 	protocoltype = 10;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0
+	optional uint32 	bandwidth 	 = 11;//终端呼叫带宽
+	optional uint32 	devicetype 	 = 12;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+	optional uint32 	specialtype	 = 13;//特殊类型,0-普通终端类型,1-投屏终端类型
+	optional string 	devicecode   = 14;//监控设备编码,usertype==4-监控前端时填入监控前端设备编码
+	optional string 	shortname 	 = 15;//短号,一般是usertype==3标准终端注册时短号呼叫用
+	optional string 	domainname   = 16;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs     = 17;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注 
+	repeated DomainInfo  domains     = 18;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 	gmrtype 	 = 19;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32		gmrid 		 = 20;//分组会议的分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string 	gmrname	     = 21;//分组会议的分组名
+	optional uint32 	termtype 	 = 22;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 	fromtype     = 23;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	repeated DeviceInfo  devinfos    = 24;//终端音视频设备信息
+	repeated PresetInfo  presetinfos = 25;//终端摄像头预置位信息,为空表示没有设置预置位
+	optional uint32 	producttype  = 26;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+}
+//通知终端或者会议控制者有终端退出会议(终端下线),MC-->Ter/MC-->ConfCtrlSvr
+//MC将该消息群发到其他所有在会终端
+message IndTerLeaveConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional string leavereason		= 1;//TODO:leavereason替换成错误码
+	optional uint32 leaveterid      = 2;
+	optional uint64	confid 			= 3;
+	optional uint32 terid 			= 4;//接收消息的终端，0-web、其它为对应终端的id
+	optional uint32 suid 			= 5;//leaveterid对应的suid,便于接收端对比地址簿终端显示用
+	optional string 	domainname  = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 errorcode       = 9;//错误提示对应的错误码
+	optional uint32 gmrtype         = 10;//GroupMeetingRoom分组会议类型,0-默认值,主会场分组、1-等候区分组、2-分会场分组
+	optional uint32	gmrid 		    = 11;//会议分组号,0-默认值,主会场分组、1-等候区分组、2++对应分会场分组号
+	optional string gmrname         = 12;//分组会议的分组名
+}
+//发送到刚加入会议的终端
+message IndConfAllMPIInfoToTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message ScreensInMPI
+	{
+		optional uint32 screenid	= 1;//屏幕id
+		optional uint32 screentype	= 2;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	}
+	message MPIsInConf
+	{
+		optional uint32 		mpichannelid 	= 1;
+		repeated ScreensInMPI	screens			= 2;
+	}	
+	optional uint64		confid			= 1;
+	optional uint32		mcid			= 2;//发送消息的mc_deviceid
+	optional uint32		terid			= 3;//接收消息的terid
+	repeated MPIsInConf mpis			= 4;//会议中所有MPI的信息（可能包含screen信息）
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndMPIInfoToTer 
+{ 
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;
+	optional uint32		channelid		= 2; //MC为会议媒体处理实例分配的通道id
+	optional uint32		addordel		= 3;// 1-添加screenid，2-删除screenid
+	optional uint32 	terid 			= 4;//接收消息的terid
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndScreenInfoToTer 
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;
+	optional uint32		channelid		= 2; //MC为会议媒体处理实例分配的通道id
+	optional uint32		screenid		= 3; 
+	optional uint32		screentype		= 4;//屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+	optional uint32		addordel		= 5;// 1-添加screenid，2-删除screenid
+	optional uint32 	terid 			= 6;//接收消息的terid
+	optional string 	domainname      = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndTermStatusToTerm//MC将该消息群发到其他所有在会终端
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64			confid 				= 1;
+	optional uint32 		terid 				= 2;
+	optional uint32 		statusTerid			= 3;
+	optional uint32 		statusClass			= 4;
+	optional uint32 		statusSubclass		= 5;
+	optional string     	statusText			= 6;
+	optional string 	    domainname          = 7;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo       svraddrs            = 8;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo     domains             = 9;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//MC将某终端举手发言消息群发到其他所有在会终端
+message IndNotifyTerHandUp
+{ 
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 handupterid     = 1;
+	optional bool 	ishandup 		= 2;//true表示举手，false表示放手
+	optional uint64	confid 			= 3;
+	optional uint32 terid 			= 4;
+	optional string domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs     = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//将主持人允许发言的处理结果转给某终端,MC-->Ter
+message IndPermissionTerRaiseHand
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端
+	optional bool 		ispermission    = 3;//true表示同意，false表示拒绝
+	optional string     domainname      = 4;//接收消息终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//接收消息终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//接收消息终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//取消所有发言,MC-->Ter/MC-->ConfCtrlSvr
+message IndTerPutAllHandDown
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid		    = 1;
+	optional uint32 	terid 		    = 2;//接收消息的终端，0-web、其它为对应终端的id
+	optional string     domainname      = 3;//接收消息终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 4;//接收消息终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 5;//接收消息终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndChairTransfer//MC将该消息群发到其他所有在会终端( 包括主持人)
+{ 
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 nchterid 		= 1;//更换后的主持人terid
+	optional uint64	confid 			= 2;
+	optional uint32 terid 			= 3;
+	optional string domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs     = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//MC将该消息发送给被设定终端或者收到被设定终端成功静音将该消息群发到所有在会终端,MC-->Ter/MC-->ConfCtrlSvr
+message IndTerMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 sponsorid       = 1;
+	optional uint32 muteterid       = 2; 
+	optional uint64	confid 			= 3;
+	optional uint32 terid 			= 4;//发送给会控服务时该值强制填0
+	optional string domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs     = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//MC将该消息发送给被设定终端或者收到被设定终端成功取消将该消息群发到其他所有在会终端,MC-->Ter/MC-->ConfCtrlSvr
+message IndCancelMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 sponsorid     = 1;
+	optional uint32 cancelterid   = 2;
+	optional uint64	confid        = 3;
+	optional uint32 terid         = 4;//发送给会控服务时该值强制填0
+	optional string domainname    = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs   = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains  = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndChangeName//MC将该消息群发到其他所有在会终端
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 	changeterid = 1;	
+    optional string 	ctername 	= 2;//changed Name
+	optional uint64		confid 		= 3;
+	optional uint32 	terid 		= 4; 
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs     = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// MC将该消息发送给被设定终端或者收到被设定终端成功关闭摄像头将该消息群发到所有在会终端,MC-->Ter/MC-->ConfCtrlSvr
+// 接收者判断closeterid是否等于自己的terid,如果相等说明是主席或者会控想关闭我的摄像头
+message IndTersCloseCamera //MC将该消息群发到其他所有终端
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint32		closeterid = 1;
+	optional uint64	 	confid 	   = 2;
+	optional uint32 	terid 	   = 3;	
+	optional string 	domainname = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo  svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains   = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos  = 7;//视频源信息
+}
+// MC将该消息发送给被设定终端或者收到被设定终端成功打开摄像头将该消息群发到所有在会终端,MC-->Ter/MC-->ConfCtrlSvr
+// 接收者判断openterid是否等于自己的terid,如果相等说明是主席或者会控想打开我的摄像头
+message IndTersOpenCamera //MC将该消息群发到其他所有终端
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint32 	openterid 	 = 1; // 被操作的终端id
+	optional uint64	 	confid 	     = 2;
+	optional uint32 	terid 	     = 3; // 接收消息的终端id,发送给会控服务时该值强制填0
+	optional string 	domainname   = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs     = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos    = 7;//视频源信息
+}
+//通知所有终端,主席(会控)锁定某个终端的视频(与传统视频会议中的广播者是一个概念),MC-->ter/MC-->ConfCtrlSvr
+message IndChairLock
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint32 	lockedterid  = 1;
+	optional uint64	 	confid 	     = 2;
+	optional uint32 	terid 	     = 3;
+	optional string 	domainname   = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs     = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos    = 7;//视频源信息
+}
+//通知所有终端,主席(会控)取消锁定某个终端的视频(取消广播者),MC-->ter/MC-->ConfCtrlSvr
+message IndChairUnLock
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SourceInfo 
+	{ 
+	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	}
+	optional uint32 	unlockedterid  = 1;
+	optional uint64	 	confid 	       = 2;
+	optional uint32 	terid 	       = 3;
+	optional string 	domainname     = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains       = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated SourceInfo  srcinfos      = 7;//视频源信息
+}
+//通知所有终端,主席(会控)是否锁定会议,MC-->ter/MC-->ConfCtrlSvr
+message IndChairLockConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	 	confid 	       = 1;
+	optional uint32 	terid 	       = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional bool 		isconflocked   = 3;//true表示锁定会议，false表示未锁定会议
+	optional string 	domainname     = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains       = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//通知所有终端,主席(会控)设置/取消强制静音,MC-->ter/MC-->ConfCtrlSvr
+message IndForceMute
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	 	confid 	       = 1;
+	optional uint32 	terid 	       = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional bool 		isforcemute	   = 3;//true表示设置，false表示取消
+	optional string 	domainname     = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains       = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//通知所有终端,主席(会控)切换会议模式,MC-->ter/MC-->ConfCtrlSvr
+message IndChangeConfMode
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	 	confid 	       = 1;
+	optional uint32 	terid 	       = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	newconfmode	   = 3;//new conf mode,0-自由模式、1-主席模式
+	optional string 	domainname     = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains       = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//通知所有终端,主席(会控)切换标准终端观看方式,MC-->ter/MC-->ConfCtrlSvr
+message IndStdTerSeeingStyle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	 	confid 	       = 1;
+	optional uint32 	terid 	       = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional uint32 	newstyle	   = 3;//new seeing style,0-跟随主持人、1-仅看主会场、2-看网关布局
+	optional string 	domainname     = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains       = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//MC给终端发送的心跳,MC-->ter
+message IndMCBeatToTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//MC给会议控制者发送的心跳,MC-->ConfCtrlSvr
+message IndMCBeatToCCS
+{
+	optional uint32 mcid = 1;//发送消息的mc设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+}
+message IndSendLimits
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32     limitedterid = 1;
+	optional uint64		confid 		 = 2;
+	optional uint32 	terid 		 = 3;
+	optional string 	domainname   = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs     = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndChairEndConf
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 chairid 		= 1;
+	optional string	chairname		= 2;
+	optional uint64 confid			= 3;
+	optional uint32 terid 			= 4;
+	optional string	reason			= 5;
+	optional string domainname      = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32 errorcode       = 9;//错误提示对应的错误码
+}
+message IndP2PInfoToTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message InetAddress
+	{
+		optional uint32 ip   = 1;
+		optional uint32 port = 2; //uint16 is not defined
+	}
+	optional uint64 	  confid      = 1;
+	optional uint32 	  terid		  = 2;
+	optional uint32       endterid    = 3;//对端terid
+	optional uint32       p2pid		  = 4;//对端 p2p id
+	optional uint32       nat_type	  = 5; //uint8 is not defined
+	optional InetAddress  mapped_addr = 6;
+	repeated InetAddress  local_addrs = 7;
+	optional string 	  domainname  = 8;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo     svraddrs    = 9;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo   domains     = 10;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndTextMsgToTers //群发消息
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional string     textstr		= 1;
+	optional uint64		confid 		= 2;
+	optional uint32 	terid 		= 3;
+	optional uint32 sponsorid       = 4;//消息发送者id,0-代表会控，非0-入会终端
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 群发消息,MC转发终端发送的字符串消息,临时IM功能接口,MC-->ter
+message IndMsgToTer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid    	= 2;//消息接收者id
+	optional uint32     sendterid   = 3;//消息发送者id
+	optional string     msgstr		= 4;
+	optional string 	domainname  = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//群发消息,MC告诉所有终端和会议控制服务,全部静音,MC-->ter/MC-->ConfCtrlSvr
+message IndTerMuteAll
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//群发消息,MC告诉所有终端和会议控制服务,取消全部静音,MC-->ter/MC-->ConfCtrlSvr
+message IndTerMixSoundAll
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string 	domainname  = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//增加滚动字幕,MC-->ter/MC-->ConfCtrlSvr
+message IndTerAddSubtitle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端id,0-web
+	optional string 	message			= 3;//滚动字幕内容
+	optional uint32 	msgpos  		= 4;//滚动字幕的位置：1-上、2-中、3-下
+	optional string		msgcolor  		= 5;//滚动字幕字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 6;//滚动字幕字体大小：1-大、2-中、3-小
+	optional bool		enablemsgbg		= 7;//使能滚动字幕背景
+	optional string 	msgbgcolor  	= 8;//滚动字幕背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	displaytime  	= 9;//字幕显示时间，单位：秒;0-永久显示,非零-确切显示时间
+	optional string 	domainname      = 10;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 11;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 12;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional bool		enablemsgroll	= 13;//字幕是否滚动显示:true-滚动显示(默认)、false-固定显示
+	optional uint32 	rollspeed   	= 14;//enablemsgroll为true时的滚动速度：1-缓慢、2-一般(默认)、3-稍快、4-快速
+}
+//停止字幕,MC-->ter/MC-->ConfCtrlSvr
+message IndTerStopSubtitle
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端id,0-web
+	optional string 	domainname      = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//显示会场名,MC-->ter/MC-->ConfCtrlSvr
+message IndTerDisplayOtherTername
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端id,0-web
+	optional uint32 	msgpos  		= 3;//会场名的位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+	optional string		msgcolor  		= 4;//会场名字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional uint32 	fontsize  		= 5;//会场名字体大小：1-大、2-中、3-小
+	optional bool		enableMsgBg		= 6;//使能会场名称背景
+	optional string 	msgbgcolor  	= 7;//会场名背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	optional string 	domainname      = 8;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 9;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 10;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//隐藏会场名,MC-->ter/MC-->ConfCtrlSvr
+message IndTerHideOtherTername
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端id,0-web
+	optional string 	domainname      = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//分屏信息更新,结构体类似RspLayoutInfo消息,MC-->ConfCtrlSvr
+message IndLayoutInfo 
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message PaneInfo
+	{ 
+		optional uint32 paneindex	= 1;//分屏id,从0开始
+		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    	= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 	= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 	= 7;//终端名称
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
+	}
+	message LayoutInfo
+	{
+		optional uint32 		layouttype		= 1;//分屏布局类型，0-转发布局、1-混屏布局
+		optional uint32 		layoutmode		= 2;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+		repeated PaneInfo 		panes			= 3;//分屏信息
+		optional uint32 		channelid		= 4;//混屏布局对应屏幕所属媒体处理实例通道
+		optional uint32 		screenid 		= 5;//混屏布局对应屏幕id
+		optional uint32			screentype		= 6;//混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕、5-焦点屏幕
+		optional uint32       chairfollow   	= 7;//0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+	}
+	optional uint64		confid			= 1;//更新的会议
+	optional uint32 	terid 			= 2;//接收消息的终端，0-web、其它为对应终端的id
+	repeated LayoutInfo layoutinfos		= 3;//分屏布局信息
+	optional string 	domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 当前白名单信息,结构体类似CmdSetWhitelist消息,MC-->ConfCtrlSvr
+message IndWhitelistInfo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message TerInfo
+	{
+		optional uint32 suid 	   	 	= 1;//终端唯一标识(由终端产生)
+	}
+	message WhiteListInfo
+	{
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		repeated TerInfo term	 		= 2;//白名单列表
+	}
+	optional uint64		confid 			= 1;//更新的会议
+	optional uint32 	terid 			= 2;//接收消息的终端，0-web、其它为对应终端的id
+	optional WhiteListInfo whitelists 	= 3; 
+	optional string 	domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 通知该终端在白名单的状态,MC-->ter
+// 主席白名单：终端侧判断会议在主席模式下,如果自己在白名单内,表示自己可以根据业务进行自由切换
+message IndTerInWhitelistState
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message WhiteListState
+	{
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		optional bool 	inwhitelist 	= 2;// true表示在白名单中,false表示不在白名单中;
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional WhiteListState wlstate = 3;
+	optional string 	domainname  = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs    = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//CRS录制会议状态,MC-->ter/MC-->ConfCtrlSvr
+message IndTerCRSRecState
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	 confid 	   = 1;
+	optional uint32  terid 	       = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional uint32  recstate      = 3;//录制会议状态,0-停止录制,1-开始录制
+	optional string failreason	   = 4;//recstate为0时表示停止原因,为空或者"default"为正常停止,其它为具体原因
+	optional string domainname     = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs     = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains   = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32   errorcode    = 8;//错误提示对应的错误码
+}
+//MC将该消息群发到其他所有在会终端( 包括主持人)
+message IndTerSpecialtypeTransfer
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64	confid 			= 1;
+	optional uint32 terid 			= 2;
+	optional uint32 nspclterid 		= 3;//特殊类型变化的终端id
+	optional uint32 nspcltype 		= 4;//变化后的类型,	0-普通终端类型,1-投屏终端类型
+	optional string domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//CRS直播会议状态,MC-->ter/MC-->ConfCtrlSvr
+message IndTerCRSLiveState
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	optional uint64	 confid 	 = 1;
+	optional uint32  terid 	     = 2;//接收消息的终端，0-web、非零表示会议主席的terid
+	optional uint32  livestate   = 3;//直播会议的状态,0-停止直播,1-开始直播
+	optional string  failreason	 = 4;//livestate为0时表示停止原因,为空或者"default"为正常停止,其它为具体原因
+	optional string  liveplayurl = 5;//livestate为1开始直播时,终端(主席)显示用
+	optional string domainname   = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs   = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	optional uint32   errorcode  = 9;//错误提示对应的错误码
+	optional LiveSetting livesetinfo = 10;//直播参数设置(只有livestate为1时关注)
+}
+//MC将该消息群发到其他所有在会终端,会控或者主持人更改直播设置,MC-->ter/MC-->ConfCtrlSvr
+message IndLiveSettingChanged
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	optional uint64	confid 			= 1;
+	optional uint32 terid 			= 2;
+	optional LiveSetting livesetinfo = 3;//直播参数设置
+	optional string domainname       = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// mc透传给主持人,查询监控录像文件结果,gw-->MC-->ConfCtrlSvr-->H5/gw-->MC-->ter
+message IndTerQueryMonitorRec
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message MonitorInfo 
+	{ 
+		optional string 	devicecode 		= 1;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional uint32     querystate      = 2;//查询结果,0-文件不存在,1-文件存在
+		optional TimeInfo   totaltimespan   = 3;//总时间段信息
+		repeated TimeInfo   subtimespans    = 4;//子时间段信息,querystate==0不填入
+	}
+	optional uint64	 confid 	    = 1;
+	optional uint32  terid 	        = 2;//接收消息的终端，0-web、其它为对应终端的id
+	repeated MonitorInfo queryinfos = 3;//对应监控前端的调取状态信息
+	optional string domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// mc透传,不用记录状态,监控录像回放状态,MC-->ter/MC-->ConfCtrlSvr
+message IndTerPlaybackMonitorRecState
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message MonitorInfo 
+	{ 
+		optional uint32     pbterid 	    = 1;//回放的终端id
+		optional string 	devicecode 		= 2;//监控设备20位编码,即usertype==7时填入监控前端设备编码
+		optional string 	playbackparm	= 3;//回放参数,如回放操作：播放、暂停、快进，以及快进的倍数，时间刻度(相对时间)
+	}
+	optional uint64	 confid 	         = 1;
+	optional uint32  terid 	             = 2;//接收消息的终端，0-web、其它为对应终端的id
+	repeated MonitorInfo playbackstate   = 3;//回放对应监控前端的状态信息
+	optional string domainname           = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs           = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains         = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+
+////////end///////////
+
+//////////////Cmmand/////////////////
+//发送大流(终端发送大中小),发送中流(终端发送中小流)
+message CmdStartSendVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message VideoSize
+	{
+		optional uint32 level 	= 1;// 0:不看 1:level-1 2:level-2 3:level-3.......n:level-n
+		optional uint32 count 	= 2;
+		optional uint32 vsrcid  = 3;//终端视频源编号,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+	}
+	optional uint64	confid 			= 1;
+	optional uint32 terid 			= 2;
+	repeated VideoSize sendvideosize = 3;
+	optional string domainname       = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs       = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains     = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//关闭某一路流,若是关闭全部,需要三条消息(需要从大流开始关闭)
+message CmdStopSendVideo //不再使用
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint32 videosize 		= 1;
+	optional uint64	confid 			= 2;
+	optional uint32 terid 			= 3;
+	optional string domainname      = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message CmdTerStartP2P
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string   domainname    = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message CmdTerStopP2P
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid 		= 1;
+	optional uint32 	terid 		= 2;
+	optional string   domainname    = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo svraddrs      = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains    = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//终端重新打开通道
+message CmdReOpenMediaPort
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+    optional string 	netmpip 			= 1;//告诉终端netmp的公网地址和端口
+	optional uint32		audiodatarecvport	= 2;
+	optional uint32		audioctrlrecvport	= 3;
+	optional uint32		videodatarecvport	= 4;
+	optional uint32		videoctrlrecvport	= 5;
+	optional uint32		video2datarecvport	= 6;
+	optional uint32		video2ctrlrecvport	= 7;
+	optional uint32		video3datarecvport	= 8;
+	optional uint32		video3ctrlrecvport	= 9;
+	optional uint32		desktopdatarecvport = 10;
+	optional uint32		desktopctrlrecvport	= 11;
+	optional uint32     channelid           = 12;//TODO: 去掉 channelid 
+	optional uint64		confid 			    = 13;
+	optional uint32 	terid 			    = 14;//mc 负责分配 
+	optional string     domainname          = 15;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 16;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains            = 17;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//设置分屏,MC-->ter
+message CmdTerSetMultiScreen 
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message AutoPollInfo 
+	{ 
+		optional uint64 	apid 		       = 1;//名单id
+	}
+	message ScreenPaneInfo 
+	{ 
+		optional uint32 paneindex			= 1;//分屏id,从0开始
+		optional uint32 contenttype 		= 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+		optional uint32 optype    			= 3;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+		optional uint32 polltime 			= 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+		optional uint32 terid 				= 5;//如果contenttype==3时,表示对应双流发送者terid
+		optional uint32 channelid			= 6;//如果contenttype==3时,表示对应双流发送者channelid
+		optional string tername 			= 7;//终端名称
+		optional sint32 vsrcid     			= 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
+	} 
+	message ConfPollInfo
+	{
+		optional uint32 terid   = 1;//轮询的终端id
+	}
+	optional uint64				confid			= 1;//被设置的会议
+	optional uint32 			terid 			= 2;//接收消息的终端id
+	optional uint32 			layouttype		= 3;//分屏布局类型，0-转发布局、1-混屏布局
+	optional uint32 			layoutmode		= 4;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者4+1布局、17-画中画小图像在右下PIP_RightDown
+	repeated ScreenPaneInfo		screenpanelist	= 5;//分屏信息
+	optional string             domainname      = 6;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo           svraddrs        = 7;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo         domains         = 8;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated ConfPollInfo       confpolllist    = 9;//主席模式下会议布局轮询表
+	optional uint32      		chairfollow     = 10;//0-未知、1-不跟随主持人、2-跟随主持人,混屏布局是否跟随主持人
+}
+//命令会控服务或终端(批量)增加或(批量)删除参会人,MC-->ter/MC-->ConfCtrlSvr
+message CmdUpdatePaticipants
+{ 
+	message TimeInfo 
+	{ 
+		optional string 	starttime		= 1;//时间段的开始时间,”YYYY-MM-DD HH:II:SS”格式
+		optional string 	endtime			= 2;//时间段的结束时间,”YYYY-MM-DD HH:II:SS”格式	
+	}
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message ParticipantInfo 
+	{ 
+		optional uint32 	psuid 			= 1;//终端唯一标识(由终端产生)
+		optional string 	nickname 		= 2;//终端昵称、别名,addordel为删除操作可不携带
+		optional string 	ip 				= 3;//终端ip,devicetype==4时表示流媒体url,devicetype==5时表示Trunk url,addordel为删除操作可不携带
+		optional uint32 	protocoltype 	= 4;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP,SR终端强制填入0,addordel为删除操作可不携带
+		optional uint32 	bandwidth 		= 5;//终端呼叫带宽,addordel为删除操作可不携带
+		optional uint32 	usertype 		= 6;//用户类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,7-监控前端录像,8-微信网页客户端
+		optional uint32 	devicetype 		= 7;//设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体,5-Trunk
+		optional string 	devicecode 		= 8;//监控设备编码,即usertype==4或usertype==7时填入监控前端设备编码
+		optional string 	shortname 		= 9;//短号,一般是usertype==3标准终端注册时短号呼叫用
+		optional TimeInfo   totaltimespan   = 10;//总时间段信息,usertype==7-监控前端录像
+		repeated TimeInfo   subtimespans    = 11;//子时间段信息,usertype==7-监控前端录像,如果有值说明有录像文件
+		optional uint32 	orderno 		= 12;//终端排序序号
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端，0-web、其它为对应终端的id
+	optional uint32		addordel		= 3;// 1-添加，2-删除
+	repeated ParticipantInfo upparticipants = 4;//更新的与会者
+	optional string     domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// mc透传,不用记录状态,监控录像回放,MC-->ter(gw)即H5-->ConfCtrlSvr-->MC-->ter(gw)/ter-->MC-->ter(gw)
+message CmdTerPlaybackMonitorRec
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64		confid			= 1;//被设置的会议
+	optional uint32 	terid 			= 2;//接收消息的终端,devicecode入会后分配的id
+	optional string 	devicecode 		= 3;//设备编码,即监控前端的20位编码
+	optional string 	playbackparm	= 4;//回放参数,如回放操作：播放、暂停、快进，以及快进的倍数，时间刻度(相对时间)
+	optional string     domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+////////end///////////
+//[END] Ter<->MC/////////////////////////////////////////////////////////////////////////

@@ -1,0 +1,77 @@
+//encoding: "\r\n" UTF-8 WITHOUT BOM
+
+package SRMsgs;
+//消息命名方式:
+//1.Req、Ind、Cmd、Rsp四种前缀
+//单会议单MP
+//
+//[BEGIN] Relayserver<->MC////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////MC-->Relayserver/////////////////////////////////////
+
+message IndMCHeartBeatToRelayserver
+{ 
+	optional uint32		mcid				= 1;//发送消息的mc_deviceid
+	optional uint32 	relaysvrid		    = 2;//接收消息的relayserver_deviceid
+}
+// 只有外网终端入会需要向Relayserver发送该消息
+message ReqTerJoinConfToRelayserver
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip      = 2; // 
+		optional uint32 port    = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32 svrtype      = 1;//服务类型stunserver=11
+		repeated IPPORT  ipportinfos = 2;//地址信息
+	}	
+	optional uint32		mcid				= 1;//mc_deviceid
+	optional uint32     relaysvrid          = 2;//relayserver_deviceid
+	optional uint64		confid				= 3;
+	optional uint32 	suid 				= 4;//终端唯一标识(由终端产生)
+	optional IPPORT     teraddrs  			= 5;//终端的(外网)地址信息
+	repeated AddrInfo   svraddrs   			= 6;//终端相关服务的地址信息
+}
+
+/////////////////////////////////Relayserver-->MC/////////////////////////////////////
+
+message IndRelayserverHeartBeatToMC
+{ 
+	optional uint32		mcid			= 1;//mc_deviceid
+	optional uint32		relaysvrid	    = 2;//relayserver_deviceid	
+}
+// 内网Relayserver给mc返回Relayserver自己的外网地址
+message RspTerJoinConfFromRelayserver
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip      = 2;	// 
+		optional uint32 port    = 3; // 
+	}
+	optional string 	failreason 			= 1;//失败原因
+	optional bool 		isok	 			= 2;//成功返回true，失败返回false
+	optional uint32		mcid				= 3;//mc_deviceid
+	optional uint32     relaysvrid          = 4;//relayserver_deviceid
+	optional uint64		confid 				= 5;//
+	optional uint32 	suid 				= 6;//终端唯一标识(由终端产生)
+	optional IPPORT     relaysvraddrs  		= 7;//relaysvr的(外网)地址信息
+	optional uint32     errorcode           = 8;//错误提示对应的错误码
+}
+
+//[END] Relayserver<->MC////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+
