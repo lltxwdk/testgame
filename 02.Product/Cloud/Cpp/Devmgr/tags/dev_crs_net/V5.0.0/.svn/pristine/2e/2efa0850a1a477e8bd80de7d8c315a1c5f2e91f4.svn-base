@@ -1,0 +1,4 @@
+该库是在华为云鲲鹏服务器(centos-7.7 1908 + kunpeng)上编译,使用默认gcc-4.8.5 + mysql-5.6.47编译安装的,在安装目录拷贝include、lib两个目录形成mysql-5.6.47+gcc-4.8.5-centos7.7-arrch64-sdk-all.tar.gz(参考http://192.168.90.100/svn/2-ProjectLib/06.S-plan/code/02.Product/Cloud/Cpp/Devmgr/resource/mysql目录下)
+
+注意：mysql-5.6.x版本在aarch64架构上运行压测时会出现死锁(参见华为官网：https://www.huaweicloud.com/kunpeng/software/mysql.html),
+华为官网建议升级到mysql-5.7.27及以后的版本(但需要配合升级gcc版本至gcc-7.3.0及以后,参见华为官网：https://www.huaweicloud.com/kunpeng/software/mysql0.html)

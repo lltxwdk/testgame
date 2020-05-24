@@ -30,6 +30,7 @@
 #include "list_confpollinfo.h"
 #include "list_polllist.h"
 #include "list_datadictionary.h"
+#include "list_sysparameter.h"
 #include "parser.h"
 #include "wrapper_msg.h"
 #include "cbuffer.h"
@@ -52,6 +53,9 @@
 #define HEARTBEAT_TIMEOUT 15
 
 #define TOLERANCE_TIME 20
+
+// 会议异常超时时间5分钟
+#define CONFERENCE_TIMEOUT 5*60
 
 // 每轮操作数据库100次
 #define OP_DB_NUM 100
@@ -242,6 +246,7 @@ void CDevMgr::LoadSystemDomainInfo()
 					strDomainip.clear();
 					//char cDomainip[128] = { 0 };
 					//char cDomainname[128] = { 0 };
+					replace(strline.begin(), strline.end(), '	', ' ');
 					unsigned int uicount = 0;
 					char *token = strtok((char*)strline.c_str(), sep1);
 					while (token != NULL)
@@ -744,13 +749,15 @@ void CDevMgr::SerialProtoMsgAndSend(DeviceConnect *pClient, int proto_msguid, co
 {
 	std::string strRsp = msg->SerializeAsString();
 
+	SR_int32 rspmsglen = strRsp.length();
+
 	//增加Relay头
 	SRRELAY::S_RelayMsgHeader rheader;
 	rheader.m_s = 'S';
 	rheader.m_r = 'R';
 	rheader.m_version = '0';
 	rheader.m_channelid = '0';
-	rheader.m_data_len = 8 + strRsp.length();			//mc头+probuf长度
+	rheader.m_data_len = 8 + rspmsglen;			//mc头+probuf长度
 	rheader.m_cmdtype = 202;						//mc头+probuf长度
 	char rHeader[28] = { 0 };
 	SRRELAY::packPRH(&rheader, rHeader);
@@ -758,7 +765,7 @@ void CDevMgr::SerialProtoMsgAndSend(DeviceConnect *pClient, int proto_msguid, co
 	//增加MC头
 	SRMC::S_ProtoMsgHeader header;
 	header.m_msguid = proto_msguid;
-	header.m_msglen = strRsp.length();
+	header.m_msglen = rspmsglen;
 	char mcHeader[8] = { 0 };
 	SRMC::packPMH(&header, mcHeader);
 
@@ -767,12 +774,14 @@ void CDevMgr::SerialProtoMsgAndSend(DeviceConnect *pClient, int proto_msguid, co
 	char sendbuf[1024*50] = { 0 };//防止拷贝SRMsgId_RspUpdateDeviceInfo消息(包含多个设备信息)越界,增大空间
 	memcpy(sendbuf, rHeader, 8);
 	memcpy(sendbuf + 8, mcHeader, 8);
-	memcpy(sendbuf + 8 + 8, strRsp.c_str(), strRsp.length());
+	memcpy(sendbuf + 8 + 8, strRsp.c_str(), rspmsglen);
+
+	SR_int32 sendlen = 16 + rspmsglen;
 
 	//发送出去
 	if (pClient != NULL)
 	{
-		bool sendret = pClient->SendPktToDevConnection(sendbuf, 16 + strRsp.length(), 202);
+		bool sendret = pClient->SendPktToDevConnection(sendbuf, sendlen, 202);
 
 		// 控制消息的日志级别
 		SR_uint32 uiLoglevel = SR_LOGLEVEL_DEBUG;
@@ -793,11 +802,11 @@ void CDevMgr::SerialProtoMsgAndSend(DeviceConnect *pClient, int proto_msguid, co
 
 		if (sendret)
 		{
-			sr_printf(uiLoglevel, "me(server)-> other(client) CDevMgr::SerialProtoMsgAndSend success, sockptr=%p,msg contxt:%s--\n%s\n", pClient, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
+			sr_printf(uiLoglevel, "me(server)-> other(client) CDevMgr::SerialProtoMsgAndSend success, sockptr=%p,sendlen=%d,msg contxt:%s--\n%s\n", pClient, sendlen, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
 		}
 		else
 		{
-			sr_printf(uiLoglevel, "me(server)-> other(client) CDevMgr::SerialProtoMsgAndSend failed, sockptr=%p,msg contxt:%s--\n%s\n", pClient, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
+			sr_printf(uiLoglevel, "me(server)-> other(client) CDevMgr::SerialProtoMsgAndSend failed, sockptr=%p,sendlen=%d,msg contxt:%s--\n%s\n", pClient, sendlen, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
 		}
 	}
 }
@@ -807,6 +816,7 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 	if (pSvrConn)
 	{
 		std::string strRsp = msg->SerializeAsString();
+		SR_int32 rspmsglen = strRsp.length();
 
 		//增加Relay头
 		SRRELAY::S_RelayMsgHeader rheader;
@@ -814,7 +824,7 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 		rheader.m_r = 'R';
 		rheader.m_version = '0';
 		rheader.m_channelid = '0';
-		rheader.m_data_len = 8 + strRsp.length();
+		rheader.m_data_len = 8 + rspmsglen;
 		rheader.m_cmdtype = SRMSG_CMDTYPE_DevMgr_MC;
 		char srHeader[28] = { 0 };
 		SRRELAY::packPRH(&rheader, srHeader);
@@ -822,7 +832,7 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 		//增加proto头
 		SRMC::S_ProtoMsgHeader header;
 		header.m_msguid = proto_msguid;
-		header.m_msglen = strRsp.length();
+		header.m_msglen = rspmsglen;
 		char protoHeader[8] = { 0 };
 		SRMC::packPMH(&header, protoHeader);
 
@@ -831,7 +841,9 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 		char sendbuf[1024 * 50] = { 0 };
 		memcpy(sendbuf, srHeader, 8);
 		memcpy(sendbuf + 8, protoHeader, 8);
-		memcpy(sendbuf + 8 + 8, strRsp.c_str(), strRsp.length());
+		memcpy(sendbuf + 8 + 8, strRsp.c_str(), rspmsglen);
+		
+		SR_int32 sendlen = 16 + rspmsglen;
 
 		// me(client)->devmgr(server)
 		uint16_t cmd_type = SRMSG_CMDTYPE_DevMgr_MC;
@@ -839,7 +851,7 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 			cmd_type = SRMSG_CMDTYPE_DevMgr_MC;
 
 		//发送出去
-		bool sendret = pSvrConn->SendPktToDevmgr(sendbuf, 16 + strRsp.length(), cmd_type);
+		bool sendret = pSvrConn->SendPktToDevmgr(sendbuf, sendlen, cmd_type);
 
 		// 控制消息的日志级别
 		SR_uint32 uiLoglevel = SR_LOGLEVEL_DEBUG;
@@ -858,11 +870,11 @@ void CDevMgr::SerialAndSendDevmgr(AcitiveConnect *pSvrConn, int proto_msguid, co
 
 		if (sendret)
 		{
-			sr_printf(uiLoglevel, "me(client)->devmgr(server) CDevMgr::SerialAndSendDevmgr success, sockptr=%p,msg contxt:%s--\n%s\n", pSvrConn, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
+			sr_printf(uiLoglevel, "me(client)->devmgr(server) CDevMgr::SerialAndSendDevmgr success, sockptr=%p,sendlen=%d,msg contxt:%s--\n%s\n", pSvrConn, sendlen, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
 		}
 		else
 		{
-			sr_printf(uiLoglevel, "me(client)->devmgr(server) CDevMgr::SerialAndSendDevmgr failed, sockptr=%p,msg contxt:%s--\n%s\n", pSvrConn, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
+			sr_printf(uiLoglevel, "me(client)->devmgr(server) CDevMgr::SerialAndSendDevmgr failed, sockptr=%p,sendlen=%d,msg contxt:%s--\n%s\n", pSvrConn, sendlen, msg->GetTypeName().c_str(), msg->Utf8DebugString().c_str());
 		}
 
 	}
@@ -994,7 +1006,11 @@ void CDevMgr::Handle_CheckDeviceHeartbeat(void *pArg)
 			sr_printf(SR_LOGLEVEL_ERROR, "==not recv (device_id = %d, uiDeviceType = %d)  Heartbeat in 15 s ===update status = 0--->>\n", deviceid, uiDeviceType);
 
 			UpdateDeviceInfoInDB(deviceid, uiDeviceType, pMainThread, szTime, timeNow);
-
+			
+			if (uiDeviceType == DEVICE_SERVER::DEVICE_DEV)
+			{
+				DeleteCompanyInfoRedis(deviceid);
+			}
 
 			if (m_bCloseTimeoutSocket)
 			{
@@ -1026,6 +1042,7 @@ void CDevMgr::Handle_CheckDeviceHeartbeat(void *pArg)
 		else
 		{
 			iter++;
+			
 		}
 
 		
@@ -1356,6 +1373,1479 @@ void CDevMgr::Handle_CmdHJGW_OPAVConfig_msg(void *pArg)
 	pParam = NULL;
 
 }
+void CDevMgr::GetLinceneStartTime(map<std::string, sLinceneInfo>& linceneInfo, const char* src)
+{
+	std::string strtmp = src;
+	int index;
+	std::map<std::string, std::string> cmd_key_val;
+	cmd_key_val.clear();
+	char *sep1 = { "&" };
+	char *sep2 = { "=" };
+	int seplen1 = strlen(sep1);
+	int seplen2 = strlen(sep2);
+
+	int lastindx = 0;
+	index = strtmp.find(sep1);
+	while (index != strtmp.npos)
+	{
+
+		std::string srcsubstr = strtmp.substr(lastindx, index - lastindx);
+
+
+		int subindex = srcsubstr.find(sep2);
+		if (subindex > 0)
+		{
+			cmd_key_val.insert(std::pair<std::string, std::string>(srcsubstr.substr(0, subindex), srcsubstr.substr(subindex + seplen2, srcsubstr.length())));
+		}
+
+		lastindx = index;
+
+		index = strtmp.find(sep1, index + 1);
+
+		if (index > 0)
+		{
+			lastindx += seplen1;
+
+		}
+		else
+		{
+			std::string lastsubstr = strtmp.substr(lastindx + seplen1, strtmp.length());
+
+			int lastsubindex = lastsubstr.find(sep2);
+			if (lastsubindex > 0)
+			{
+				cmd_key_val.insert(std::pair<std::string, std::string>(lastsubstr.substr(0, lastsubindex), lastsubstr.substr(lastsubindex + seplen2, lastsubstr.length())));
+			}
+		}
+	}
+
+	for (std::map<std::string, std::string>::iterator ms_itor = cmd_key_val.begin(); ms_itor != cmd_key_val.end(); ms_itor++)
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "cmd_key_val<key:%s, value:%s>\n", ms_itor->first.c_str(), ms_itor->second.c_str());
+
+		if (strncmp("srstarttime", ms_itor->first.c_str(), 11) == 0){
+			linceneInfo["sr"].starttime = ms_itor->second;
+			//linceneInfo->srstarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "srstarttime:%s>>>>>>>>>>>\n", linceneInfo["sr"].starttime.c_str());
+		}
+		else if (strncmp("stdstarttime", ms_itor->first.c_str(), 12) == 0)
+		{
+			linceneInfo["std"].starttime = ms_itor->second;
+			//linceneInfo->stdstarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "stdstarttime:%s>>>>>>>>>>>\n", linceneInfo["std"].starttime.c_str());
+		}
+		else if (strncmp("monitorstarttime", ms_itor->first.c_str(), 16) == 0)
+		{
+			linceneInfo["monitor"].starttime = ms_itor->second;
+			//linceneInfo->monitorstarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "monitorstarttime:%s>>>>>>>>>>>\n", linceneInfo["monitor"].starttime.c_str());
+		}
+		else if (strncmp("voicestarttime", ms_itor->first.c_str(), 12) == 0)
+		{
+			linceneInfo["voice"].starttime = ms_itor->second;
+			//linceneInfo->voicestarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "voicestarttime:%s>>>>>>>>>>>\n", linceneInfo["voice"].starttime.c_str());
+		}
+		else if (strncmp("recstarttime", ms_itor->first.c_str(), 12) == 0)
+		{
+			linceneInfo["rec"].starttime = ms_itor->second;
+			//linceneInfo->recstarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "recstarttime:%s>>>>>>>>>>>\n", linceneInfo["rec"].starttime.c_str());
+		}
+		else if (strncmp("livestarttime", ms_itor->first.c_str(), 13) == 0)
+		{
+			linceneInfo["live"].starttime = ms_itor->second;
+			//linceneInfo->livestarttime = ms_itor->second;
+			sr_printf(SR_LOGLEVEL_DEBUG, "livestarttime:%s>>>>>>>>>>>\n", linceneInfo["live"].starttime.c_str());
+		}
+	}
+
+
+}
+
+void CDevMgr::Handle_UpdateHttpLinceneInfo_msg(void *pArg)
+{
+	// 获取当前时间串
+	time_t timeNow;
+	struct tm *ptmNow;
+	char szTime[30];
+	timeNow = time(NULL);
+	ptmNow = localtime(&timeNow);
+	sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+#ifdef WIN32
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::Handle_UpdateHttpLinceneInfo_msg=======timeNow---> %I64d, %s\n", timeNow, szTime);
+#elif defined LINUX
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::Handle_UpdateHttpLinceneInfo_msg=======timeNow---> %lld, %s\n", timeNow, szTime);
+#endif
+
+	if (pArg == NULL )
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::Handle_UpdateHttpLinceneInfo_msg=======pArg   is null , %s\n");
+		assert(0);
+		return;
+	}
+
+#ifdef LINUX
+	float time_use = 0;
+	struct timeval start;
+	struct timeval end;
+	gettimeofday(&start, NULL); // μs level
+#endif
+
+	unsigned int compId = 0; // 
+	int srcnt = 0;
+	int stdcnt = 0;
+	int monitorcnt = 0;
+	int voicecnt = 0;
+	int reccnt = 0;
+	int livecnt = 0;
+	int confcnt = 0;
+	std::string strsrexptime;
+	strsrexptime.clear();
+	std::string strstdexptime;
+	strstdexptime.clear();
+	std::string strmonitorexptime;
+	strmonitorexptime.clear();
+	std::string strvoiceexptime;
+	strvoiceexptime.clear();
+	std::string strrecexptime;
+	strrecexptime.clear();
+	std::string strliveexptime;
+	strliveexptime.clear();
+	std::string linceneStartTimeAll;
+	linceneStartTimeAll.clear();
+
+	typedef CBufferT<unsigned int, int, int, int, int, int, int, int> CParam;
+	CParam* pParam = (CParam*)pArg;
+	compId = pParam->m_Arg1;
+	confcnt = pParam->m_Arg2;
+	srcnt = pParam->m_Arg3;
+	stdcnt = pParam->m_Arg4;
+	livecnt = pParam->m_Arg5;
+	reccnt = pParam->m_Arg6;
+	monitorcnt = pParam->m_Arg7;
+	voicecnt = pParam->m_Arg8;
+	
+	if (pParam->m_nLen1 > 0)
+	{
+		strsrexptime = pParam->m_pData1;
+	}
+	if (pParam->m_nLen2 > 0)
+	{
+		strstdexptime = pParam->m_pData2;
+	}
+	
+	if (pParam->m_nLen3 > 0)
+	{
+		strliveexptime = pParam->m_pData3;
+	}
+	
+	if (pParam->m_nLen4 > 0)
+	{
+		strrecexptime = pParam->m_pData4;
+	}
+	
+	if (pParam->m_nLen5 > 0)
+	{
+		strmonitorexptime = pParam->m_pData5;
+	}
+	if (pParam->m_nLen6 > 0)
+	{
+		strvoiceexptime = pParam->m_pData6;
+	}
+	if (pParam->m_nLen7 > 0)
+	{
+		linceneStartTimeAll = pParam->m_pData7;
+	}
+
+
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::Handle_UpdateHttpLinceneInfo_msg=======compId=%d,confcnt=%d,srcnt=%d,stdcnt=%d,livecnt=%d,reccnt=%d,monitorcnt=%d,voicecnt=%d,\n", compId, confcnt, srcnt, stdcnt, livecnt, reccnt, monitorcnt, voicecnt);
+
+	if (compId == 0)
+	{
+		delete pParam;
+		pParam = NULL;
+		return;
+	}
+
+	//赋值后发送
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::Handle_UpdateHttpLinceneInfo_msg=======strsrexptime=%s,strstdexptime=%s,strliveexptime=%s,strmonitorexptime=%s,strvoiceexptime=%s\n", strsrexptime.c_str(), strstdexptime.c_str(), strliveexptime.c_str(), strmonitorexptime.c_str(), strvoiceexptime.c_str());
+
+
+	std::map<unsigned int, map<std::string, sLinceneInfo> > mapCompLinceneInfo;
+	map<std::string, sLinceneInfo> linceneInfo;
+	//赋值
+	for (std::map<int, std::string>::iterator iter_table = m_MapCompCapTables.begin(); iter_table != m_MapCompCapTables.end();iter_table++)
+	{
+		sLinceneInfo Info;
+
+		if (iter_table->first == e_CompanyLincene_Conf)
+		{
+			Info.amount = confcnt;
+		}
+		else if (iter_table->first == e_CompanyLincene_Sr)
+		{
+			Info.amount = srcnt;
+			Info.expiretime = strsrexptime;
+		}
+		else if (iter_table->first == e_CompanyLincene_Std)
+		{
+			Info.amount = stdcnt;
+			Info.expiretime = strstdexptime;
+		}
+		else if (iter_table->first == e_CompanyLincene_Monitor)
+		{
+			Info.amount = monitorcnt;
+			Info.expiretime = strmonitorexptime;
+		}
+		else if (iter_table->first == e_CompanyLincene_Voice)
+		{
+			Info.amount = voicecnt;
+			Info.expiretime = strvoiceexptime;
+		}
+		else if (iter_table->first == e_CompanyLincene_Live)
+		{
+			Info.amount = livecnt;
+			Info.expiretime = strliveexptime;
+		}
+		else if (iter_table->first == e_CompanyLincene_Record)
+		{
+			Info.amount = reccnt;
+			Info.expiretime = strrecexptime;
+		}
+
+		linceneInfo.insert(make_pair(iter_table->second, Info));
+	}
+	
+	GetLinceneStartTime(linceneInfo, linceneStartTimeAll.c_str());
+
+	mapCompLinceneInfo.insert(make_pair(compId, linceneInfo));
+
+	UpdateCompLinceneInfo(mapCompLinceneInfo);
+
+	CompLinceneUpdateToMC(mapCompLinceneInfo);
+
+	//将更新的企业授权信息发送的devmgr
+	CompLinceneUpdateToAllDevmgr(mapCompLinceneInfo,1);
+
+#ifdef LINUX
+	gettimeofday(&end, NULL); // μs level
+	time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "********CDevMgr::Handle_UpdateHttpLinceneInfo_msg*****time_use** is: %lf us\n", time_use);
+
+#endif
+
+	delete pParam;
+	pParam = NULL;
+}
+void CDevMgr::CheckConfTimeoutData()
+{
+	if (!m_pMainThread)
+		return;
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pMainThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_CheckConfTimeoutData));
+	return;
+}
+
+void CDevMgr::Handle_CheckConfTimeoutData(void *pArg)
+{
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(4);
+
+	// 保存超时的会议
+	std::map<SR_uint64, SR_uint64> TimeoutConfset;
+	TimeoutConfset.clear();
+	RedisReplyArray vrra_confid_ktime;
+	vrra_confid_ktime.clear();
+	bool bGetAllConfid_ok = false;
+	unsigned int nConfidAndKtimeNum = 0;
+	char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+	sprintf(confidktimeset_key, "%s", "confidktimeset");
+	bGetAllConfid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confidktimeset_key, vrra_confid_ktime);
+	nConfidAndKtimeNum = vrra_confid_ktime.size();
+
+	//sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData ***hashHGetAll tab:%s ,nConfidAndKtimeNum=%d*****\n", confidktimeset_key, nConfidAndKtimeNum);
+
+	if (bGetAllConfid_ok
+		&& (nConfidAndKtimeNum > 0)
+		&& (nConfidAndKtimeNum % 2 == 0))
+	{
+		time_t timeNow;
+		struct tm *ptmNow;
+		char szTime[30];
+		timeNow = time(NULL);
+		ptmNow = localtime(&timeNow);
+		sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+		// 按照会议为单位循环处理
+		for (int i = 0; i < nConfidAndKtimeNum;)
+		{
+			char conf_id_value[128] = { 0 };
+			char confktime_s[128] = { 0 };
+			sprintf(conf_id_value, "%s", vrra_confid_ktime[i].str.c_str());
+			sprintf(confktime_s, "%s", vrra_confid_ktime[i + 1].str.c_str());
+
+			SR_uint64 ullconfid = 0;
+			time_t confktime = 0;
+#ifdef WIN32
+			sscanf(conf_id_value, "%I64d", &ullconfid);
+			sscanf(confktime_s, "%I64d", &confktime);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData timeNow=%I64d<%s> ***tab:%s ,<conf_id_value=%s, confktime_s=%s>*****\n", timeNow, szTime, confidktimeset_key, conf_id_value, confktime_s);
+#elif defined LINUX
+			sscanf(conf_id_value, "%lld", &ullconfid);
+			sscanf(confktime_s, "%lld", &confktime);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData timeNow==%lld<%s> ***tab:%s ,<conf_id_value=%s, confktime_s=%s>*****\n", timeNow, szTime, confidktimeset_key, conf_id_value, confktime_s);
+#endif
+
+			if (ullconfid != 0
+				&& confktime != 0)
+			{
+				time_t tmpconfktime = confktime;
+
+				struct tm *ptmConfktime;
+				char szConfktime[30];
+				ptmConfktime = localtime(&tmpconfktime);
+				sprintf(szConfktime, "%d.%02d.%02d %02d:%02d:%02d", ptmConfktime->tm_year + 1900, ptmConfktime->tm_mon + 1, ptmConfktime->tm_mday, ptmConfktime->tm_hour, ptmConfktime->tm_min, ptmConfktime->tm_sec);
+
+				//sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***confktime=%lld<%s>*****\n", timeNow, szTime, confktime, szConfktime);
+
+				RedisReplyArray vrra_confrptid_ktime;
+				vrra_confrptid_ktime.clear();
+				bool bGetAllConfrptid_ok = false;
+				unsigned int nConfrptidAndKtimeNum = 0;
+				char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+				sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+
+				bGetAllConfrptid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confrptidktimeset_confid_key, vrra_confrptid_ktime);
+				nConfrptidAndKtimeNum = vrra_confrptid_ktime.size();
+
+				if (bGetAllConfrptid_ok
+					&& (nConfrptidAndKtimeNum > 0)
+					&& (nConfrptidAndKtimeNum % 2 == 0))
+				{
+					// 循环每次会议
+					for (int j = 0; j < nConfrptidAndKtimeNum;)
+					{
+						char confrptid_value[128] = { 0 };
+						char confrptktime_s[128] = { 0 };
+						sprintf(confrptid_value, "%s", vrra_confrptid_ktime[j].str.c_str());
+						sprintf(confrptktime_s, "%s", vrra_confrptid_ktime[j + 1].str.c_str());
+
+
+						SR_uint64 ullconfrptid = 0;
+						time_t confrptktime = 0;
+#ifdef WIN32
+						sscanf(confrptid_value, "%I64d", &ullconfrptid);
+						sscanf(confrptktime_s, "%I64d", &confrptktime);
+#elif defined LINUX
+						sscanf(confrptid_value, "%lld", &ullconfrptid);
+						sscanf(confrptktime_s, "%lld", &confrptktime);
+#endif
+						if (ullconfrptid != 0
+							&& confrptktime != 0)
+						{
+							time_t tmpconfrptktime = confrptktime;
+
+							struct tm *ptmConfrptktime;
+							char szConfrptktime[30];
+							ptmConfrptktime = localtime(&tmpconfrptktime);
+							sprintf(szConfrptktime, "%d.%02d.%02d %02d:%02d:%02d", ptmConfrptktime->tm_year + 1900, ptmConfrptktime->tm_mon + 1, ptmConfrptktime->tm_mday, ptmConfrptktime->tm_hour, ptmConfrptktime->tm_min, ptmConfrptktime->tm_sec);
+
+							//sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***confrptktime=%lld<%s>*****\n", timeNow, szTime, confktime, szConfrptktime);
+
+							// 超时的rpt
+							//if (timeNow > confrptktime + CONFERENCE_TIMEOUT)
+							if (timeNow > confrptktime + m_nConfdtlinfoTimeout)
+							{
+								// 1、清除该次会议下的直播信息(不进行直播计费超时判断)
+								RedisReplyArray vrra_liveinfoid_ktime;
+								vrra_liveinfoid_ktime.clear();
+								bool bGetAllLiveinfoid_ok = false;
+								unsigned int nLiveinfoidAndKtimeNum = 0;
+								char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+								sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllLiveinfoid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confliveinfoidktimeset_confid_confrptid_key, vrra_liveinfoid_ktime);
+								nLiveinfoidAndKtimeNum = vrra_liveinfoid_ktime.size();
+
+								if (bGetAllLiveinfoid_ok
+									&& (nLiveinfoidAndKtimeNum > 0)
+									&& (nLiveinfoidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nLiveinfoidAndKtimeNum;)
+									{
+										char liveinfoid_value[128] = { 0 };
+										char liveinfoktime_s[128] = { 0 };
+										sprintf(liveinfoid_value, "%s", vrra_liveinfoid_ktime[k].str.c_str());
+										sprintf(liveinfoktime_s, "%s", vrra_liveinfoid_ktime[k + 1].str.c_str());
+
+										SR_uint64 ullliveinfoid = 0;
+										time_t liveinfoktime = 0;
+#ifdef WIN32
+										sscanf(liveinfoid_value, "%I64d", &ullliveinfoid);
+										sscanf(liveinfoktime_s, "%I64d", &liveinfoktime);
+#elif defined LINUX
+										sscanf(liveinfoid_value, "%lld", &ullliveinfoid);
+										sscanf(liveinfoktime_s, "%lld", &liveinfoktime);
+#endif
+
+										if (ullliveinfoid != 0
+											&& liveinfoktime != 0)
+										{
+											time_t tmpliveinfoktime = liveinfoktime;
+
+											struct tm *ptmLiveinfoktime;
+											char szLiveinfoktime[30];
+											ptmLiveinfoktime = localtime(&tmpliveinfoktime);
+											sprintf(szLiveinfoktime, "%d.%02d.%02d %02d:%02d:%02d", ptmLiveinfoktime->tm_year + 1900, ptmLiveinfoktime->tm_mon + 1, ptmLiveinfoktime->tm_mday, ptmLiveinfoktime->tm_hour, ptmLiveinfoktime->tm_min, ptmLiveinfoktime->tm_sec);
+											
+											//sr_printf(SR_LOGLEVEL_DEBUG, "**1** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***liveinfoktime=%lld<%s>*****\n", timeNow, szTime, liveinfoktime, szLiveinfoktime);
+
+											char confliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+											char insliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+											sprintf(confliveinfo_confid_confrptid_liveinfoid_key, "confliveinfo_%s_%s_%s", conf_id_value, confrptid_value, liveinfoid_value);
+											sprintf(insliveinfo_confid_confrptid_liveinfoid_key, "insliveinfo_%s_%s_%s", conf_id_value, confrptid_value, liveinfoid_value);
+
+											bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insliveinfo_confid_confrptid_liveinfoid_key);
+											if (bExistIns)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insliveinfo_confid_confrptid_liveinfoid_key);
+												PushMsgToWriteDBQueue(insliveinfo_confid_confrptid_liveinfoid_key);
+											}
+											else
+											{
+												bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(confliveinfo_confid_confrptid_liveinfoid_key);
+												if (bExist)
+												{
+													SRMsgs::IndCRSStopLive indstoplive;
+													indstoplive.set_confid(ullconfid);
+													indstoplive.set_confreportid(ullconfrptid);
+													indstoplive.set_liveinfoid(ullliveinfoid);
+													// 其它参数不必关注
+													UpdateConfLiveInfo(&indstoplive, szLiveinfoktime, liveinfoktime);
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 2、清除该次会议下的录制信息
+								RedisReplyArray vrra_recordid_ktime;
+								vrra_recordid_ktime.clear();
+								bool bGetAllRecordid_ok = false;
+								unsigned int nRecordidAndKtimeNum = 0;
+								char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+								sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllRecordid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confrecordidktimeset_confid_confrptid_key, vrra_recordid_ktime);
+								nRecordidAndKtimeNum = vrra_recordid_ktime.size();
+
+								if (bGetAllRecordid_ok
+									&& (nRecordidAndKtimeNum > 0)
+									&& (nRecordidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nRecordidAndKtimeNum;)
+									{
+										char recordid_value[128] = { 0 };
+										char recordktime_s[128] = { 0 };
+										sprintf(recordid_value, "%s", vrra_recordid_ktime[k].str.c_str());
+										sprintf(recordktime_s, "%s", vrra_recordid_ktime[k + 1].str.c_str());
+
+										SR_uint64 ullrecordid = 0;
+										time_t recordktime = 0;
+#ifdef WIN32
+										sscanf(recordid_value, "%I64d", &ullrecordid);
+										sscanf(recordktime_s, "%I64d", &recordktime);
+#elif defined LINUX
+										sscanf(recordid_value, "%lld", &ullrecordid);
+										sscanf(recordktime_s, "%lld", &recordktime);
+#endif
+										
+										if (ullrecordid != 0
+											&& recordktime != 0)
+										{
+											time_t tmprecordktime = recordktime;
+
+											struct tm *ptmRecordktime;
+											char szRecordktime[30];
+											ptmRecordktime = localtime(&tmprecordktime);
+											sprintf(szRecordktime, "%d.%02d.%02d %02d:%02d:%02d", ptmRecordktime->tm_year + 1900, ptmRecordktime->tm_mon + 1, ptmRecordktime->tm_mday, ptmRecordktime->tm_hour, ptmRecordktime->tm_min, ptmRecordktime->tm_sec);
+
+											//sr_printf(SR_LOGLEVEL_DEBUG, "**1** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***recordktime=%lld<%s>*****\n", timeNow, szTime, recordktime, szRecordktime);
+
+											// 先确认该次录制的表在不在redis中
+											char confrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+											char insrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+											char uprecordinfo_confid_confrptid_recordid_key[256] = { 0 };											
+											sprintf(confrecordinfo_confid_confrptid_recordid_key, "confrecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											sprintf(insrecordinfo_confid_confrptid_recordid_key, "insrecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											sprintf(uprecordinfo_confid_confrptid_recordid_key, "uprecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											
+											bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insrecordinfo_confid_confrptid_recordid_key);
+											if (bExistIns)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordinfo_confid_confrptid_recordid_key);
+												PushMsgToWriteDBQueue(insrecordinfo_confid_confrptid_recordid_key);
+											}
+
+											// 进一步查录制文件记录是否还有未写入mysql的
+											char confrecfileidktimeset_confid_confrptid_recordid_key[256] = { 0 };// 存放<recfileid, keeplivetime>
+											sprintf(confrecfileidktimeset_confid_confrptid_recordid_key, "confrecfileidktimeset_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											RedisReplyArray vrra_recfileid_ktime;
+											vrra_recfileid_ktime.clear();
+											bool bGetAllRecfileid_ok = false;
+											unsigned int nRecfileidAndKtimeNum = 0;
+											bGetAllRecfileid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confrecfileidktimeset_confid_confrptid_recordid_key, vrra_recfileid_ktime);
+											nRecfileidAndKtimeNum = vrra_recfileid_ktime.size();
+
+											if (bGetAllRecfileid_ok
+												&& (nRecfileidAndKtimeNum > 0)
+												&& (nRecfileidAndKtimeNum % 2 == 0))
+											{
+												for (int kk = 0; kk < nRecfileidAndKtimeNum;)
+												{
+													char recfileid_value[128] = { 0 };
+													//char recfileidktime_s[128] = { 0 };
+													sprintf(recfileid_value, "%s", vrra_recfileid_ktime[kk].str.c_str());
+													//sprintf(recfileidktime_s, "%s", vrra_recfileid_ktime[kk + 1].str.c_str());
+
+													SR_uint64 ullrecfileid = 0;
+#ifdef WIN32
+													sscanf(recfileid_value, "%I64d", &ullrecfileid);
+#elif defined LINUX
+													sscanf(recfileid_value, "%lld", &ullrecfileid);
+#endif
+													if (ullrecfileid != 0)
+													{
+														char insrecordfileinfo_confid_confrptid_recordid_recfileid_key[256] = { 0 };
+														sprintf(insrecordfileinfo_confid_confrptid_recordid_recfileid_key, "insrecordfileinfo_%s_%s_%s_%s", conf_id_value, confrptid_value, recordid_value, recfileid_value);
+														bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+														if (bExistIns)
+														{
+															//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+															PushMsgToWriteDBQueue(insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+														}
+													}
+													kk += 2;
+												}
+											}
+																						
+											bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(uprecordinfo_confid_confrptid_recordid_key);
+											if (bExistUP)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", uprecordinfo_confid_confrptid_recordid_key);
+												PushMsgToWriteDBQueue(uprecordinfo_confid_confrptid_recordid_key);
+											}
+											else
+											{
+												char cConfnameFieldName[256] = { 0 };
+												char confname_value[256] = { 0 };
+												sprintf(cConfnameFieldName, "%s", "confname");
+												char* ptrRet = NULL;
+												ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(confrecordinfo_confid_confrptid_recordid_key, cConfnameFieldName);
+												if (ptrRet != NULL)
+												{
+													sprintf(confname_value, "%s", ptrRet);
+													delete ptrRet; // 不删除会导致内存泄漏
+
+													UpdateConfRecord(ullconfid, ullconfrptid, ullrecordid, szRecordktime, recordktime, confname_value);
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 3、清除该次会议下的用户信息
+								RedisReplyArray vrra_userid_ktime;
+								vrra_userid_ktime.clear();
+								bool bGetAllUserid_ok = false;
+								unsigned int nUseridAndKtimeNum = 0;
+								char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+								sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllUserid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confuseridktimeset_confid_confrptid_key, vrra_userid_ktime);
+								nUseridAndKtimeNum = vrra_userid_ktime.size();
+
+								if (bGetAllUserid_ok
+									&& (nUseridAndKtimeNum > 0)
+									&& (nUseridAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nUseridAndKtimeNum;)
+									{
+										char userid_value[128] = { 0 };
+										//char useridktime_s[128] = { 0 };
+										sprintf(userid_value, "%s", vrra_userid_ktime[k].str.c_str());
+										//sprintf(useridktime_s, "%s", vrra_userid_ktime[k + 1].str.c_str());
+
+										SR_uint32 uiuserid = 0;
+										sscanf(userid_value, "%d", &uiuserid);
+
+										if (uiuserid != 0)
+										{
+											RedisReplyArray vrra_userdtlid_ktime;
+											vrra_userdtlid_ktime.clear();
+											bool bGetAllUserdtlid_ok = false;
+											unsigned int nUserdtlidAndKtimeNum = 0;
+											char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+											sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, userid_value);
+											bGetAllUserdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confuserdtlidktimeset_confid_confrptid_userid_key, vrra_userdtlid_ktime);
+											nUserdtlidAndKtimeNum = vrra_userdtlid_ktime.size();
+
+											if (bGetAllUserdtlid_ok
+												&& (nUserdtlidAndKtimeNum > 0)
+												&& (nUserdtlidAndKtimeNum % 2 == 0))
+											{
+												for (int kk = 0; kk < nUserdtlidAndKtimeNum;)
+												{
+													char userdtlid_value[128] = { 0 };
+													char userdtlidktime_s[128] = { 0 };
+													sprintf(userdtlid_value, "%s", vrra_userdtlid_ktime[kk].str.c_str());
+													sprintf(userdtlidktime_s, "%s", vrra_userdtlid_ktime[kk + 1].str.c_str());
+
+													SR_uint64 ulluserdtlid = 0;
+													time_t userdtlidktime = 0;
+#ifdef WIN32
+													sscanf(userdtlid_value, "%I64d", &ulluserdtlid);
+													sscanf(userdtlidktime_s, "%I64d", &userdtlidktime);
+#elif defined LINUX
+													sscanf(userdtlid_value, "%lld", &ulluserdtlid);
+													sscanf(userdtlidktime_s, "%lld", &userdtlidktime);
+#endif
+													if (ulluserdtlid != 0
+														&& userdtlidktime != 0)
+													{
+														time_t tmpuserdtlidktime = userdtlidktime;
+
+														struct tm *ptmUserdtlidktime;
+														char szUserdtlidktime[30];
+														ptmUserdtlidktime = localtime(&tmpuserdtlidktime);
+														sprintf(szUserdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmUserdtlidktime->tm_year + 1900, ptmUserdtlidktime->tm_mon + 1, ptmUserdtlidktime->tm_mday, ptmUserdtlidktime->tm_hour, ptmUserdtlidktime->tm_min, ptmUserdtlidktime->tm_sec);
+
+														//sr_printf(SR_LOGLEVEL_DEBUG, "**1** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***userdtlidktime=%lld<%s>*****\n", timeNow, szTime, userdtlidktime, szUserdtlidktime);
+
+														char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+														char upuserconfdtl_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+														sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+														sprintf(upuserconfdtl_confid_confrptid_userid_userdtlid_key, "upuserconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+
+														// 先确认该次录制的表在不在redis中														
+														bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+														if (bExistUP)
+														{
+															//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+															PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+														}
+														else
+														{
+															bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(userconfdetail_confid_confrptid_userid_userdtlid_key);
+															if (bExist)
+															{
+																DelUserConfDetail(uiuserid, ullconfid, ullconfrptid, ulluserdtlid, szUserdtlidktime, userdtlidktime);
+															}
+														}
+													}
+
+													kk += 2;
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 4、清除该会议下的设备信息
+								RedisReplyArray vrra_deviceid_ktime;
+								vrra_deviceid_ktime.clear();
+								bool bGetAllDeviceidok = false;
+								unsigned int nDeviceidAndKtimeNum = 0;
+								char confdeviceidktimeset_confid_confrptid_key[256] = { 0 };// 存放<deviceid, keeplivetime>								
+								sprintf(confdeviceidktimeset_confid_confrptid_key, "confdeviceidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllDeviceidok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confdeviceidktimeset_confid_confrptid_key, vrra_deviceid_ktime);
+								nDeviceidAndKtimeNum = vrra_deviceid_ktime.size();
+
+								if (bGetAllDeviceidok
+									&& (nDeviceidAndKtimeNum > 0)
+									&& (nDeviceidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nDeviceidAndKtimeNum;)
+									{
+										char deviceid_value[128] = { 0 };
+										//char deviceidktime_s[128] = { 0 };
+										sprintf(deviceid_value, "%s", vrra_deviceid_ktime[k].str.c_str());
+										//sprintf(deviceidktime_s, "%s", vrra_deviceid_ktime[k + 1].str.c_str());
+
+										SR_uint32 uideviceid = 0;
+										sscanf(deviceid_value, "%d", &uideviceid);
+
+										if (uideviceid != 0)
+										{
+											RedisReplyArray vrra_devdtlid_ktime;
+											vrra_devdtlid_ktime.clear();
+											bool bGetAllDevdtlid_ok = false;
+											unsigned int nDevdtlidAndKtimeNum = 0;
+											char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+											sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value);
+											bGetAllDevdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confdevdtlidktimeset_confid_confrptid_deviceid_key, vrra_devdtlid_ktime);
+											nDevdtlidAndKtimeNum = vrra_devdtlid_ktime.size();
+
+											if (bGetAllDevdtlid_ok
+												&& (nDevdtlidAndKtimeNum > 0)
+												&& (nDevdtlidAndKtimeNum % 2 == 0))
+											{
+												for (int kk = 0; kk < nDevdtlidAndKtimeNum;)
+												{
+													char devdtlid_value[128] = { 0 };
+													char devdtlidktime_s[128] = { 0 };
+													sprintf(devdtlid_value, "%s", vrra_devdtlid_ktime[kk].str.c_str());
+													sprintf(devdtlidktime_s, "%s", vrra_devdtlid_ktime[kk + 1].str.c_str());
+
+													SR_uint64 ulldevdtlid = 0;
+													time_t devdtlidktime = 0;
+#ifdef WIN32
+													sscanf(devdtlid_value, "%I64d", &ulldevdtlid);
+													sscanf(devdtlidktime_s, "%I64d", &devdtlidktime);
+#elif defined LINUX
+													sscanf(devdtlid_value, "%lld", &ulldevdtlid);
+													sscanf(devdtlidktime_s, "%lld", &devdtlidktime);
+#endif
+													if (ulldevdtlid != 0
+														&& devdtlidktime != 0)
+													{
+														time_t tmpdevdtlidktime = devdtlidktime;
+
+														struct tm *ptmDevdtlidktime;
+														char szDevdtlidktime[30];
+														ptmDevdtlidktime = localtime(&tmpdevdtlidktime);
+														sprintf(szDevdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmDevdtlidktime->tm_year + 1900, ptmDevdtlidktime->tm_mon + 1, ptmDevdtlidktime->tm_mday, ptmDevdtlidktime->tm_hour, ptmDevdtlidktime->tm_min, ptmDevdtlidktime->tm_sec);
+
+														//sr_printf(SR_LOGLEVEL_DEBUG, "**1** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***devdtlidktime=%lld<%s>*****\n", timeNow, szTime, devdtlidktime, szDevdtlidktime);
+
+														char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+														char updevconfdtl_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+														sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+														sprintf(updevconfdtl_confid_confrptid_deviceid_devdtlid_key, "updevconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+														
+														// 先确认该次录制的表在不在redis中
+														bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+														if (bExistUP)
+														{
+															//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+															PushMsgToWriteDBQueue(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+														}
+														else
+														{
+															bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+															if (bExist)
+															{
+																UpdateDeviceConfDetail(ullconfid, uideviceid, ullconfrptid, ulldevdtlid, szDevdtlidktime, devdtlidktime);
+															}
+														}														
+													}
+
+													kk += 2;
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 5、清除该会议下的会议计费信息
+								char InsertConfreportInfo_confid_rptid_key[256] = { 0 };
+								char confreportinfo_confid_confrptid_key[256] = { 0 };
+								char up_confreport_confid_reportid_key[256] = { 0 };
+								sprintf(confreportinfo_confid_confrptid_key, "confreportinfo_%s_%s", conf_id_value, confrptid_value);
+								sprintf(InsertConfreportInfo_confid_rptid_key, "insconfrptinfo_%s_%s", conf_id_value, confrptid_value);
+								sprintf(up_confreport_confid_reportid_key, "upconfreport_%s_%s", conf_id_value, confrptid_value);
+
+								bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(InsertConfreportInfo_confid_rptid_key);
+								if (bExistIns)
+								{
+									//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", InsertConfreportInfo_confid_rptid_key);
+									PushMsgToWriteDBQueue(InsertConfreportInfo_confid_rptid_key);
+								}
+
+								bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(up_confreport_confid_reportid_key);
+								if (bExistUP)
+								{
+									//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", up_confreport_confid_reportid_key);
+									PushMsgToWriteDBQueue(up_confreport_confid_reportid_key);
+								}
+								else
+								{
+									bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(confreportinfo_confid_confrptid_key);
+									if (bExist)
+									{
+										UpdateConfReport(ullconfid, ullconfrptid, szConfrptktime, confrptktime);
+									}
+								}
+							} 
+							else
+							{
+								// 未超时的confrpt
+
+								// 1、清除该次会议下直播计费超时信息
+								RedisReplyArray vrra_liveinfoid_ktime;
+								vrra_liveinfoid_ktime.clear();
+								bool bGetAllLiveinfoid_ok = false;
+								unsigned int nLiveinfoidAndKtimeNum = 0;
+								char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+								sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllLiveinfoid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confliveinfoidktimeset_confid_confrptid_key, vrra_liveinfoid_ktime);
+								nLiveinfoidAndKtimeNum = vrra_liveinfoid_ktime.size();
+
+								if (bGetAllLiveinfoid_ok
+									&& (nLiveinfoidAndKtimeNum > 0)
+									&& (nLiveinfoidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nLiveinfoidAndKtimeNum;)
+									{
+										char liveinfoid_value[128] = { 0 };
+										char liveinfoktime_s[128] = { 0 };
+										sprintf(liveinfoid_value, "%s", vrra_liveinfoid_ktime[k].str.c_str());
+										sprintf(liveinfoktime_s, "%s", vrra_liveinfoid_ktime[k + 1].str.c_str());
+
+										SR_uint64 ullliveinfoid = 0;
+										time_t liveinfoktime = 0;
+#ifdef WIN32
+										sscanf(liveinfoid_value, "%I64d", &ullliveinfoid);
+										sscanf(liveinfoktime_s, "%I64d", &liveinfoktime);
+#elif defined LINUX
+										sscanf(liveinfoid_value, "%lld", &ullliveinfoid);
+										sscanf(liveinfoktime_s, "%lld", &liveinfoktime);
+#endif
+										//if (ullliveinfoid != 0
+										//	&& timeNow > liveinfoktime + CONFERENCE_TIMEOUT)
+										if (ullliveinfoid != 0
+											&& liveinfoktime != 0
+											&& timeNow > liveinfoktime + m_nConfdtlinfoTimeout)
+										{
+											time_t tmpliveinfoktime = liveinfoktime;
+
+											struct tm *ptmLiveinfoktime;
+											char szLiveinfoktime[30];
+											ptmLiveinfoktime = localtime(&tmpliveinfoktime);
+											sprintf(szLiveinfoktime, "%d.%02d.%02d %02d:%02d:%02d", ptmLiveinfoktime->tm_year + 1900, ptmLiveinfoktime->tm_mon + 1, ptmLiveinfoktime->tm_mday, ptmLiveinfoktime->tm_hour, ptmLiveinfoktime->tm_min, ptmLiveinfoktime->tm_sec);
+
+											//sr_printf(SR_LOGLEVEL_DEBUG, "**2** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***liveinfoktime=%lld<%s>*****\n", timeNow, szTime, liveinfoktime, szLiveinfoktime);
+
+											char confliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+											char insliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+											sprintf(confliveinfo_confid_confrptid_liveinfoid_key, "confliveinfo_%s_%s_%s", conf_id_value, confrptid_value, liveinfoid_value);
+											sprintf(insliveinfo_confid_confrptid_liveinfoid_key, "insliveinfo_%s_%s_%s", conf_id_value, confrptid_value, liveinfoid_value);
+
+											bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insliveinfo_confid_confrptid_liveinfoid_key);
+											if (bExistIns)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insliveinfo_confid_confrptid_liveinfoid_key);
+												PushMsgToWriteDBQueue(insliveinfo_confid_confrptid_liveinfoid_key);
+											}
+											else
+											{
+												bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(confliveinfo_confid_confrptid_liveinfoid_key);
+												if (bExist)
+												{
+													SRMsgs::IndCRSStopLive indstoplive;
+													indstoplive.set_confid(ullconfid);
+													indstoplive.set_confreportid(ullconfrptid);
+													indstoplive.set_liveinfoid(ullliveinfoid);
+													// 其它参数不必关注
+													UpdateConfLiveInfo(&indstoplive, szLiveinfoktime, liveinfoktime);
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 2、清除该次会议下的录制计费超时信息
+								RedisReplyArray vrra_recordid_ktime;
+								vrra_recordid_ktime.clear();
+								bool bGetAllRecordid_ok = false;
+								unsigned int nRecordidAndKtimeNum = 0;
+								char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+								sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllRecordid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confrecordidktimeset_confid_confrptid_key, vrra_recordid_ktime);
+								nRecordidAndKtimeNum = vrra_recordid_ktime.size();
+
+								if (bGetAllRecordid_ok
+									&& (nRecordidAndKtimeNum > 0)
+									&& (nRecordidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nRecordidAndKtimeNum;)
+									{
+										char recordid_value[128] = { 0 };
+										char recordktime_s[128] = { 0 };
+										sprintf(recordid_value, "%s", vrra_recordid_ktime[k].str.c_str());
+										sprintf(recordktime_s, "%s", vrra_recordid_ktime[k + 1].str.c_str());
+
+										SR_uint64 ullrecordid = 0;
+										time_t recordktime = 0;
+
+#ifdef WIN32
+										sscanf(recordid_value, "%I64d", &ullrecordid);
+										sscanf(recordktime_s, "%I64d", &recordktime);
+#elif defined LINUX
+										sscanf(recordid_value, "%lld", &ullrecordid);
+										sscanf(recordktime_s, "%lld", &recordktime);
+#endif
+										//if (ullrecordid != 0
+										//	&& timeNow > recordktime + CONFERENCE_TIMEOUT)
+										if (ullrecordid != 0
+											&& recordktime != 0
+											&& timeNow > recordktime + m_nConfdtlinfoTimeout)
+										{
+											time_t tmprecordktime = recordktime;
+
+											struct tm *ptmRecordktime;
+											char szRecordktime[30];
+											ptmRecordktime = localtime(&tmprecordktime);
+											sprintf(szRecordktime, "%d.%02d.%02d %02d:%02d:%02d", ptmRecordktime->tm_year + 1900, ptmRecordktime->tm_mon + 1, ptmRecordktime->tm_mday, ptmRecordktime->tm_hour, ptmRecordktime->tm_min, ptmRecordktime->tm_sec);
+
+											//sr_printf(SR_LOGLEVEL_DEBUG, "**2** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***recordktime=%lld<%s>*****\n", timeNow, szTime, recordktime, szRecordktime);
+
+											// 先确认该次录制的表在不在redis中
+											char confrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+											char insrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+											char uprecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+											sprintf(confrecordinfo_confid_confrptid_recordid_key, "confrecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											sprintf(insrecordinfo_confid_confrptid_recordid_key, "insrecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											sprintf(uprecordinfo_confid_confrptid_recordid_key, "uprecordinfo_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+
+											bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insrecordinfo_confid_confrptid_recordid_key);
+											if (bExistIns)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordinfo_confid_confrptid_recordid_key);
+												PushMsgToWriteDBQueue(insrecordinfo_confid_confrptid_recordid_key);
+											}
+
+											// 进一步查录制文件记录是否还有未写入mysql的
+											char confrecfileidktimeset_confid_confrptid_recordid_key[256] = { 0 };// 存放<recfileid, keeplivetime>
+											sprintf(confrecfileidktimeset_confid_confrptid_recordid_key, "confrecfileidktimeset_%s_%s_%s", conf_id_value, confrptid_value, recordid_value);
+											RedisReplyArray vrra_recfileid_ktime;
+											vrra_recfileid_ktime.clear();
+											bool bGetAllRecfileid_ok = false;
+											unsigned int nRecfileidAndKtimeNum = 0;
+											bGetAllRecfileid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confrecfileidktimeset_confid_confrptid_recordid_key, vrra_recfileid_ktime);
+											nRecfileidAndKtimeNum = vrra_recfileid_ktime.size();
+
+											if (bGetAllRecfileid_ok
+												&& (nRecfileidAndKtimeNum > 0)
+												&& (nRecfileidAndKtimeNum % 2 == 0))
+											{
+												for (int kk = 0; kk < nRecfileidAndKtimeNum;)
+												{
+													char recfileid_value[128] = { 0 };
+													//char recfileidktime_s[128] = { 0 };
+													sprintf(recfileid_value, "%s", vrra_recfileid_ktime[kk].str.c_str());
+													//sprintf(recfileidktime_s, "%s", vrra_recfileid_ktime[kk + 1].str.c_str());
+
+													SR_uint64 ullrecfileid = 0;
+#ifdef WIN32
+													sscanf(recfileid_value, "%I64d", &ullrecfileid);
+#elif defined LINUX
+													sscanf(recfileid_value, "%lld", &ullrecfileid);
+#endif
+													if (ullrecfileid != 0)
+													{
+														char insrecordfileinfo_confid_confrptid_recordid_recfileid_key[256] = { 0 };
+														sprintf(insrecordfileinfo_confid_confrptid_recordid_recfileid_key, "insrecordfileinfo_%s_%s_%s_%s", conf_id_value, confrptid_value, recordid_value, recfileid_value);
+														bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+														if (bExistIns)
+														{
+															//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+															PushMsgToWriteDBQueue(insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+														}
+													}
+													kk += 2;
+												}
+											}
+
+											bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(uprecordinfo_confid_confrptid_recordid_key);
+											if (bExistUP)
+											{
+												//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", uprecordinfo_confid_confrptid_recordid_key);
+												PushMsgToWriteDBQueue(uprecordinfo_confid_confrptid_recordid_key);
+											}
+											else
+											{
+												char cConfnameFieldName[256] = { 0 };
+												char confname_value[256] = { 0 };
+												sprintf(cConfnameFieldName, "%s", "confname");
+												char* ptrRet = NULL;
+												ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(confrecordinfo_confid_confrptid_recordid_key, cConfnameFieldName);
+												if (ptrRet != NULL)
+												{
+													sprintf(confname_value, "%s", ptrRet);
+													delete ptrRet; // 不删除会导致内存泄漏
+
+													UpdateConfRecord(ullconfid, ullconfrptid, ullrecordid, szRecordktime, recordktime, confname_value);
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 3、清除该次会议下的用户计费超时信息
+								RedisReplyArray vrra_userid_ktime;
+								vrra_userid_ktime.clear();
+								bool bGetAllUserid_ok = false;
+								unsigned int nUseridAndKtimeNum = 0;
+								char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+								sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllUserid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confuseridktimeset_confid_confrptid_key, vrra_userid_ktime);
+								nUseridAndKtimeNum = vrra_userid_ktime.size();
+
+								if (bGetAllUserid_ok
+									&& (nUseridAndKtimeNum > 0)
+									&& (nUseridAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nUseridAndKtimeNum;)
+									{
+										char userid_value[128] = { 0 };
+										char useridktime_s[128] = { 0 };
+										sprintf(userid_value, "%s", vrra_userid_ktime[k].str.c_str());
+										sprintf(useridktime_s, "%s", vrra_userid_ktime[k + 1].str.c_str());
+
+										SR_uint32 uiuserid = 0;
+										sscanf(userid_value, "%d", &uiuserid);
+
+										time_t useridktime = 0;
+#ifdef WIN32
+										sscanf(useridktime_s, "%I64d", &useridktime);
+#elif defined LINUX
+										sscanf(useridktime_s, "%lld", &useridktime);
+#endif
+
+										if (uiuserid != 0)
+										{
+											//if (timeNow > useridktime + CONFERENCE_TIMEOUT)
+											if (timeNow > useridktime + m_nConfdtlinfoTimeout)
+											{
+												RedisReplyArray vrra_userdtlid_ktime;
+												vrra_userdtlid_ktime.clear();
+												bool bGetAllUserdtlid_ok = false;
+												unsigned int nUserdtlidAndKtimeNum = 0;
+												char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+												sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, userid_value);
+												bGetAllUserdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confuserdtlidktimeset_confid_confrptid_userid_key, vrra_userdtlid_ktime);
+												nUserdtlidAndKtimeNum = vrra_userdtlid_ktime.size();
+
+												if (bGetAllUserdtlid_ok
+													&& (nUserdtlidAndKtimeNum > 0)
+													&& (nUserdtlidAndKtimeNum % 2 == 0))
+												{
+													for (int kk = 0; kk < nUserdtlidAndKtimeNum;)
+													{
+														char userdtlid_value[128] = { 0 };
+														char userdtlidktime_s[128] = { 0 };
+														sprintf(userdtlid_value, "%s", vrra_userdtlid_ktime[kk].str.c_str());
+														sprintf(userdtlidktime_s, "%s", vrra_userdtlid_ktime[kk + 1].str.c_str());
+
+														SR_uint64 ulluserdtlid = 0;
+														time_t userdtlidktime = 0;
+#ifdef WIN32
+														sscanf(userdtlid_value, "%I64d", &ulluserdtlid);
+														sscanf(userdtlidktime_s, "%I64d", &userdtlidktime);
+#elif defined LINUX
+														sscanf(userdtlid_value, "%lld", &ulluserdtlid);
+														sscanf(userdtlidktime_s, "%lld", &userdtlidktime);
+#endif
+														if (ulluserdtlid != 0
+															&& userdtlidktime != 0)
+														{
+															time_t tmpuserdtlidktime = userdtlidktime;
+
+															struct tm *ptmUserdtlidktime;
+															char szUserdtlidktime[30];
+															ptmUserdtlidktime = localtime(&tmpuserdtlidktime);
+															sprintf(szUserdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmUserdtlidktime->tm_year + 1900, ptmUserdtlidktime->tm_mon + 1, ptmUserdtlidktime->tm_mday, ptmUserdtlidktime->tm_hour, ptmUserdtlidktime->tm_min, ptmUserdtlidktime->tm_sec);
+
+															//sr_printf(SR_LOGLEVEL_DEBUG, "**2** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***userdtlidktime=%lld<%s>*****\n", timeNow, szTime, userdtlidktime, szUserdtlidktime);
+
+															char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+															char upuserconfdtl_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+															sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+															sprintf(upuserconfdtl_confid_confrptid_userid_userdtlid_key, "upuserconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+
+															// 先确认该次录制的表在不在redis中														
+															bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+															if (bExistUP)
+															{
+																//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+																PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+															}
+															else
+															{
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(userconfdetail_confid_confrptid_userid_userdtlid_key);
+																if (bExist)
+																{
+																	DelUserConfDetail(uiuserid, ullconfid, ullconfrptid, ulluserdtlid, szUserdtlidktime, userdtlidktime);
+																}
+															}
+														}
+
+														kk += 2;
+													}
+												}
+											} 
+											else
+											{
+												RedisReplyArray vrra_userdtlid_ktime;
+												vrra_userdtlid_ktime.clear();
+												bool bGetAllUserdtlid_ok = false;
+												unsigned int nUserdtlidAndKtimeNum = 0;
+												char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+												sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, userid_value);
+												bGetAllUserdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confuserdtlidktimeset_confid_confrptid_userid_key, vrra_userdtlid_ktime);
+												nUserdtlidAndKtimeNum = vrra_userdtlid_ktime.size();
+
+												if (bGetAllUserdtlid_ok
+													&& (nUserdtlidAndKtimeNum > 0)
+													&& (nUserdtlidAndKtimeNum % 2 == 0))
+												{
+													for (int kk = 0; kk < nUserdtlidAndKtimeNum;)
+													{
+														char userdtlid_value[128] = { 0 };
+														char userdtlidktime_s[128] = { 0 };
+														sprintf(userdtlid_value, "%s", vrra_userdtlid_ktime[kk].str.c_str());
+														sprintf(userdtlidktime_s, "%s", vrra_userdtlid_ktime[kk + 1].str.c_str());
+
+														SR_uint64 ulluserdtlid = 0;
+														time_t userdtlidktime = 0;
+#ifdef WIN32
+														sscanf(userdtlid_value, "%I64d", &ulluserdtlid);
+														sscanf(userdtlidktime_s, "%I64d", &userdtlidktime);
+#elif defined LINUX
+														sscanf(userdtlid_value, "%lld", &ulluserdtlid);
+														sscanf(userdtlidktime_s, "%lld", &userdtlidktime);
+#endif
+														//if (ulluserdtlid != 0
+														//	&& timeNow > userdtlidktime + CONFERENCE_TIMEOUT)
+														if (ulluserdtlid != 0
+															&& userdtlidktime != 0
+															&& timeNow > userdtlidktime + m_nConfdtlinfoTimeout)
+														{
+															time_t tmpuserdtlidktime = userdtlidktime;
+
+															struct tm *ptmUserdtlidktime;
+															char szUserdtlidktime[30];
+															ptmUserdtlidktime = localtime(&tmpuserdtlidktime);
+															sprintf(szUserdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmUserdtlidktime->tm_year + 1900, ptmUserdtlidktime->tm_mon + 1, ptmUserdtlidktime->tm_mday, ptmUserdtlidktime->tm_hour, ptmUserdtlidktime->tm_min, ptmUserdtlidktime->tm_sec);
+
+															//sr_printf(SR_LOGLEVEL_DEBUG, "**22** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***userdtlidktime=%lld<%s>*****\n", timeNow, szTime, userdtlidktime, szUserdtlidktime);
+
+															char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+															char upuserconfdtl_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+															sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+															sprintf(upuserconfdtl_confid_confrptid_userid_userdtlid_key, "upuserconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, userid_value, userdtlid_value);
+
+															// 先确认该次录制的表在不在redis中														
+															bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+															if (bExistUP)
+															{
+																//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+																PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+															}
+															else
+															{
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(userconfdetail_confid_confrptid_userid_userdtlid_key);
+																if (bExist)
+																{
+																	DelUserConfDetail(uiuserid, ullconfid, ullconfrptid, ulluserdtlid, szUserdtlidktime, userdtlidktime);
+																}
+															}
+														}
+
+														kk += 2;
+													}
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+								// 4、清除该会议下的设备计费超时信息
+								RedisReplyArray vrra_deviceid_ktime;
+								vrra_deviceid_ktime.clear();
+								bool bGetAllDeviceidok = false;
+								unsigned int nDeviceidAndKtimeNum = 0;
+								char confdeviceidktimeset_confid_confrptid_key[256] = { 0 };// 存放<deviceid, keeplivetime>								
+								sprintf(confdeviceidktimeset_confid_confrptid_key, "confdeviceidktimeset_%s_%s", conf_id_value, confrptid_value);
+
+								bGetAllDeviceidok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confdeviceidktimeset_confid_confrptid_key, vrra_deviceid_ktime);
+								nDeviceidAndKtimeNum = vrra_deviceid_ktime.size();
+
+								if (bGetAllDeviceidok
+									&& (nDeviceidAndKtimeNum > 0)
+									&& (nDeviceidAndKtimeNum % 2 == 0))
+								{
+									for (int k = 0; k < nDeviceidAndKtimeNum;)
+									{
+										char deviceid_value[128] = { 0 };
+										char deviceidktime_s[128] = { 0 };
+										sprintf(deviceid_value, "%s", vrra_deviceid_ktime[k].str.c_str());
+										sprintf(deviceidktime_s, "%s", vrra_deviceid_ktime[k + 1].str.c_str());
+
+										SR_uint32 uideviceid = 0;
+										sscanf(deviceid_value, "%d", &uideviceid);
+										time_t deviceidktime = 0;
+#ifdef WIN32
+										sscanf(deviceidktime_s, "%I64d", &deviceidktime);
+#elif defined LINUX
+										sscanf(deviceidktime_s, "%lld", &deviceidktime);
+#endif
+
+										if (uideviceid != 0
+											&& deviceidktime != 0)
+										{
+											//if (timeNow > deviceidktime + CONFERENCE_TIMEOUT)
+											if (timeNow > deviceidktime + m_nConfdtlinfoTimeout)
+											{
+												RedisReplyArray vrra_devdtlid_ktime;
+												vrra_devdtlid_ktime.clear();
+												bool bGetAllDevdtlid_ok = false;
+												unsigned int nDevdtlidAndKtimeNum = 0;
+												char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+												sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value);
+												bGetAllDevdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confdevdtlidktimeset_confid_confrptid_deviceid_key, vrra_devdtlid_ktime);
+												nDevdtlidAndKtimeNum = vrra_devdtlid_ktime.size();
+
+												if (bGetAllDevdtlid_ok
+													&& (nDevdtlidAndKtimeNum > 0)
+													&& (nDevdtlidAndKtimeNum % 2 == 0))
+												{
+													for (int kk = 0; kk < nDevdtlidAndKtimeNum;)
+													{
+														char devdtlid_value[128] = { 0 };
+														char devdtlidktime_s[128] = { 0 };
+														sprintf(devdtlid_value, "%s", vrra_devdtlid_ktime[kk].str.c_str());
+														sprintf(devdtlidktime_s, "%s", vrra_devdtlid_ktime[kk + 1].str.c_str());
+
+														SR_uint64 ulldevdtlid = 0;
+														time_t devdtlidktime = 0;
+#ifdef WIN32
+														sscanf(devdtlid_value, "%I64d", &ulldevdtlid);
+														sscanf(devdtlidktime_s, "%I64d", &devdtlidktime);
+#elif defined LINUX
+														sscanf(devdtlid_value, "%lld", &ulldevdtlid);
+														sscanf(devdtlidktime_s, "%lld", &devdtlidktime);
+#endif
+														if (ulldevdtlid != 0
+															&& devdtlidktime != 0)
+														{
+															time_t tmpdevdtlidktime = devdtlidktime;
+
+															struct tm *ptmDevdtlidktime;
+															char szDevdtlidktime[30];
+															ptmDevdtlidktime = localtime(&tmpdevdtlidktime);
+															sprintf(szDevdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmDevdtlidktime->tm_year + 1900, ptmDevdtlidktime->tm_mon + 1, ptmDevdtlidktime->tm_mday, ptmDevdtlidktime->tm_hour, ptmDevdtlidktime->tm_min, ptmDevdtlidktime->tm_sec);
+
+															//sr_printf(SR_LOGLEVEL_DEBUG, "**2** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***devdtlidktime=%lld<%s>*****\n", timeNow, szTime, devdtlidktime, szDevdtlidktime);
+
+															char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+															char updevconfdtl_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+															sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+															sprintf(updevconfdtl_confid_confrptid_deviceid_devdtlid_key, "updevconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+
+															bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);															
+															// 先确认该次录制的表在不在redis中
+															if (bExistUP)
+															{
+																//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+																PushMsgToWriteDBQueue(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+															}
+															else
+															{
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+																if (bExist)
+																{
+																	UpdateDeviceConfDetail(ullconfid, uideviceid, ullconfrptid, ulldevdtlid, szDevdtlidktime, devdtlidktime);
+																}
+															}
+														}
+
+														kk += 2;
+													}
+												}
+											} 
+											else
+											{
+												RedisReplyArray vrra_devdtlid_ktime;
+												vrra_devdtlid_ktime.clear();
+												bool bGetAllDevdtlid_ok = false;
+												unsigned int nDevdtlidAndKtimeNum = 0;
+												char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+												sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value);
+												bGetAllDevdtlid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(confdevdtlidktimeset_confid_confrptid_deviceid_key, vrra_devdtlid_ktime);
+												nDevdtlidAndKtimeNum = vrra_devdtlid_ktime.size();
+
+												if (bGetAllDevdtlid_ok
+													&& (nDevdtlidAndKtimeNum > 0)
+													&& (nDevdtlidAndKtimeNum % 2 == 0))
+												{
+													for (int kk = 0; kk < nDevdtlidAndKtimeNum;)
+													{
+														char devdtlid_value[128] = { 0 };
+														char devdtlidktime_s[128] = { 0 };
+														sprintf(devdtlid_value, "%s", vrra_devdtlid_ktime[kk].str.c_str());
+														sprintf(devdtlidktime_s, "%s", vrra_devdtlid_ktime[kk + 1].str.c_str());
+
+														SR_uint64 ulldevdtlid = 0;
+														time_t devdtlidktime = 0;
+#ifdef WIN32
+														sscanf(devdtlid_value, "%I64d", &ulldevdtlid);
+														sscanf(devdtlidktime_s, "%I64d", &devdtlidktime);
+#elif defined LINUX
+														sscanf(devdtlid_value, "%lld", &ulldevdtlid);
+														sscanf(devdtlidktime_s, "%lld", &devdtlidktime);
+#endif
+														//if (ulldevdtlid != 0
+														//	&& timeNow > devdtlidktime + CONFERENCE_TIMEOUT)
+														if (ulldevdtlid != 0
+															&& devdtlidktime != 0
+															&& timeNow > devdtlidktime + m_nConfdtlinfoTimeout)
+														{
+															time_t tmpdevdtlidktime = devdtlidktime;
+
+															struct tm *ptmDevdtlidktime;
+															char szDevdtlidktime[30];
+															ptmDevdtlidktime = localtime(&tmpdevdtlidktime);
+															sprintf(szDevdtlidktime, "%d.%02d.%02d %02d:%02d:%02d", ptmDevdtlidktime->tm_year + 1900, ptmDevdtlidktime->tm_mon + 1, ptmDevdtlidktime->tm_mday, ptmDevdtlidktime->tm_hour, ptmDevdtlidktime->tm_min, ptmDevdtlidktime->tm_sec);
+
+															//sr_printf(SR_LOGLEVEL_DEBUG, "**22** Handle_CheckConfTimeoutData timeNow=%lld<%s> ***devdtlidktime=%lld<%s>*****\n", timeNow, szTime, devdtlidktime, szDevdtlidktime);
+
+															char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+															char updevconfdtl_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+															sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+															sprintf(updevconfdtl_confid_confrptid_deviceid_devdtlid_key, "updevconfdtl_%s_%s_%s_%s", conf_id_value, confrptid_value, deviceid_value, devdtlid_value);
+
+															bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+															// 先确认该次录制的表在不在redis中
+															if (bExistUP)
+															{
+																//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+																PushMsgToWriteDBQueue(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+															}
+															else
+															{
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+																if (bExist)
+																{
+																	UpdateDeviceConfDetail(ullconfid, uideviceid, ullconfrptid, ulldevdtlid, szDevdtlidktime, devdtlidktime);
+																}
+															}
+														}
+
+														kk += 2;
+													}
+												}
+											}
+										}
+
+										k += 2;
+									}
+								}
+							}
+						}
+
+						j += 2;
+					}
+				}
+
+				//if (timeNow > confktime + CONFERENCE_TIMEOUT)
+				if (timeNow > confktime + m_nConfdtlinfoTimeout)
+				{
+					// 清除这个会议保活时间前验证一下会议结束时间未回写
+					char update_confrealtime_confid_key[128] = { 0 };
+					sprintf(update_confrealtime_confid_key, "upconfrealendtime_%s", conf_id_value);
+
+					bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(update_confrealtime_confid_key);
+					// 先确认该次录制的表在不在redis中
+					if (bExistUP)
+					{
+						//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", update_confrealtime_confid_key);
+						PushMsgToWriteDBQueue(update_confrealtime_confid_key);
+					}
+					else
+					{
+						UpdateConfRealtime(ullconfid, 1, szConfktime, confktime, -1);//
+					}
+										
+					TimeoutConfset.insert(std::make_pair(ullconfid, confktime));
+					sr_printf(SR_LOGLEVEL_DEBUG, "***** Handle_CheckConfTimeoutData ***TimeoutConfset<ullconfid=%lld, confktime=%lld>*****\n", ullconfid, confktime);
+				}
+			}
+			i += 2;
+		}
+
+	}
+	std::vector<SR_uint64> TimeoutConfid;
+	TimeoutConfid.clear();
+		
+	for (std::map<SR_uint64, SR_uint64>::iterator conf_itor = TimeoutConfset.begin();
+		conf_itor != TimeoutConfset.end(); conf_itor++)
+	{
+		char confid_value[128] = { 0 };
+#ifdef WIN32
+		sprintf(confid_value, "%I64d", conf_itor->first);
+#elif defined LINUX
+		sprintf(confid_value, "%lld", conf_itor->first);
+#endif
+		m_pRedisConnList[e_RC_TT_MainThread]->deletehashvalue(confidktimeset_key, confid_value);
+		TimeoutConfid.push_back(conf_itor->first);
+	}
+	if (TimeoutConfid.size() > 0)
+	{
+		TimeoutConfLinceneRevover(TimeoutConfid);
+	}
+}
+
+void CDevMgr::PushMsgToWriteDBQueue(char* pushvalue)
+{
+	if (!m_pUpMsqThread)
+		return;
+
+	typedef CBufferT<void*, void*, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(pushvalue, strlen(pushvalue), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_PushMsgToWriteDBQueue, (void*)pParam));
+	return;
+}
+void CDevMgr::Handle_PushMsgToWriteDBQueue(void *pArg)
+{
+	typedef CBufferT<void*, void*, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	char* pushvalue = (char*)(pParam->m_pData1);
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);// 回写队列默认放在db4
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", pushvalue);
+
+	delete pParam;
+	pParam = NULL;
+}
 
 void CDevMgr::CheckWriteDB()
 {
@@ -1429,11 +2919,25 @@ void CDevMgr::Handle_CheckConfig(void *pArg)
 		m_nGetDevHeartbeatTimeout = uiNewDevHeartbeatTimeout;
 	}
 
+	unsigned int uiNewConfdtlinfoTimeout = CParser::GetInstance()->GetConfDetailInfoTimeout();
+	if (uiNewConfdtlinfoTimeout != m_nConfdtlinfoTimeout)
+	{
+		sr_printf(SR_LOGLEVEL_ALERT, "==Config is changed==ConfDetailInfoTimeout--- %d s --->> %d s\n", m_nConfdtlinfoTimeout, uiNewConfdtlinfoTimeout);
+		m_nConfdtlinfoTimeout = uiNewConfdtlinfoTimeout;
+	}
+
 	bool bisCloseTimeoutSocket = CParser::GetInstance()->IsCloseTimeoutSocket();
 	if (bisCloseTimeoutSocket != m_bCloseTimeoutSocket)
 	{
 		sr_printf(SR_LOGLEVEL_ALERT, "==Config is changed==IsCloseTimeoutSocket--- %d --->> %d\n", m_bCloseTimeoutSocket, bisCloseTimeoutSocket);
 		m_bCloseTimeoutSocket = bisCloseTimeoutSocket;
+	}
+
+	unsigned int uiNewMCLinceneInfoTime = CParser::GetInstance()->GetMCLinceneInfoTime();
+	if (uiNewMCLinceneInfoTime != m_nGetMCLinceneInfoTime)
+	{
+		sr_printf(SR_LOGLEVEL_ALERT, "==Config is changed==GetMCLinceneInfoTime--- %d --->> %d\n", m_nGetMCLinceneInfoTime, uiNewMCLinceneInfoTime);
+		m_nGetMCLinceneInfoTime = uiNewMCLinceneInfoTime;
 	}
 
 	int iNewLevel = CParser::GetInstance()->GetLoglevel();
@@ -1590,10 +3094,10 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 	}
 
 
-	//time_t timeNow;
+	time_t timeNow;
 	//struct tm *ptmNow;
 	//char szTime[30];
-	//timeNow = time(NULL);
+	timeNow = time(NULL);
 	//ptmNow = localtime(&timeNow);
 
 	if (!m_pUpMsqThread)
@@ -1608,6 +3112,23 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 	struct timeval end;
 	gettimeofday(&start, NULL); // μs level
 #endif 
+
+	//再次判断mc是否超时
+	if (devicetype == DEVICE_SERVER::DEVICE_MC)
+	{
+		iter_mapDeviceHeartbeatTime iter_device = m_MapDeviceHeartbeatTime.find(device_id);
+		if (iter_device != m_MapDeviceHeartbeatTime.end())
+		{
+			// 说明未超过该设备的超时心跳
+			if (timeNow - iter_device->second.time < m_nGetDevHeartbeatTimeout)
+			{
+				sr_printf(SR_LOGLEVEL_DEBUG, "====CDevMgr::UpdateDeviceInfoInDB==check timeout mc::device == (device_id = %d) \n", deviceid);
+				return;
+			}
+		}
+		
+	}
+
 
 	char traceBuf[1024] = { 0 };
 
@@ -1640,7 +3161,7 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 		std::map< int, std::vector<unsigned long long> > tempmapRelatedNetmpidConfidset;
 		tempmapRelatedNetmpidConfidset.clear();
 
-		UpdateDeviceInfoData *pUpdateDeviceInfoData = NULL;
+		//UpdateDeviceInfoData *pUpdateDeviceInfoData = NULL;
 
 
 		// 1、获取mc、netmp会议信息
@@ -1812,6 +3333,7 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 		if (p != NULL)
 		{
 			svrname_groupid += p;
+			std::string timeout_groupid = p;
 			m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
 			if (devicetype == DEVICE_SERVER::DEVICE_MC)
 			{
@@ -1819,6 +3341,12 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 				char svrname_load_s[128] = { 0 };
 				sprintf(svrname_load_s, "%s_%s", svrname_groupid.c_str(), deviceidbuf);
 				m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(svrname_load_s);
+				//timeout 添加对应的groupid<-->deviceid
+				char cTimeoutMcGroupKey[64] = { 0 };
+				sprintf(cTimeoutMcGroupKey, "%s", "timeout_mc_group");
+				char cTimeoutGroupid[128] = { 0 };
+				sprintf(cTimeoutGroupid, "%s", timeout_groupid.c_str());
+				m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(cTimeoutMcGroupKey, cTimeoutGroupid, deviceidbuf);
 			}
 			else
 			{
@@ -1969,7 +3497,7 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 				&& (nConfAndDevidNum > 0)
 				&& (nConfAndDevidNum % 2 == 0))
 			{
-				pUpdateDeviceInfoData = new UpdateDeviceInfoData();
+				//pUpdateDeviceInfoData = new UpdateDeviceInfoData();
 
 				std::vector<unsigned long long> vConfidset;
 				vConfidset.clear();
@@ -2024,11 +3552,11 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 									confid_iter++;
 								}
 
-								if (tempmapRelatedNetmpidConfidset_iter->first != 0
-									&& vRelatedConfidset.size() > 0)
-								{
-									pUpdateDeviceInfoData->m_mapRelatedDeviceidandConfidset.insert(std::map< int, std::vector<unsigned long long> >::value_type(tempmapRelatedNetmpidConfidset_iter->first, vRelatedConfidset));
-								}
+								//if (tempmapRelatedNetmpidConfidset_iter->first != 0
+								//	&& vRelatedConfidset.size() > 0)
+								//{
+								//	pUpdateDeviceInfoData->m_mapRelatedDeviceidandConfidset.insert(std::map< int, std::vector<unsigned long long> >::value_type(tempmapRelatedNetmpidConfidset_iter->first, vRelatedConfidset));
+								//}
 
 								tempmapRelatedNetmpidConfidset_iter++;
 							}
@@ -2038,11 +3566,11 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 					i += 2;
 				}
 
-				if (deviceid != 0
-					&& vConfidset.size() > 0)
-				{
-					pUpdateDeviceInfoData->m_mapDeviceidandConfidset.insert(std::map< int, std::vector<unsigned long long> >::value_type(deviceid, vConfidset));
-				}
+				//if (deviceid != 0
+				//	&& vConfidset.size() > 0)
+				//{
+				//	pUpdateDeviceInfoData->m_mapDeviceidandConfidset.insert(std::map< int, std::vector<unsigned long long> >::value_type(deviceid, vConfidset));
+				//}
 			}
 		}
 
@@ -2051,25 +3579,25 @@ void CDevMgr::UpdateDeviceInfoInDB(int device_id, int device_type, CAsyncThread 
 
 		sr_printf(SR_LOGLEVEL_DEBUG, " CDevMgr::UpdateDeviceInfoInDB deletevalue redis db(2) clear Table: (deviceid_id)=(%s) \n", deviceid_id);
 
-		// 6、处理该设备(目前只处理mc、netmp设备)的会议信息
-		if (devicetype == 1
-			|| devicetype == 2)
-		{
+		//// 6、处理该设备(目前只处理mc、netmp设备)的会议信息----此处计费信息删除,走超时流程by chensonghua at 20191128
+		//if (devicetype == 1
+		//	|| devicetype == 2)
+		//{
 
-			if (pUpdateDeviceInfoData != NULL
-				&& pUpdateDeviceInfoData->m_mapDeviceidandConfidset.size() > 0)
-			{
-				typedef CBufferT<int, int, CAsyncThread*, time_t, UpdateDeviceInfoData*, void*, void*, void*> CParam;
-				CParam* pParam;
-				pParam = new CParam(ptime, strlen(ptime), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, device_type, m_pUpMsqThread, lltime, pUpdateDeviceInfoData);
+		//	if (pUpdateDeviceInfoData != NULL
+		//		&& pUpdateDeviceInfoData->m_mapDeviceidandConfidset.size() > 0)
+		//	{
+		//		typedef CBufferT<int, int, CAsyncThread*, time_t, UpdateDeviceInfoData*, void*, void*, void*> CParam;
+		//		CParam* pParam;
+		//		pParam = new CParam(ptime, strlen(ptime), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, device_type, m_pUpMsqThread, lltime, pUpdateDeviceInfoData);
 
-				typedef void (CDevMgr::* ACTION)(void*);
-				m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-					*this, &CDevMgr::Handle_UpdateDeviceInfoInDB, (void*)pParam));
+		//		typedef void (CDevMgr::* ACTION)(void*);
+		//		m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		//			*this, &CDevMgr::Handle_UpdateDeviceInfoInDB, (void*)pParam));
 
-				sr_printf(SR_LOGLEVEL_INFO, " CDevMgr::UpdateDeviceInfoInDB post (%d, %d) to CDevMgr::Handle_UpdateDeviceInfoInDB!!!!\n", deviceid, device_type);
-			}
-		}
+		//		sr_printf(SR_LOGLEVEL_INFO, " CDevMgr::UpdateDeviceInfoInDB post (%d, %d) to CDevMgr::Handle_UpdateDeviceInfoInDB!!!!\n", deviceid, device_type);
+		//	}
+		//}
 	}
 	else
 	{
@@ -2210,7 +3738,7 @@ void CDevMgr::Handle_UpdateDeviceInfoInDB(void *pArg)
 							{
 								for (int jj = 0; jj < retTerNum; jj++)
 								{
-									DelUserConfDetail(tersuid[jj]->deviceid, ullConfid, ptime, lltime);
+									//DelUserConfDetail(tersuid[jj]->deviceid, ullConfid, ptime, lltime);// 缺少confrptid、userdtlid
 #ifdef WIN32
 									sr_printf(SR_LOGLEVEL_DEBUG, " mc CDevMgr::Handle_UpdateDeviceInfoInDB DelUserConfDetail [suid:%d, confid:%I64d, realleavetime=%s]\n", tersuid[jj]->deviceid, ullConfid, strTime.c_str());
 #elif defined LINUX
@@ -2234,7 +3762,7 @@ void CDevMgr::Handle_UpdateDeviceInfoInDB(void *pArg)
 
 					} //if (ternum > 0)
 
-					UpdateConfReport(ullConfid, 0, ptime, lltime);
+					//UpdateConfReport(ullConfid, 0, ptime, lltime);// 缺少confrptid
 
 #ifdef WIN32
 					sr_printf(SR_LOGLEVEL_INFO, " mc CDevMgr::Handle_UpdateDeviceInfoInDB UpdateConfReport [confid:%I64d, realleavetime=%s]\n", ullConfid, strTime.c_str());
@@ -2243,7 +3771,7 @@ void CDevMgr::Handle_UpdateDeviceInfoInDB(void *pArg)
 #endif
 				}//if (devicetype == 1)
 
-				UpdateDeviceConfDetail(ullConfid, deviceid, ptime, lltime);
+				//UpdateDeviceConfDetail(ullConfid, deviceid, ptime, lltime);// 缺少confrptid、devdtlid
 
 				if (devicetype == 1)
 				{
@@ -2276,7 +3804,7 @@ void CDevMgr::Handle_UpdateDeviceInfoInDB(void *pArg)
 					confid_itor != itor_r->second.end(); confid_itor++)
 				{
 					unsigned long long ullConfid = *confid_itor;
-					UpdateDeviceConfDetail(ullConfid, iNetmpid, ptime, lltime);
+					//UpdateDeviceConfDetail(ullConfid, iNetmpid, ptime, lltime);// 缺少confrptid、devdtlid
 #ifdef WIN32
 					sr_printf(SR_LOGLEVEL_INFO, " mc -> netmp CDevMgr::Handle_UpdateDeviceInfoInDB update Mysql::device_conf_detail netmp conf_id:%I64d, iNetmpid = %d, RealuseStoptime = %s\n", ullConfid, iNetmpid, strTime.c_str());
 #elif defined LINUX
@@ -3046,6 +4574,7 @@ CDevMgr::CDevMgr()
 	m_write_db_timespan = 15;
 	m_last_post_msg_time = timeNow;
 	m_nGetDevHeartbeatTimeout = 15;
+	m_nConfdtlinfoTimeout = 5*60;// 5分钟
 	//m_ullnum_per_post = 0;
 
 	m_bCloseTimeoutSocket = false;
@@ -3084,8 +4613,11 @@ CDevMgr::CDevMgr()
 	m_pub_userrpt_detail_id = m_pub_confreport_id;
 
 	m_pub_confrecord_id = m_pub_confreport_id;
-	m_pub_recordfile_id = m_pub_confreport_id;
+	m_pub_recordfile_id = m_pub_confreport_id;// 保留
 	m_pub_liveinfo_id = m_pub_confreport_id;
+
+	// 以上业务id全部交由业务控制端mc生成
+	// 40bit时间戳【1bit（保留）+ 39bit毫米数,若用上保留位可使用34年】 + 18bit设备id【8bit（devmgr序号）+ 10bit在该devmgr递增的deviceid】+ 6bit【业务计数，也即是同一毫秒同一device可产生的id】
 
 #ifdef WIN32
 	printf(">>>>>>>>>In CDevMgr Class  iDevmgrNum>>> %u, timeNow>>> %I64d, m_confreport_id>>> %I64d\n", m_uiDeviceNo, timeNow, m_pub_confreport_id);
@@ -3137,6 +4669,12 @@ bool CDevMgr::Init()
 #endif
 	snprintf(logfilename, sizeof(logfilename), "logdevmgr_%02d:%02d:%02d", tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
 	TraceLog::GetInstance().OpenLog(logfilename, m_iLoglevel, m_bisStdout);
+
+	if (m_uiDeviceNo == 0)
+	{
+		sr_printf(SR_LOGLEVEL_NORMAL, "!!!!!!!!!!!!! In devmgr.conf file DeviceNum config is 0\n");
+		exit(-1);
+	}
 
 	m_pMainThread = NULL;
 	m_pUpMsqThread = NULL;
@@ -3234,6 +4772,18 @@ bool CDevMgr::Init()
 				{
 					sr_printf(SR_LOGLEVEL_NORMAL, "m_pRedisConnList[%d]->connect() redisinit success.\n", i);
 				}
+
+				if (CParser::GetInstance()->GetRedisPass().length() > 0)
+				{
+					if (!m_pRedisConnList[i]->auth(CParser::GetInstance()->GetRedisPass().c_str()))
+					{
+						sr_printf(SR_LOGLEVEL_ERROR, "m_pRedisConnList[%d]->auth() redis connect error.\n", i);
+					}
+					else
+					{
+						sr_printf(SR_LOGLEVEL_NORMAL, "m_pRedisConnList[%d]->auth() redis connect ok.\n", i);
+					}
+				}
 			}
 			else
 			{
@@ -3305,13 +4855,9 @@ bool CDevMgr::Init()
 
 	m_pMainDevice = new CDevice(m_uiDeviceNo);
 	m_mapAsyncThreadDevice.insert(std::map<CAsyncThread*, CDevice*>::value_type(m_pMainThread, m_pMainDevice));
-	m_pUpmsgDevice = new CDevice(m_uiDeviceNo);
-	m_mapAsyncThreadDevice.insert(std::map<CAsyncThread*, CDevice*>::value_type(m_pUpMsqThread, m_pUpmsgDevice));
 
 	m_pMainDeviceConfig = new CDeviceConfig();
 	m_mapAsyncThreadDeviceConfig.insert(std::map<CAsyncThread*, CDeviceConfig*>::value_type(m_pMainThread, m_pMainDeviceConfig));
-	m_pUpmsgDeviceConfig = new CDeviceConfig();
-	m_mapAsyncThreadDeviceConfig.insert(std::map<CAsyncThread*, CDeviceConfig*>::value_type(m_pUpMsqThread, m_pUpmsgDeviceConfig));
 
 	m_pMainConference = new CConference();
 	m_mapAsyncThreadConference.insert(std::map<CAsyncThread*, CConference*>::value_type(m_pMainThread, m_pMainConference));
@@ -3379,12 +4925,24 @@ bool CDevMgr::Init()
 	m_pMainDataDictionary = new CDataDictionary();
 	m_mapAsyncThreadDataDictionary.insert(std::map<CAsyncThread*, CDataDictionary*>::value_type(m_pMainThread, m_pMainDataDictionary));
 
+	m_pMainSysParameter = new CSysParameter();
+	m_mapAsyncThreadSysParameter.insert(std::map<CAsyncThread*, CSysParameter*>::value_type(m_pMainThread, m_pMainSysParameter));
+
+	m_pMainLinceneCompCap = new CCompCapLincene();
+	m_mapAsyncThreadLinceneCompCap.insert(std::map<CAsyncThread*, CCompCapLincene*>::value_type(m_pMainThread, m_pMainLinceneCompCap));
+	m_pUpmsgLinceneCompCap = new CCompCapLincene();
+	m_mapAsyncThreadLinceneCompCap.insert(std::map<CAsyncThread*, CCompCapLincene*>::value_type(m_pUpMsqThread, m_pUpmsgLinceneCompCap));
+
+
 	m_op_db_num = CParser::GetInstance()->GetOPDBNum();
 	m_write_db_timespan = CParser::GetInstance()->GetWriteDBTimespan();
 	m_nGetDevHeartbeatTimeout = CParser::GetInstance()->GetDevHeartbeatTimeout();
+	m_nConfdtlinfoTimeout = CParser::GetInstance()->GetConfDetailInfoTimeout();
 	m_bCloseTimeoutSocket = CParser::GetInstance()->IsCloseTimeoutSocket();
+	m_nGetMCLinceneInfoTime = CParser::GetInstance()->GetMCLinceneInfoTime();
 
-	sr_printf(SR_LOGLEVEL_NORMAL, " In config file: DeviceNo=%d, OperatDBNum=%d, WriteDBTimespan=%d, DevHeartbeatTimeout=%d, IsCloseTimeoutSocket=%d, LogLevel=%d, IsStdout=%d\n", m_uiDeviceNo, m_op_db_num, m_write_db_timespan, m_nGetDevHeartbeatTimeout, m_bCloseTimeoutSocket, m_iLoglevel, m_bisStdout);
+	sr_printf(SR_LOGLEVEL_NORMAL, " In config file: DeviceNo=%d, OperatDBNum=%d, WriteDBTimespan=%d, DevHeartbeatTimeout=%d, ConfDetailInfoTimeout, IsCloseTimeoutSocket=%d, LogLevel=%d, IsStdout=%d\n",
+		m_uiDeviceNo, m_op_db_num, m_write_db_timespan, m_nGetDevHeartbeatTimeout, m_nConfdtlinfoTimeout, m_bCloseTimeoutSocket, m_iLoglevel, m_bisStdout);
 
 	//////////////////////////////////////////////////////////////////////////
 	if (!m_bRegSelfok)
@@ -3594,6 +5152,7 @@ bool CDevMgr::Init()
 
 	//if (!m_heart2devmgr_periodtimer)
 	//	m_heart2devmgr_periodtimer = createTimer(SEND_HEARTBEAT_TO_DEVMGR_TIME, SRMC::e_periodicity_timer, e_hearttodevmgr_timer, 0ull);
+	InitLinceneInfo();
 
 	sr_printf(SR_LOGLEVEL_NORMAL, "CDevMgr::Init() success\n");
 
@@ -3774,23 +5333,12 @@ void CDevMgr::Fini()
 		delete m_pMainDevice;
 		m_pMainDevice = NULL;
 	}
-	if (NULL != m_pUpmsgDevice)
-	{
-		delete m_pUpmsgDevice;
-		m_pUpmsgDevice = NULL;
-	}
 
 	if (NULL != m_pMainDeviceConfig)
 	{
 		delete m_pMainDeviceConfig;
 		m_pMainDeviceConfig = NULL;
 	}
-	if (NULL != m_pUpmsgDeviceConfig)
-	{
-		delete m_pUpmsgDeviceConfig;
-		m_pUpmsgDeviceConfig = NULL;
-	}
-
 
 	if (NULL != m_pMainConference)
 	{
@@ -3988,7 +5536,7 @@ int CDevMgr::GetProcessPath()
 
 int main(int argc, char* argv[])
 {
-	printf("main\n");
+	//printf("main\n");
 
 #ifdef LINUX
 	bool use_daemon = false;
@@ -3997,18 +5545,18 @@ int main(int argc, char* argv[])
 		if (strcmp("-daemon", argv[i]) == 0 || strcmp("-d", argv[i]) == 0)
 		{
 			use_daemon = true;
-			printf("main argv:%s\n", argv[i]);
+			//printf("main argv:%s\n", argv[i]);
 			break;
 		}
 	}
-	if (use_daemon)
-	{
-		printf("devmgr use daemon running mode:true\n");
-	}
-	else
-	{
-		printf("devmgr use daemon running mode:false\n");
-	}
+	//if (use_daemon)
+	//{
+	//	printf("devmgr use daemon running mode:true\n");
+	//}
+	//else
+	//{
+	//	printf("devmgr use daemon running mode:false\n");
+	//}
 	if (use_daemon && 0 != daemon(1, 0))
 	{
 		printf("devmgr daemon start failed! errorcode:%d, desc:%s\n", errno, strerror(errno));
@@ -4032,7 +5580,7589 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
-void CDevMgr::UpdateConfRealtime(unsigned long long confid, int realtimetype, char* time, time_t lltime, int permanentenable/*=0*/)
+//授权数据发生变化
+void CDevMgr::InitLinceneInfo()
+{
+
+	if (m_pMainThread == NULL)
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "===CDevMgr::InitLinceneInfo===m_pMainThread == NULL====-return--->>>>\n");
+		return;
+	}
+
+	//获取当前时间串
+	time_t timeNow;
+	struct tm *ptmNow;
+	char szTime[30];
+	timeNow = time(NULL);
+	ptmNow = localtime(&timeNow);
+	sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+	typedef CBufferT<CAsyncThread*, time_t, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(szTime, strlen(szTime), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, m_pMainThread, timeNow);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pMainThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_InitLinceneInfo, (void*)pParam));
+
+}
+
+void CDevMgr::SetInitCompCapMapTables()
+{
+	m_MapCompCapTables.clear();
+	m_MapCompCapReverTables.clear();
+	std::string value;
+	std::string redisValue;
+	value.clear();
+	redisValue.clear();
+
+	value = "conf";
+	redisValue = "confcnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Conf, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Conf));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Conf, redisValue));
+
+	value = "sr";
+	redisValue = "srcnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Sr, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Sr));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Sr, redisValue));
+
+	value = "std";
+	redisValue = "stdcnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Std, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Std));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Std, redisValue));
+
+	value = "monitor";
+	redisValue = "monitorcnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Monitor, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Monitor));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Monitor, redisValue));
+
+	value = "voice";
+	redisValue = "voicecnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Voice, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Voice));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Voice, redisValue));
+
+	value = "rec";
+	redisValue = "reccnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Record, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Record));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Record, redisValue));
+
+	value = "live";
+	redisValue = "livecnt";
+	m_MapCompCapTables.insert(make_pair(e_CompanyLincene_Live, value));
+	m_MapCompCapReverTables.insert(make_pair(value, e_CompanyLincene_Live));
+	m_MapCapRedisTables.insert(make_pair(e_CompanyLincene_Live, redisValue));
+
+	for (std::map<int, string>::iterator iter = m_MapCompCapTables.begin(); iter != m_MapCompCapTables.end();iter++)
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "==SetInitCompCapMapTables-->>  m_MapCompCapTables is : first===>%d, second =====> %s \n", iter->first,iter->second.c_str());
+	}
+	m_CompCapRedisTables.clear();
+	value.clear();
+	std::string keys;
+	keys = "confcnt";
+	value = "conf@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "srcnt";
+	value = "sr@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "srstarttime";
+	value = "sr@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "srexptime";
+	value = "sr@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	keys = "stdcnt";
+	value = "std@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "stdstarttime";
+	value = "std@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "stdexptime";
+	value = "std@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	keys = "monitorcnt";
+	value = "monitor@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "monitorexptime";
+	value = "monitor@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "monitorstarttime";
+	value = "monitor@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	keys = "voicecnt";
+	value = "voice@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "voiceexptime";
+	value = "voice@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "voicestarttime";
+	value = "voice@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	keys = "reccnt";
+	value = "rec@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "recexptime";
+	value = "rec@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "recstarttime";
+	value = "rec@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	keys = "livecnt";
+	value = "live@amount";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "liveexptime";
+	value = "live@etime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+	keys = "livestarttime";
+	value = "live@stime";
+	m_CompCapRedisTables.insert(make_pair(keys, value));
+
+	/*for (std::map<string, string>::iterator iter = m_CompCapRedisTables.begin(); iter != m_CompCapRedisTables.end(); iter++)
+	{
+	sr_printf(SR_LOGLEVEL_DEBUG, "==SetInitCompCapMapTables-->>  m_CompCapRedisTables is : first===>%s, second =====> %s \n", iter->first.c_str(), iter->second.c_str());
+	
+	}
+	*/
+}
+
+void CDevMgr::Handle_InitLinceneInfo(void* pArg)
+{
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+	//
+	//sr_printf(SR_LOGLEVEL_DEBUG, "Handle_InitLinceneInfo.\n");
+
+	typedef CBufferT<CAsyncThread*, time_t, bool, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+	char* ptime = (char*)pParam->m_pData1;
+
+	CAsyncThread* pMainThread = (CAsyncThread*)(pParam->m_Arg1);
+	time_t lltime = (time_t)(pParam->m_Arg2);
+
+	CCompCapLincene* pLinceneCompCap = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pMainThread);
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pLinceneCompCap = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+	if (pLinceneCompCap == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_LoadLicenseDBToRedis pLinceneCompCap is NULL.\n");
+
+		return;
+	}
+
+	SetInitCompCapMapTables();
+	bool isInitInfo = InitLicenceInfoToRedis(pLinceneCompCap);
+	if (!isInitInfo)
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> InitLicenceInfoToRedis  is NULL.\n");
+		return;
+	}
+
+}
+
+bool CDevMgr::InitLicenceInfoToRedis(CCompCapLincene* pCompLincene)
+{
+	bool bRegister = false;
+
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return false;
+	}
+	if (!pCompLincene->SelectLinceneIdDB())
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "InitLicenceInfoToRedis CCompCapLincene::SelectLinceneIdDB()  not exists.\n");
+
+		return bRegister;
+	}
+	if (!pCompLincene->SelectCompLinceneDB())
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "InitLicenceInfoToRedis CCompCapLincene::SelectCompLinceneDB()  not exists.\n");
+
+		return bRegister;
+	}
+	else
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "InitLicenceInfoToRedis update redis db(0) Table:company_totallic_compid  Begin!!!!!\n");
+
+		//将企业信息插入redis
+		if (m_pRedisConnList[e_RC_TT_MainThread] != NULL)
+		{
+
+			m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+			std::set<int>sCompId = pCompLincene->GetCompIdList();
+
+			//遍历set中compid，并将表map中的值取出插入redis
+			for (std::set<int>::iterator iter_compid = sCompId.begin(); iter_compid != sCompId.end();) 
+			{
+
+				map<std::string, sLinceneInfo> temp_linceneInfo;
+				int currentCompId = *iter_compid;
+
+				sr_printf(SR_LOGLEVEL_DEBUG, "InitLicenceInfoToRedis currentCompId:: %d \n", currentCompId);
+
+				if (pCompLincene->GetCompLinceneInfo(currentCompId, temp_linceneInfo))
+				{
+					// 查询到企业授权信息, 存入redis
+					char compid[32] = { 0 };
+					sprintf(compid, "%d", currentCompId);
+
+					char company_totallic_compid[64] = { 0 };
+					sprintf(company_totallic_compid, "company_totallic_%s", compid);
+					char company_surplic_compid[64] = { 0 };
+					sprintf(company_surplic_compid, "company_surplic_%s", compid);
+					char company_uselic_compid[64] = { 0 };
+					sprintf(company_uselic_compid, "company_uselic_%s", compid);
+
+					char cSrcntName[32] = { 0 };
+					char cSrExptimeName[32] = { 0 };
+					char cSrStarttimeName[32] = { 0 };
+					char cStdcntName[32] = { 0 };
+					char cStdExptimeName[32] = { 0 };
+					char cStdStarttimeName[32] = { 0 };
+					char cMonitorcntName[32] = { 0 };
+					char cMonitorExptimeName[32] = { 0 };
+					char cMonitorStarttimeName[32] = { 0 };
+					char cVoicecntName[32] = { 0 };
+					char cVoiceExptimeName[32] = { 0 };
+					char cVoiceStarttimeName[32] = { 0 };
+					char cReccntName[32] = { 0 };
+					char cRecExptimeName[32] = { 0 };
+					char cRecStarttimeName[32] = { 0 };
+					char cLivecntName[32] = { 0 };
+					char cLiveExptimeName[32] = { 0 };
+					char cLiveStarttimeName[32] = { 0 };
+					char cConfcntName[32] = { 0 };
+					char cTernumName[32] = { 0 };
+
+					sprintf(cSrcntName, "%s", "srcnt");
+					sprintf(cSrExptimeName, "%s", "srexptime");
+					sprintf(cSrStarttimeName, "%s", "srstarttime");
+					sprintf(cStdcntName, "%s", "stdcnt");
+					sprintf(cStdExptimeName, "%s", "stdexptime");
+					sprintf(cStdStarttimeName, "%s", "stdstarttime");
+					sprintf(cMonitorcntName, "%s", "monitorcnt");
+					sprintf(cMonitorExptimeName, "%s", "monitorexptime");
+					sprintf(cMonitorStarttimeName, "%s", "monitorstarttime");
+					sprintf(cVoicecntName, "%s", "voicecnt");
+					sprintf(cVoiceExptimeName, "%s", "voiceexptime");
+					sprintf(cVoiceStarttimeName, "%s", "voicestarttime");
+					sprintf(cReccntName, "%s", "reccnt");
+					sprintf(cRecExptimeName, "%s", "recexptime");
+					sprintf(cRecStarttimeName, "%s", "recstarttime");
+					sprintf(cLivecntName, "%s", "livecnt");
+					sprintf(cLiveExptimeName, "%s", "liveexptime");
+					sprintf(cLiveStarttimeName, "%s", "livestarttime");
+					sprintf(cConfcntName, "%s", "confcnt");
+					sprintf(cTernumName, "%s", "ternum");
+
+					char srcnt_value[65] = { 0 };
+					char srexptime_value[65] = { 0 };
+					char srstarttime_value[65] = { 0 };
+
+					char stdcnt_value[65] = { 0 };
+					char stdexptime_value[65] = { 0 };
+					char stdstarttime_value[65] = { 0 };
+
+					char monitorcnt_value[65] = { 0 };
+					char monitorexptime_value[65] = { 0 };
+					char monitorstarttime_value[65] = { 0 };
+
+					char voicecnt_value[65] = { 0 };
+					char voiceexptime_value[65] = { 0 };
+					char voicestarttime_value[65] = { 0 };
+
+					char reccnt_value[65] = { 0 };
+					char recexptime_value[65] = { 0 };
+					char recstarttime_value[65] = { 0 };
+
+					char livecnt_value[65] = { 0 };
+					char liveexptime_value[65] = { 0 };
+					char livestarttime_value[65] = { 0 };
+
+					char confcnt_value[65] = { 0 };
+					char ternum_value[65] = { 0 };
+
+					for (map<std::string, sLinceneInfo>::iterator iter = temp_linceneInfo.begin(); iter != temp_linceneInfo.end(); iter++)
+					{
+						if (strncmp("conf", iter->first.c_str(), 4) == 0){
+						
+							sprintf(confcnt_value, "%d", iter->second.amount);
+						}
+						else if (strncmp("sr", iter->first.c_str(), 2) == 0)
+						{
+							sprintf(srcnt_value, "%d", iter->second.amount);
+							sprintf(srexptime_value, "%s", iter->second.expiretime.c_str());
+							sprintf(srstarttime_value, "%s", iter->second.starttime.c_str());
+							
+						}
+						else if (strncmp("std", iter->first.c_str(), 3) == 0)
+						{
+							sprintf(stdcnt_value, "%d", iter->second.amount);
+							sprintf(stdexptime_value, "%s",iter->second.expiretime.c_str());
+							sprintf(stdstarttime_value, "%s", iter->second.starttime.c_str());
+						
+						}
+						else if (strncmp("monitor", iter->first.c_str(), 7) == 0)
+						{
+							sprintf(monitorcnt_value, "%d", iter->second.amount);
+							sprintf(monitorexptime_value, "%s", iter->second.expiretime.c_str());
+							sprintf(monitorstarttime_value, "%s", iter->second.starttime.c_str());
+							
+						}
+						else if (strncmp("voice", iter->first.c_str(), 5) == 0)
+						{
+							sprintf(voicecnt_value, "%d", iter->second.amount);
+							sprintf(voiceexptime_value, "%s", iter->second.expiretime.c_str());
+							sprintf(voicestarttime_value, "%s", iter->second.starttime.c_str());
+
+						}
+						else if (strncmp("rec", iter->first.c_str(), 3) == 0)
+						{
+							sprintf(reccnt_value, "%d", iter->second.amount);
+							sprintf(recexptime_value, "%s", iter->second.expiretime.c_str());
+							sprintf(recstarttime_value, "%s", iter->second.starttime.c_str());
+							
+						}
+						else if (strncmp("live", iter->first.c_str(), 4) == 0)
+						{
+							sprintf(livecnt_value, "%d", iter->second.amount);
+							sprintf(liveexptime_value, "%s", iter->second.expiretime.c_str());
+							sprintf(livestarttime_value, "%s", iter->second.starttime.c_str());
+						
+						}
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "InitLicenceInfoToRedis update redis db(0) Table:sCompId=> %d,temp_linceneInfo->first:%s,  temp_linceneInfo.second->amount:%d,temp_linceneInfo.second->starttime:%s,temp_linceneInfo.second->expiretime:%s  begin!!\n", *iter_compid, iter->first.c_str(), iter->second.amount, iter->second.starttime.c_str(), iter->second.expiretime.c_str());
+					}
+
+					//插入企业授权信息，使用信息，以及剩余情况
+
+					REDISKEY strcompanytotallicecompidkey = company_totallic_compid;
+
+					REDISVDATA vCompLinceneInfodata;
+					vCompLinceneInfodata.clear();
+
+					REDISKEY strSrcntName = cSrcntName;
+					REDISVALUE str_srcnt_value = srcnt_value;
+					vCompLinceneInfodata.push_back(strSrcntName);
+					vCompLinceneInfodata.push_back(str_srcnt_value);
+
+					REDISKEY strSrExptimeName = cSrExptimeName;
+					REDISVALUE str_srexptime_value = srexptime_value;
+					vCompLinceneInfodata.push_back(strSrExptimeName);
+					vCompLinceneInfodata.push_back(str_srexptime_value);
+
+					REDISKEY strSrStarttimeName = cSrStarttimeName;
+					REDISVALUE str_srstarttime_value = srstarttime_value;
+					vCompLinceneInfodata.push_back(strSrStarttimeName);
+					vCompLinceneInfodata.push_back(str_srstarttime_value);
+
+					REDISKEY strStdcntName = cStdcntName;
+					REDISVALUE str_stdcnt_value = stdcnt_value;
+					vCompLinceneInfodata.push_back(strStdcntName);
+					vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+					REDISKEY strStdExptimeName = cStdExptimeName;
+					REDISVALUE str_stdexptime_value = stdexptime_value;
+					vCompLinceneInfodata.push_back(strStdExptimeName);
+					vCompLinceneInfodata.push_back(str_stdexptime_value);
+
+					REDISKEY strStdStarttimeName = cStdStarttimeName;
+					REDISVALUE str_stdstarttime_value = stdstarttime_value;
+					vCompLinceneInfodata.push_back(strStdStarttimeName);
+					vCompLinceneInfodata.push_back(str_stdstarttime_value);
+
+					REDISKEY strMonitorcntName = cMonitorcntName;
+					REDISVALUE str_monitorcnt_value = monitorcnt_value;
+					vCompLinceneInfodata.push_back(strMonitorcntName);
+					vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+					REDISKEY strMonitorExptimeName = cMonitorExptimeName;
+					REDISVALUE str_monitorexptime_value = monitorexptime_value;
+					vCompLinceneInfodata.push_back(strMonitorExptimeName);
+					vCompLinceneInfodata.push_back(str_monitorexptime_value);
+
+					REDISKEY strMonitorStarttimeName = cMonitorStarttimeName;
+					REDISVALUE str_monitorstarttime_value = monitorstarttime_value;
+					vCompLinceneInfodata.push_back(strMonitorStarttimeName);
+					vCompLinceneInfodata.push_back(str_monitorstarttime_value);
+
+					REDISKEY strVoicecntName = cVoicecntName;
+					REDISVALUE str_voicecnt_value = voicecnt_value;
+					vCompLinceneInfodata.push_back(strVoicecntName);
+					vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+					REDISKEY strVoiceExptimeName = cVoiceExptimeName;
+					REDISVALUE str_voiceexptime_value = voiceexptime_value;
+					vCompLinceneInfodata.push_back(strVoiceExptimeName);
+					vCompLinceneInfodata.push_back(str_voiceexptime_value);
+
+					REDISKEY strVoiceStarttimeName = cVoiceStarttimeName;
+					REDISVALUE str_voicestarttime_value = voicestarttime_value;
+					vCompLinceneInfodata.push_back(strVoiceStarttimeName);
+					vCompLinceneInfodata.push_back(str_voicestarttime_value);
+
+					REDISKEY strReccntName = cReccntName;
+					REDISVALUE str_reccnt_value = reccnt_value;
+					vCompLinceneInfodata.push_back(strReccntName);
+					vCompLinceneInfodata.push_back(str_reccnt_value);
+
+					REDISKEY strRecExptimeName = cRecExptimeName;
+					REDISVALUE str_recexptime_value = recexptime_value;
+					vCompLinceneInfodata.push_back(strRecExptimeName);
+					vCompLinceneInfodata.push_back(str_recexptime_value);
+
+					REDISKEY strRecStarttimeName = cRecStarttimeName;
+					REDISVALUE str_recstarttime_value = recstarttime_value;
+					vCompLinceneInfodata.push_back(strRecStarttimeName);
+					vCompLinceneInfodata.push_back(str_recstarttime_value);
+
+					REDISKEY strLivecntName = cLivecntName;
+					REDISVALUE str_livecnt_value = livecnt_value;
+					vCompLinceneInfodata.push_back(strLivecntName);
+					vCompLinceneInfodata.push_back(str_livecnt_value);
+
+					REDISKEY strLiveExptimeName = cLiveExptimeName;
+					REDISVALUE str_liveexptime_value = liveexptime_value;
+					vCompLinceneInfodata.push_back(strLiveExptimeName);
+					vCompLinceneInfodata.push_back(str_liveexptime_value);
+
+					REDISKEY strLiveStarttimeName = cLiveStarttimeName;
+					REDISVALUE str_livestarttime_value = livestarttime_value;
+					vCompLinceneInfodata.push_back(strLiveStarttimeName);
+					vCompLinceneInfodata.push_back(str_livestarttime_value);
+
+					REDISKEY strConfcntName = cConfcntName;
+					REDISVALUE str_confcnt_value = confcnt_value;
+					vCompLinceneInfodata.push_back(strConfcntName);
+					vCompLinceneInfodata.push_back(str_confcnt_value);
+
+					REDISKEY strTernumName = cTernumName;
+
+					//判断表是否存在，然后删除
+					bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(strcompanytotallicecompidkey.c_str());
+					if (bExistUP)
+					{
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) +++=%s  **bExistUP=%d\n", strcompanytotallicecompidkey.c_str(), bExistUP);
+						m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(strcompanytotallicecompidkey.c_str());
+					}
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanytotallicecompidkey, vCompLinceneInfodata);
+
+					sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) company_totallic_%s  **bhashHMSet_ok=%d\n", compid, bhashHMSet_ok);
+
+					//插入company_uselic_%compid表
+					REDISKEY strcompanyuselicecompidkey = company_uselic_compid;
+					REDISKEY strcompanysurplicecompidkey = company_surplic_compid;
+					vCompLinceneInfodata.clear();
+
+					//判断是否存在这张表
+					bool bExistUseLic = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_uselic_compid);
+					if (bExistUseLic)
+					{
+						//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) +++=%s  **bExistUseLic=%d\n", strcompanyuselicecompidkey.c_str(), bExistUseLic);
+						//m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(strcompanyuselicecompidkey.c_str());
+						//表存在，取值
+						RedisReplyArray vrra_comp_lincene;
+						vrra_comp_lincene.clear();
+						unsigned int nCompLinceneCount = 0;
+
+						bool bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_uselic_compid, vrra_comp_lincene);
+						nCompLinceneCount = vrra_comp_lincene.size();
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)company_uselic_compid_key=%s  bHGetAllCompUseLic_ok is :%d  nCompLinceneCount:%d\n", company_uselic_compid, bHGetAllCompUseLic_ok, nCompLinceneCount);
+						std::map<string, int> map_temp_uselincene;
+						map_temp_uselincene.clear();
+
+						if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+						{
+							for (int index = 0; index < nCompLinceneCount;)
+							{
+								char temp_key[128] = { 0 };
+								char temp_value[128] = { 0 };
+								sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+								sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+								int licenceCount = 0;
+								sscanf(temp_value, "%d", &licenceCount);
+								sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+								map_temp_uselincene.insert(make_pair(temp_key, licenceCount));
+								index += 2;
+							}
+						}
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  map_temp_uselincene is size:%d \n", map_temp_uselincene.size());
+
+						vCompLinceneInfodata.clear();
+
+						char valueCount[32] = { 0 };
+						int tempTotalCount = 0;// iter_lic->second.srcnt + iter_lic->second.stdcnt + iter_lic->second.monitorcnt + iter_lic->second.voicecnt;
+						map<string, int>::iterator iter_find = map_temp_uselincene.find("confcnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(confcnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) %s tables is  exits =====confcnt:%s  tempTotalCount=%d\n", company_uselic_compid, valueCount, tempTotalCount);
+							REDISVALUE str_confcnt_value = valueCount;
+							vCompLinceneInfodata.push_back(strConfcntName);
+							vCompLinceneInfodata.push_back(str_confcnt_value);
+						}
+						
+						//////////////////////////////////////////////////////////////////////////
+						iter_find = map_temp_uselincene.find("ternum");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int srcount = 0;
+							sscanf(srcnt_value, "%d", &srcount);
+							int stdcount = 0;
+							sscanf(stdcnt_value, "%d", &stdcount);
+							int monitorcount = 0;
+							sscanf(monitorcnt_value, "%d", &monitorcount);
+							int voicecount = 0;
+							sscanf(voicecnt_value, "%d", &voicecount);
+
+							tempTotalCount = srcount + stdcount + monitorcount + voicecount - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) %s tables is  exits =====ternum:%s,tempTotalCount=%d\n", company_uselic_compid, valueCount, tempTotalCount);
+							REDISVALUE str_ternum_value = valueCount;
+							vCompLinceneInfodata.push_back(strTernumName);
+							vCompLinceneInfodata.push_back(str_ternum_value);
+						}
+
+						iter_find = map_temp_uselincene.find("srcnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(srcnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====srcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_srnum_value = valueCount;
+							vCompLinceneInfodata.push_back(strSrcntName);
+							vCompLinceneInfodata.push_back(str_srnum_value);
+						}
+
+						iter_find = map_temp_uselincene.find("stdcnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(stdcnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====stdcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_stdnum_value = valueCount;
+							vCompLinceneInfodata.push_back(strStdcntName);
+							vCompLinceneInfodata.push_back(str_stdnum_value);
+						}
+						
+						iter_find = map_temp_uselincene.find("monitorcnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(monitorcnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====monitorcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_monnum_value = valueCount;
+							vCompLinceneInfodata.push_back(strMonitorcntName);
+							vCompLinceneInfodata.push_back(str_monnum_value);
+						}
+
+						iter_find = map_temp_uselincene.find("voicecnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(voicecnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====voicecnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_voicenum_value = valueCount;
+							vCompLinceneInfodata.push_back(strVoicecntName);
+							vCompLinceneInfodata.push_back(str_voicenum_value);
+						}
+
+						iter_find = map_temp_uselincene.find("reccnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(reccnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====reccnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_recnum_value = valueCount;
+							vCompLinceneInfodata.push_back(strReccntName);
+							vCompLinceneInfodata.push_back(str_recnum_value);
+						}
+						
+
+						iter_find = map_temp_uselincene.find("livecnt");
+						if (iter_find != map_temp_uselincene.end())
+						{
+							int count = 0;
+							sscanf(livecnt_value, "%d", &count);
+							tempTotalCount = count - iter_find->second;
+							sprintf(valueCount, "%d", tempTotalCount);
+							sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0)  tables is  exits =====livecnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+							REDISVALUE str_livenum_value = valueCount;
+							vCompLinceneInfodata.push_back(strLivecntName);
+							vCompLinceneInfodata.push_back(str_livenum_value);
+						}
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) exits   %s  **bhashHMSet_ok=%d\n", strcompanysurplicecompidkey.c_str(), bhashHMSet_ok);
+
+					}
+					else
+					{
+						char use_value[65] = { 0 };
+						sprintf(use_value, "%d", 0);
+						REDISVALUE str_value = use_value;
+
+						vCompLinceneInfodata.push_back(strConfcntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strTernumName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strSrcntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strStdcntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strMonitorcntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strVoicecntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strReccntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						vCompLinceneInfodata.push_back(strLivecntName);
+						vCompLinceneInfodata.push_back(str_value);
+
+						bool bhashHMSetUse_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) tables===%s  **bhashHMSetUse_ok=%d\n", strcompanyuselicecompidkey.c_str(), bhashHMSetUse_ok);
+
+						//company_surplic_compid 
+
+						vCompLinceneInfodata.clear();
+
+						vCompLinceneInfodata.push_back(strConfcntName);
+						vCompLinceneInfodata.push_back(str_confcnt_value);
+
+						int srcount = 0;
+						sscanf(srcnt_value, "%d", &srcount);
+						int stdcount = 0;
+						sscanf(stdcnt_value, "%d", &stdcount);
+						int monitorcount = 0;
+						sscanf(monitorcnt_value, "%d", &monitorcount);
+						int voicecount = 0;
+						sscanf(voicecnt_value, "%d", &voicecount);
+
+						int temCount = srcount + stdcount + monitorcount + voicecount;
+						sprintf(ternum_value, "%d", temCount);
+						REDISVALUE str_ternum_value = ternum_value;
+
+						vCompLinceneInfodata.push_back(strTernumName);
+						vCompLinceneInfodata.push_back(str_ternum_value);
+
+						vCompLinceneInfodata.push_back(strSrcntName);
+						vCompLinceneInfodata.push_back(str_srcnt_value);
+
+						vCompLinceneInfodata.push_back(strStdcntName);
+						vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+						vCompLinceneInfodata.push_back(strMonitorcntName);
+						vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+						vCompLinceneInfodata.push_back(strVoicecntName);
+						vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+						vCompLinceneInfodata.push_back(strReccntName);
+						vCompLinceneInfodata.push_back(str_reccnt_value);
+
+						vCompLinceneInfodata.push_back(strLivecntName);
+						vCompLinceneInfodata.push_back(str_livecnt_value);
+
+						bool bhashHMSetSur_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) company_surplic::::%s  **bhashHMSetSur_ok=%d\n", strcompanysurplicecompidkey.c_str(), bhashHMSetSur_ok);
+
+
+					}
+
+					/////
+					CheckRedisTernumLicence(currentCompId);
+
+					// 将企业id存入redis
+					char available_compid[128] = { 0 };
+					sprintf(available_compid, "company_available");
+
+					char cCompIdName[128] = { 0 };
+					sprintf(cCompIdName, "%s", compid);
+
+					char comp_status_value[65] = { 0 };
+					sprintf(comp_status_value, "%d", 1);
+
+					REDISKEY strcompanyavaliableidkey = available_compid;
+
+					REDISVDATA vCompIdListdata;
+					vCompIdListdata.clear();
+
+					REDISKEY strCompIdName = cCompIdName;
+					REDISVALUE str_status_value = comp_status_value;
+
+					vCompIdListdata.push_back(strCompIdName);
+					vCompIdListdata.push_back(str_status_value);
+
+					bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyavaliableidkey, vCompIdListdata);
+					sr_printf(SR_LOGLEVEL_DEBUG, "==-->>InitLicenceInfoToRedis redis db(0) company_available  number:%s  **bhashHMSet_ok=%d\n", compid, bhashHMSet_ok);
+
+
+					iter_compid++;
+				}
+				else
+				{
+					//未查询到企业授权信息
+					sCompId.erase(iter_compid++);
+					sr_printf(SR_LOGLEVEL_INFO, "InitLicenceInfoToRedis update redis db(0) Table:company_totallic_%d  not exist!!!!!\n", *iter_compid);
+					continue;
+				}
+
+			}
+
+		}
+
+		bRegister = true;
+	}
+
+	return bRegister;
+}
+
+void CDevMgr::SetCompLinceneMapInfo(std::map<string, sLinceneInfo>& mapLinceneTable, char* src, char* value)
+{
+	//sr_printf(SR_LOGLEVEL_DEBUG, "=SetCompLinceneMapInfo ==:src： %s, value = %s \n", src, value);
+
+	std::string key;
+	key.clear();
+	key = src;
+	sLinceneInfo info;
+	std::map<std::string,std::string >::iterator iter_mapComp = m_CompCapRedisTables.find(key);
+	if (iter_mapComp != m_CompCapRedisTables.end())
+	{
+		char type[16] = { 0 };
+		char attribute[16] = { 0 };
+		GetCompLinceneTypeInfo(iter_mapComp->second.c_str(),type,attribute);
+		sr_printf(SR_LOGLEVEL_DEBUG, "=SetCompLinceneMapInfo ==:iter_mapComp->first： %s, iter_mapComp->second = %s,type = %s, attribute = %s \n", iter_mapComp->first.c_str() ,iter_mapComp->second.c_str(), type, attribute);
+
+		string linceneType;
+		linceneType = type;
+		std::map<string, sLinceneInfo>::iterator iter_temp = mapLinceneTable.find(linceneType);
+		if (iter_temp != mapLinceneTable.end())
+		{
+			info = iter_temp->second;
+		}
+		//sr_printf(SR_LOGLEVEL_DEBUG, "=SetCompLinceneMapInfo Before==:info.amount： %d, info.stime = %s, info.etime=%s \n", info.amount, info.starttime.c_str(),info.expiretime.c_str());
+		if (strncmp("amount", attribute,6) == 0)
+		{
+			int count = 0;
+			sscanf(value, "%d", &count);
+			info.amount = count;
+		}
+		else if (strncmp("stime", attribute,5) == 0)
+		{
+			info.starttime = value;
+			//sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str())
+		}
+		else if (strncmp("etime", attribute,5) == 0)
+		{
+			info.expiretime = value;
+		}
+		//sr_printf(SR_LOGLEVEL_DEBUG, "=SetCompLinceneMapInfo After==:info.amount： %d, info.stime = %s, info.etime=%s \n", info.amount, info.starttime.c_str(), info.expiretime.c_str());
+
+		mapLinceneTable[linceneType] = info;
+	}
+	
+
+}
+
+
+void CDevMgr::GetCompLinceneTypeInfo(const char* src, char* type, char* attribute)
+{
+	std::string strtmp = src;
+	int index;
+	char *sep1 = { "@" };
+	index = strtmp.find(sep1);
+	if (index != strtmp.npos)
+	{
+		std::string srcsubstr = strtmp.substr(0, index);
+		std::string srcsubstrend = strtmp.substr(index + 1, strtmp.length());
+		memcpy(type, (char*)srcsubstr.c_str(), srcsubstr.length());
+		memcpy(attribute, (char*)srcsubstrend.c_str(), srcsubstrend.length());
+	}
+	
+}
+
+void CDevMgr::SetMcCompLinceneInfo(unsigned int mcid, unsigned int compid, int usecount, bool isstart)
+{
+	sr_printf(SR_LOGLEVEL_INFO, "SetMcCompLinceneInfo ==：mcid:%d---compid:%d-----usecount:%d---isstart:%d begin \n", mcid, compid, usecount, isstart);
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+	char cmc_companyid[16] = { 0 };
+	sprintf(cmc_companyid, "%s", "mc_companyid");
+	char ccompid[64] = { 0 };
+	sprintf(ccompid, "%d", compid);
+
+	char cmcid[128] = { 0 };
+	sprintf(cmcid, "%d", mcid);
+
+	REDISKEY strmccompanyidkey = cmc_companyid;
+	REDISFILEDS vGetFileds;
+	vGetFileds.clear();
+	RedisReplyArray vRedisReplyArray;
+	vRedisReplyArray.clear();
+
+	REDISKEY strMcIdName = cmcid;
+
+	vGetFileds.push_back(strMcIdName);
+
+	bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(cmc_companyid);
+	//sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompLinceneInfo == linceneInfo：tables:%s---bExist:%d begin \n", cmc_companyid, bExist);
+
+	if (bExist)
+	{
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strmccompanyidkey, vGetFileds, vRedisReplyArray);
+		if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+		{
+			std::string sCompanyInfoMc;
+			sCompanyInfoMc.clear();
+			sCompanyInfoMc = vRedisReplyArray[0].str;
+			sr_printf(SR_LOGLEVEL_INFO, "SetMcCompLinceneInfo == linceneInfo：tables:%s---bhashHMGet_ok:%d,sCompanyInfoMc：%s, ccompid ： %s begin \n", strmccompanyidkey.c_str(), bhashHMGet_ok, sCompanyInfoMc.c_str(), ccompid);
+			//截取字符串
+			std::map<std::string, int>map_companyidamount;
+			map_companyidamount.clear();
+			SubString(map_companyidamount, sCompanyInfoMc);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompLinceneInfo == sCompanyInfoMc:%s---- map_companyidamount.size:%d  \n", sCompanyInfoMc.c_str(), map_companyidamount.size());
+			/*for (std::map<string, int>::iterator it = map_companyidamount.begin(); it != map_companyidamount.end(); it++)
+			{
+			sr_printf(SR_LOGLEVEL_INFO, "SetMcCompLinceneInfo == map_companyidamount：first:%s---- second:%d  \n", it->first.c_str(), it->second);
+
+			}*/
+			std::string sResult;
+			sResult.clear();
+
+
+			std::map<std::string, int>::iterator iter = map_companyidamount.find(ccompid);
+			if (iter != map_companyidamount.end())
+			{
+				if (isstart)
+				{
+					iter->second += usecount;
+				}
+				else
+				{
+					iter->second -= usecount;
+				}
+			}
+			else
+			{
+				if (isstart)
+				{
+					map_companyidamount.insert(make_pair(ccompid, usecount));
+				}
+			}
+			for (iter = map_companyidamount.begin(); iter != map_companyidamount.end(); iter++)
+			{
+				if (iter->second > 0)
+				{
+					char value[16] = { 0 };
+					sprintf(value, "%d", iter->second);
+					sResult += iter->first + "=" + value + ":";
+				}
+			}
+			//sResult.pop_back();
+			//sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompLinceneInfo ==》》》》 sResult =====:%s \n", sResult.c_str());
+			if (sResult.length() > 0)
+			{
+				sResult.erase(sResult.end() - 1);
+			}
+			char result[256] = { 0 };
+			sprintf(result, "%s", sResult.c_str());
+
+			//sr_printf(SR_LOGLEVEL_DEBUG, "sResult =====:%s=====>>> result = %s\n", sResult.c_str(), result);
+
+			//insert redis
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(cmc_companyid, result, cmcid);
+
+
+		}
+	}
+	else
+	{
+		char cmc_companyinfo[128] = { 0 };
+		sprintf(cmc_companyinfo, "%d=%d", compid, usecount);
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(cmc_companyid, cmc_companyinfo, cmcid);
+
+		sr_printf(SR_LOGLEVEL_INFO, "SetMcCompLinceneInfo == linceneInfo：tables:%s---- bExist:%d ---- cmc_companyinfo:%s\n", cmc_companyid, bExist, cmc_companyinfo);
+	}
+
+}
+
+void CDevMgr::SetConfToCompList(unsigned int compid, unsigned long long confid, int type)
+{
+	sr_printf(SR_LOGLEVEL_INFO, "SetConfToCompList ==：compid:%d---confid:%d--->>begin \n", compid, confid);
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+
+	char confidcompany_key[128] = { 0 };
+	char conf_id_value[128] = { 0 };
+	char companyid_value[128] = { 0 };
+
+	sprintf(confidcompany_key, "%s", "conference_companyid");
+	sprintf(companyid_value, "%d", compid);
+
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+	if (type == 1)
+	{
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidcompany_key, companyid_value, conf_id_value);
+	}
+	else
+	{
+		m_pRedisConnList[e_RC_TT_MainThread]->deletehashvalue(confidcompany_key, conf_id_value);
+	}
+
+}
+
+void CDevMgr::SubString(std::map<std::string, int>& cmd_key_val, std::string src)
+{
+	int index;
+	cmd_key_val.clear();
+	char *sep1 = { ":" };
+	char *sep2 = { "=" };
+	int seplen1 = strlen(sep1);
+	int seplen2 = strlen(sep2);
+
+	int lastindex = 0;
+	index = src.find(sep1);
+	//sr_printf(SR_LOGLEVEL_INFO, "SubString == src  ----> %s----\n", src.c_str());
+
+	if (index == src.npos && src.length() > 0)
+	{
+		int startposition = src.find(sep2);
+		if (startposition > 0)
+		{
+			int value = 0;
+			sscanf(src.substr(startposition + seplen2, src.length()).c_str(), "%d", &value);
+			cmd_key_val.insert(std::pair<std::string, int>(src.substr(0, startposition), value));
+			//sr_printf(SR_LOGLEVEL_INFO, "SubString == src  ---->src.substr(0, startposition):: %s----value:%d \n", src.substr(0, startposition), value);
+		}
+	}
+	while (index != src.npos)
+	{
+
+		std::string srcsubstr = src.substr(lastindex, index - lastindex);
+
+		int subindex = srcsubstr.find(sep2);
+		if (subindex > 0)
+		{
+			int value = 0;
+			sscanf(srcsubstr.substr(subindex + seplen2, srcsubstr.length()).c_str(), "%d", &value);
+			cmd_key_val.insert(std::pair<std::string, int>(srcsubstr.substr(0, subindex), value));
+		}
+
+		lastindex = index;
+
+		index = src.find(sep1, index + 1);
+
+		if (index > 0)
+		{
+			lastindex += seplen1;
+
+		}
+		else
+		{
+			std::string lastsubstr = src.substr(lastindex + seplen1, src.length());
+
+			int lastsubindex = lastsubstr.find(sep2);
+			if (lastsubindex > 0)
+			{
+				int value = 0;
+				sscanf(lastsubstr.substr(lastsubindex + seplen2, lastsubstr.length()).c_str(), "%d", &value);
+
+				cmd_key_val.insert(std::pair<std::string, int>(lastsubstr.substr(0, lastsubindex), value));
+			}
+		}
+	}
+}
+
+int CDevMgr::GetCompLinceneSuperInfo(int compid, unsigned int licencetype, int needcount, bool writeflag)
+{
+	sr_printf(SR_LOGLEVEL_DEBUG, "GetCompLinceneSuperInfo == linceneInfo：compid:%d---licencetype:%d---needcount:%d begin \n", compid, licencetype, needcount);
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false || compid == 0)
+	{
+		return 0;
+	}
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+	char company_surplic_compid_key[256] = { 0 };
+	sprintf(company_surplic_compid_key, "company_surplic_%d", compid);
+	char lincenekey[128] = { 0 };
+	std::map<int,string>::iterator iter_type = m_MapCapRedisTables.find(licencetype);
+	if (iter_type != m_MapCapRedisTables.end())
+	{
+		sprintf(lincenekey, "%s", iter_type->second.c_str());
+	}
+	sr_printf(SR_LOGLEVEL_DEBUG, "GetCompLinceneSuperInfo == lincenekey：%s ---  licencetype=%d   begin \n", lincenekey, licencetype);
+	
+	int surplicnum = -1;
+	char *ptrRet = NULL;
+	ptrRet = m_pRedisConnList[e_RC_TT_UpMsqThread]->gethashvalue(company_surplic_compid_key, lincenekey); // 获取该key对应的value
+	if (ptrRet != NULL)
+	{
+		int temp_count = 0;
+		temp_count = atoi(ptrRet);
+		//sr_printf(SR_LOGLEVEL_DEBUG, "GetCompLinceneSuperInfo == temp_count:%d-----lincenekey=%s begin \n", temp_count, lincenekey);
+
+		//处理分配
+		if (temp_count >= needcount)
+		{
+			surplicnum = needcount;
+		}
+		else
+		{
+			surplicnum = temp_count;
+		}
+
+		delete ptrRet; // 不删除会导致内存泄漏
+	}
+
+	if (writeflag && surplicnum > 0)
+	{
+
+		OperationRedisUseSurpLincene(compid, lincenekey, surplicnum, true);
+	}
+	return surplicnum;
+}
+// opertype - true: 使用操作  false: 回收操作
+void CDevMgr::OperationRedisUseSurpLincene(int compid, const char* srckey, int opcount, bool opertype)
+{
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_INFO, "OperationRedisUseSurpLincene == linceneInfo：compid:%d---licencetype:%s opcount=%d,begin \n", compid, srckey, opcount);
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+	char compuselincene_key[128] = { 0 };
+	char compsurplincene_key[128] = { 0 };
+	char lincene_value[16] = { 0 };
+	sprintf(compuselincene_key, "company_uselic_%d", compid);
+	sprintf(compsurplincene_key, "company_surplic_%d", compid);
+
+	bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compuselincene_key);
+	bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+	//sr_printf(/*SR_LOGLEVEL_INFO*/, "OperationRedisUseSurpLincene == bExistUse：%d 。bExistSurp：%d,compuselincene_key=%s,compsurplincene_key=%s\n,", bExistUse, bExistSurp, compuselincene_key, compsurplincene_key);
+	if (bExistUse && bExistSurp)
+	{
+
+		REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+		REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		REDISKEY strConfcntFieldName = srckey;
+
+		vGetFileds.push_back(strConfcntFieldName);
+		//sr_printf(SR_LOGLEVEL_DEBUG, "===OperationRedisUseSurpLincene == strCompanyUseLinceneKey：%s 。strCompanySurpLinceneKey：%s \n,", strCompanyUseLinceneKey.c_str(), strCompanySurpLinceneKey.c_str());
+
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+		//sr_printf(SR_LOGLEVEL_DEBUG, "===OperationRedisUseSurpLincene == bhashHMGet_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGet_ok, vRedisReplyArray.size());
+
+		if (bhashHMGet_ok
+			&& vRedisReplyArray.size() == vGetFileds.size())
+		{
+			//
+			int useConfcnt = 0;
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useConfcnt);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "strCompanyUserLinceneKey == useConfcnt：%d \n", useConfcnt);
+
+			if (opertype)
+			{
+				useConfcnt += opcount;
+			}
+			else
+			{
+				useConfcnt -= opcount;
+			}
+			//回写
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+			sprintf(lincene_value, "%d", useConfcnt);
+
+			REDISVALUE strconfcntvalue = lincene_value;
+			vCompLinceneData.push_back(strConfcntFieldName);
+			vCompLinceneData.push_back(strconfcntvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+			////
+			vRedisReplyArray.clear();
+
+			sr_printf(SR_LOGLEVEL_INFO, "OperationRedisUseSurpLincene == strCompanyUserLinceneKey-%s：lincene_value:%s,strConfcntFieldName:%s,strconfcntvalue:%s---begin \n", strCompanySurpLinceneKey.c_str(), lincene_value, strConfcntFieldName.c_str(), strconfcntvalue.c_str());
+			std::map<string, int> mapCompLincene;
+			GetCompTotalLincene(compid, mapCompLincene);
+			std::map<string, int>::iterator iter_lincene = mapCompLincene.find(strConfcntFieldName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				int surpLinceneCount = iter_lincene->second - useConfcnt;
+				//回写
+				vCompLinceneData.clear();
+				sprintf(lincene_value, "%d", surpLinceneCount);
+
+				strconfcntvalue = lincene_value;
+				vCompLinceneData.push_back(strConfcntFieldName);
+				vCompLinceneData.push_back(strconfcntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+				sr_printf(SR_LOGLEVEL_INFO, "OperationRedisUseSurpLincene == strCompanySurpLinceneKey-%s：lincene_value:%s,strConfcntFieldName%s,strconfcntvalue:%s--bhashHMSet_ok:%d---begin \n", strCompanySurpLinceneKey.c_str(), lincene_value, strConfcntFieldName.c_str(), strconfcntvalue.c_str(), bhashHMSet_ok);
+
+			}
+			//bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+			//if (bhashHMGet_ok
+			//	&& vRedisReplyArray.size() == vGetFileds.size())
+			//{
+			//	int surpReccnt = 0;
+
+			//	sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpReccnt);
+			//	sr_printf(SR_LOGLEVEL_INFO, "strCompanySurpLinceneKey == surpReccnt：%d \n", surpReccnt);
+
+			//	if (opertype)
+			//	{
+			//		surpReccnt -= opcount;
+			//	}
+			//	else
+			//	{
+			//		surpReccnt += opcount;
+			//	}
+
+			//	//回写
+			//	vCompLinceneData.clear();
+			//	sprintf(lincene_value, "%d", surpReccnt);
+
+
+			//	strconfcntvalue = lincene_value;
+			//	vCompLinceneData.push_back(strConfcntFieldName);
+			//	vCompLinceneData.push_back(strconfcntvalue);
+
+			//	bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+			//	sr_printf(SR_LOGLEVEL_INFO, "OperationRedisUseSurpLincene == strCompanySurpLinceneKey-%s：lincene_value:%s,strConfcntFieldName%s,strconfcntvalue:%s--bhashHMSet_ok:%d---begin \n", strCompanySurpLinceneKey.c_str(), lincene_value, strConfcntFieldName.c_str(), strconfcntvalue.c_str(), bhashHMSet_ok);
+
+			//}
+
+		}
+
+	}
+
+
+	CheckRedisTernumLicence(compid);
+}
+
+void CDevMgr::TimeoutConfLinceneRevover(std::vector<SR_uint64> ConfidList)
+{
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "TimeoutConfLinceneRevover ==ConfidList.szie:%d====>begin \n", ConfidList.size());
+	if (ConfidList.size() == 0)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+	char confcompanyidkey[32] = { 0 };
+	sprintf(confcompanyidkey, "%s", "conference_companyid");
+	for (std::vector<SR_uint64>::iterator iter = ConfidList.begin(); iter != ConfidList.end(); iter++)
+	{
+		SR_uint64 confid = *iter;
+		char* ptrRet = NULL;
+		//delete conference_companyid 
+		char conferenceid[64] = { 0 };
+
+#ifdef WIN32
+		sprintf(conferenceid, "%I64d", confid);
+#elif defined LINUX
+		sprintf(conferenceid, "%lld", confid);
+#endif
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "TimeoutConfLinceneRevover ==ConfidList.value:%lld====>conferenceid::%s---begin \n", confid, conferenceid);
+		ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(confcompanyidkey, conferenceid); // 获取该key对应的value
+		if (ptrRet != NULL)
+		{
+			m_pRedisConnList[e_RC_TT_MainThread]->deletehashvalue(confcompanyidkey, conferenceid);
+			delete ptrRet; // 不删除会导致内存泄漏
+		}
+	}
+
+	//
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+	char timeout_mcgroupidkey[256] = { 0 };
+	sprintf(timeout_mcgroupidkey, "%s", "timeout_mc_group");
+	RedisReplyArray vrra_db2_deviceid_groupid;
+	vrra_db2_deviceid_groupid.clear();
+	unsigned int nMcGroupidList = 0;
+	bool bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(timeout_mcgroupidkey, vrra_db2_deviceid_groupid);
+	nMcGroupidList = vrra_db2_deviceid_groupid.size();
+	sr_printf(SR_LOGLEVEL_DEBUG, "TimeoutConfLinceneRevover ==nMcGroupidList:%d====>bHGetAllMcGroupid_ok:%d   begin \n", nMcGroupidList, bHGetAllMcGroupid_ok);
+	//
+	std::map<string, string> mapMcGroupid; // key-mcid,value-groupid
+	mapMcGroupid.clear();
+
+	if (bHGetAllMcGroupid_ok && (nMcGroupidList > 0) && (nMcGroupidList % 2 == 0))
+	{
+		for (int index = 0; index < nMcGroupidList;)
+		{
+			std::string mcid;
+			std::string groupid;
+			mcid = vrra_db2_deviceid_groupid[index].str;
+			groupid = vrra_db2_deviceid_groupid[index + 1].str;
+			mapMcGroupid.insert(make_pair(mcid, groupid));
+			sr_printf(SR_LOGLEVEL_INFO, "TimeoutConfLinceneRevover ==mcid:%s====>groupid:%s ==>mapMcGroupid.size:%d  begin \n", mcid.c_str(), groupid.c_str(), mapMcGroupid.size());
+			index += 2;
+		}
+		//删除表
+		m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(timeout_mcgroupidkey);
+	}
+
+	char mc_companyid_key[32] = { 0 };
+	sprintf(mc_companyid_key, "%s", "mc_companyid");
+
+	std::map<string, map<std::string, int> > mapRecoverCompanyLinc;
+
+	for (std::map<string, string>::iterator iter_mc_group = mapMcGroupid.begin(); iter_mc_group != mapMcGroupid.end(); iter_mc_group++)
+	{
+		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+
+		char mc_value[32] = { 0 };
+		sprintf(mc_value, "%s", iter_mc_group->first.c_str());
+		char group_value[32] = { 0 };
+		sprintf(group_value, "%s", iter_mc_group->second.c_str());
+
+		//delete tables
+		m_pRedisConnList[e_RC_TT_MainThread]->deletehashvalue(mc_companyid_key, mc_value);
+
+		std::map<string, map<std::string, int> > mapCompLinceneInfo; // key-compid,value-linceneCount,主要记录同一个mc下会议的企业授权
+		mapCompLinceneInfo.clear();
+
+		for (std::vector<SR_uint64>::iterator iter_conf = ConfidList.begin(); iter_conf != ConfidList.end(); iter_conf++)
+		{
+			SR_uint64 confid = *iter_conf;
+			char conferenceid[64] = { 0 };
+
+#ifdef WIN32
+			sprintf(conferenceid, "%I64d", confid);
+#elif defined LINUX
+			sprintf(conferenceid, "%lld", confid);
+#endif
+			char company_confid_key[128] = { 0 };
+
+			sprintf(company_confid_key, "mclicene_%s_%s", mc_value, conferenceid);
+
+			RedisReplyArray vrra_db2_deviceid_compid;
+			vrra_db2_deviceid_compid.clear();
+			unsigned int nMcCompidList = 0;
+			bool bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_confid_key, vrra_db2_deviceid_compid);
+			nMcCompidList = vrra_db2_deviceid_compid.size();
+
+			std::map<string, int> mapLinceneInfo; // key-LiceneType,value-linceneCount
+			mapLinceneInfo.clear();
+			
+			if (bHGetAllMcGroupid_ok && (nMcCompidList > 0) && (nMcCompidList % 2 == 0))
+			{
+				for (int index = 0; index < nMcCompidList;)
+				{
+					std::string compid;
+					std::string linceneInfo;
+					compid = vrra_db2_deviceid_compid[index].str;
+					linceneInfo = vrra_db2_deviceid_compid[index + 1].str;
+					sr_printf(SR_LOGLEVEL_DEBUG, "TimeoutConfLinceneRevover ==compid:%s====>linceneInfo:%s   begin \n", compid.c_str(), linceneInfo.c_str());
+					std::map<std::string, int> cmd_key_val;
+					SubString(cmd_key_val, linceneInfo);
+					for (std::map<std::string, int>::iterator iterCompanyLincene = cmd_key_val.begin(); iterCompanyLincene != cmd_key_val.end(); iterCompanyLincene++)
+					{
+						std::string sLiceneType;
+						sLiceneType = iterCompanyLincene->first;
+						int liceneCount = iterCompanyLincene->second;
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "TimeoutConfLinceneRevover ==cmd_key_val : first::%s ,value::%d  ====>  \n", sLiceneType.c_str(), liceneCount);
+						mapLinceneInfo.insert(make_pair(sLiceneType, liceneCount));
+					}
+					mapCompLinceneInfo.insert(make_pair(compid, mapLinceneInfo));
+					index += 2;
+				}
+			}
+
+			for (std::map<string, map<std::string, int> >::iterator iter_tempComplicence = mapCompLinceneInfo.begin(); iter_tempComplicence != mapCompLinceneInfo.end();iter_tempComplicence++)
+			{
+				std::map<string, map<std::string, int> >::iterator iter_findcomp = mapRecoverCompanyLinc.find(iter_tempComplicence->first);
+				if (iter_findcomp != mapRecoverCompanyLinc.end())
+				{
+					//存在
+					for (map<std::string, int>::iterator iter_templinc = iter_tempComplicence->second.begin(); iter_templinc != iter_tempComplicence->second.end(); iter_templinc++)
+					{
+						std::map<string, int>::iterator iter_templincinfo = iter_findcomp->second.find(iter_templinc->first);
+						if (iter_templincinfo != iter_findcomp->second.end())
+						{
+							iter_templincinfo->second += iter_templinc->second;
+						}
+						else
+						{
+							map<std::string, int> templincene;
+							templincene = iter_findcomp->second;
+							templincene.insert(make_pair(iter_templinc->first, iter_templinc->second));
+							iter_findcomp->second = templincene;
+						}
+					}
+
+				}
+				else
+				{
+					map<std::string, int> templincene;
+					for (map<std::string, int>::iterator iter_templinc = iter_tempComplicence->second.begin(); iter_templinc != iter_tempComplicence->second.end(); iter_templinc++)
+					{
+						templincene.insert(make_pair(iter_templinc->first, iter_templinc->second));
+					}
+					mapRecoverCompanyLinc.insert(make_pair(iter_tempComplicence->first, templincene));
+				}
+			}
+
+			//删除表
+			m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(company_confid_key);
+		}
+
+		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+		for (std::map<string, map<std::string, int> >::iterator iter_tempMcComp = mapCompLinceneInfo.begin(); iter_tempMcComp != mapCompLinceneInfo.end();iter_tempMcComp++)
+		{
+			char compuselincene_key[256] = { 0 };
+
+			sprintf(compuselincene_key, "company_uselicinlocalmc_%s_%s_%s", group_value, mc_value, iter_tempMcComp->first.c_str());
+			char cSrcntName[32] = { 0 };
+			char cStdcntName[32] = { 0 };
+			char cMonitorcntName[32] = { 0 };
+			char cVoicecntName[32] = { 0 };
+			char cReccntName[32] = { 0 };
+			char cLivecntName[32] = { 0 };
+			char cConfcntName[32] = { 0 };
+			char cTernumName[32] = { 0 };
+
+			sprintf(cSrcntName, "%s", "srcnt");
+			sprintf(cStdcntName, "%s", "stdcnt");
+			sprintf(cMonitorcntName, "%s", "monitorcnt");
+			sprintf(cVoicecntName, "%s", "voicecnt");
+			sprintf(cReccntName, "%s", "reccnt");
+			sprintf(cLivecntName, "%s", "livecnt");
+			sprintf(cConfcntName, "%s", "confcnt");
+			sprintf(cTernumName, "%s", "ternum");
+
+			REDISKEY strSrcntName = cSrcntName;
+			REDISKEY strStdcntName = cStdcntName;
+			REDISKEY strMonitorcntName = cMonitorcntName;
+			REDISKEY strVoicecntName = cVoicecntName;
+			REDISKEY strReccntName = cReccntName;
+			REDISKEY strLivecntName = cLivecntName;
+			REDISKEY strConfcntName = cConfcntName;
+			REDISKEY strTernumName = cTernumName;
+
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			vGetFileds.push_back(strConfcntName);
+			vGetFileds.push_back(strSrcntName);
+			vGetFileds.push_back(strStdcntName);
+			vGetFileds.push_back(strMonitorcntName);
+			vGetFileds.push_back(strVoicecntName);
+			vGetFileds.push_back(strReccntName);
+			vGetFileds.push_back(strLivecntName);
+			REDISKEY struselicincelocalmckey = compuselincene_key;
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(struselicincelocalmckey, vGetFileds, vRedisReplyArray);
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "===TimeoutConfLinceneRevover struselicincelocalmckey:%s == bhashHMGet_ok：%d 。vRedisReplyArray：%d,compuselincene_key:%s \n,", struselicincelocalmckey, bhashHMGet_ok, vRedisReplyArray.size(), compuselincene_key);
+
+			if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+			{
+				int useconfcnt = 0;
+				int usesrcnt = 0;
+				int usestdcnt = 0;
+				int usemonitorcnt = 0;
+				int usevoicecnt = 0;
+				int usereccnt = 0;
+				int uselivecnt = 0;
+				int useternum = 0;
+
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useconfcnt);
+				sscanf(vRedisReplyArray[1].str.c_str(), "%d", &usesrcnt);
+				sscanf(vRedisReplyArray[2].str.c_str(), "%d", &usestdcnt);
+				sscanf(vRedisReplyArray[3].str.c_str(), "%d", &usemonitorcnt);
+				sscanf(vRedisReplyArray[4].str.c_str(), "%d", &usevoicecnt);
+				sscanf(vRedisReplyArray[5].str.c_str(), "%d", &usereccnt);
+				sscanf(vRedisReplyArray[6].str.c_str(), "%d", &uselivecnt);
+
+				std::map<std::string, int>::iterator iter_find = iter_tempMcComp->second.find(strConfcntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					useconfcnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strSrcntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					usesrcnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strStdcntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					usestdcnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strMonitorcntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					usemonitorcnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strVoicecntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					usevoicecnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strReccntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					usereccnt -= iter_find->second;
+				}
+				iter_find = iter_tempMcComp->second.find(strLivecntName);
+				if (iter_find != iter_tempMcComp->second.end())
+				{
+					uselivecnt -= iter_find->second;
+				}
+
+				useternum = usesrcnt + usestdcnt + usemonitorcnt + usevoicecnt;
+				REDISVDATA vCompLinceneData;
+				vCompLinceneData.clear();
+				char cconfcntvalue[16] = { 0 };
+				sprintf(cconfcntvalue, "%d", useconfcnt);
+				char csrcntvalue[16] = { 0 };
+				sprintf(csrcntvalue, "%d", usesrcnt);
+				char cstdcntvalue[16] = { 0 };
+				sprintf(cstdcntvalue, "%d", usestdcnt);
+				char cmonitorcntvalue[16] = { 0 };
+				sprintf(cmonitorcntvalue, "%d", usemonitorcnt);
+				char cvoicecntvalue[16] = { 0 };
+				sprintf(cvoicecntvalue, "%d", usevoicecnt);
+				char creccntvalue[16] = { 0 };
+				sprintf(creccntvalue, "%d", usereccnt);
+				char clivecntvalue[16] = { 0 };
+				sprintf(clivecntvalue, "%d", uselivecnt);
+				char cternumvalue[16] = { 0 };
+				sprintf(cternumvalue, "%d", useternum);
+
+				REDISVALUE struseconfcntvalue = cconfcntvalue;
+				vCompLinceneData.push_back(strConfcntName);
+				vCompLinceneData.push_back(struseconfcntvalue);
+
+				REDISVALUE struseternumvalue = cternumvalue;
+				vCompLinceneData.push_back(strTernumName);
+				vCompLinceneData.push_back(struseternumvalue);
+
+				REDISVALUE strusesrcntvalue = csrcntvalue;
+				vCompLinceneData.push_back(strSrcntName);
+				vCompLinceneData.push_back(strusesrcntvalue);
+
+				REDISVALUE strusestdcntvalue = cstdcntvalue;
+				vCompLinceneData.push_back(strStdcntName);
+				vCompLinceneData.push_back(strusestdcntvalue);
+
+				REDISVALUE strusemoncntvalue = cmonitorcntvalue;
+				vCompLinceneData.push_back(strMonitorcntName);
+				vCompLinceneData.push_back(strusemoncntvalue);
+
+				REDISVALUE strusevoicecntvalue = cvoicecntvalue;
+				vCompLinceneData.push_back(strVoicecntName);
+				vCompLinceneData.push_back(strusevoicecntvalue);
+
+				REDISVALUE strusereccntvalue = creccntvalue;
+				vCompLinceneData.push_back(strReccntName);
+				vCompLinceneData.push_back(strusereccntvalue);
+
+				REDISVALUE struselivecntvalue = clivecntvalue;
+				vCompLinceneData.push_back(strLivecntName);
+				vCompLinceneData.push_back(struselivecntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(struselicincelocalmckey, vCompLinceneData);
+
+
+			}
+
+		}
+
+
+	}
+
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	for (std::map<string, map<std::string, int> >::iterator iter_recover = mapRecoverCompanyLinc.begin(); iter_recover != mapRecoverCompanyLinc.end(); iter_recover++)
+	{
+		std::string strcompid = iter_recover->first;
+		int compid = 0;
+		sscanf(strcompid.c_str(), "%d", &compid);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===TimeoutConfLinceneRevover == strcompid：%s 。\n,", strcompid.c_str());
+		char recoveruselincene[128] = { 0 };
+		char recoversuperlincene[128] = { 0 };
+		sprintf(recoveruselincene, "company_uselic_%s", strcompid.c_str());
+		sprintf(recoversuperlincene, "company_surplic_%s", strcompid.c_str());
+
+		REDISKEY strrecoveruselincenekey = recoveruselincene;
+		REDISKEY strrecoversuperlincenekey = recoversuperlincene;
+
+		char cSrcntName[32] = { 0 };
+		char cStdcntName[32] = { 0 };
+		char cMonitorcntName[32] = { 0 };
+		char cVoicecntName[32] = { 0 };
+		char cReccntName[32] = { 0 };
+		char cLivecntName[32] = { 0 };
+		char cConfcntName[32] = { 0 };
+
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strReccntName = cReccntName;
+		REDISKEY strLivecntName = cLivecntName;
+		REDISKEY strConfcntName = cConfcntName;
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		vGetFileds.push_back(strConfcntName);
+		vGetFileds.push_back(strSrcntName);
+		vGetFileds.push_back(strStdcntName);
+		vGetFileds.push_back(strMonitorcntName);
+		vGetFileds.push_back(strVoicecntName);
+		vGetFileds.push_back(strReccntName);
+		vGetFileds.push_back(strLivecntName);
+
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strrecoveruselincenekey, vGetFileds, vRedisReplyArray);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===TimeoutConfLinceneRevover == bhashHMGet_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGet_ok, vRedisReplyArray.size());
+
+		if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+		{
+			int useconfcnt = 0;
+			int usesrcnt = 0;
+			int usestdcnt = 0;
+			int usemonitorcnt = 0;
+			int usevoicecnt = 0;
+			int usereccnt = 0;
+			int uselivecnt = 0;
+
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useconfcnt);
+			sscanf(vRedisReplyArray[1].str.c_str(), "%d", &usesrcnt);
+			sscanf(vRedisReplyArray[2].str.c_str(), "%d", &usestdcnt);
+			sscanf(vRedisReplyArray[3].str.c_str(), "%d", &usemonitorcnt);
+			sscanf(vRedisReplyArray[4].str.c_str(), "%d", &usevoicecnt);
+			sscanf(vRedisReplyArray[5].str.c_str(), "%d", &usereccnt);
+			sscanf(vRedisReplyArray[6].str.c_str(), "%d", &uselivecnt);
+			
+			std::map<std::string, int>::iterator iter_find = iter_recover->second.find(strConfcntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				useconfcnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strSrcntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				usesrcnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strStdcntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				usestdcnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strMonitorcntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				usemonitorcnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strVoicecntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				usevoicecnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strReccntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				usereccnt -= iter_find->second;
+			}
+			iter_find = iter_recover->second.find(strLivecntName);
+			if (iter_find != iter_recover->second.end())
+			{
+				uselivecnt -= iter_find->second;
+			}
+
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+			char cconfcntvalue[16] = { 0 };
+			sprintf(cconfcntvalue, "%d", useconfcnt);
+			char csrcntvalue[16] = { 0 };
+			sprintf(csrcntvalue, "%d", usesrcnt);
+			char cstdcntvalue[16] = { 0 };
+			sprintf(cstdcntvalue, "%d", usestdcnt);
+			char cmonitorcntvalue[16] = { 0 };
+			sprintf(cmonitorcntvalue, "%d", usemonitorcnt);
+			char cvoicecntvalue[16] = { 0 };
+			sprintf(cvoicecntvalue, "%d", usevoicecnt);
+			char creccntvalue[16] = { 0 };
+			sprintf(creccntvalue, "%d", usereccnt);
+			char clivecntvalue[16] = { 0 };
+			sprintf(clivecntvalue, "%d", uselivecnt);
+
+			REDISVALUE struseconfcntvalue = cconfcntvalue;
+			vCompLinceneData.push_back(strConfcntName);
+			vCompLinceneData.push_back(struseconfcntvalue);
+
+			REDISVALUE strusesrcntvalue = csrcntvalue;
+			vCompLinceneData.push_back(strSrcntName);
+			vCompLinceneData.push_back(strusesrcntvalue);
+
+			REDISVALUE strusestdcntvalue = cstdcntvalue;
+			vCompLinceneData.push_back(strStdcntName);
+			vCompLinceneData.push_back(strusestdcntvalue);
+
+			REDISVALUE strusemoncntvalue = cmonitorcntvalue;
+			vCompLinceneData.push_back(strMonitorcntName);
+			vCompLinceneData.push_back(strusemoncntvalue);
+
+			REDISVALUE strusevoicecntvalue = cvoicecntvalue;
+			vCompLinceneData.push_back(strVoicecntName);
+			vCompLinceneData.push_back(strusevoicecntvalue);
+
+			REDISVALUE strusereccntvalue = creccntvalue;
+			vCompLinceneData.push_back(strReccntName);
+			vCompLinceneData.push_back(strusereccntvalue);
+
+			REDISVALUE struselivecntvalue = clivecntvalue;
+			vCompLinceneData.push_back(strLivecntName);
+			vCompLinceneData.push_back(struselivecntvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strrecoveruselincenekey, vCompLinceneData);
+
+			std::map<string, int> mapCompLincene;
+			GetCompTotalLincene(compid, mapCompLincene);
+			int surpconfcnt = 0;
+			int surpsrcnt = 0;
+			int surpstdcnt = 0;
+			int surpmonitorcnt = 0;
+			int surpvoicecnt = 0;
+			int surpreccnt = 0;
+			int surplivecnt = 0;
+			std::map<string, int>::iterator iter_lincene = mapCompLincene.find(strConfcntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpconfcnt = iter_lincene->second - useconfcnt;
+			}
+			iter_lincene = mapCompLincene.find(strSrcntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpsrcnt = iter_lincene->second - usesrcnt;
+			}
+			iter_lincene = mapCompLincene.find(strStdcntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpstdcnt = iter_lincene->second - usestdcnt;
+			}
+			iter_lincene = mapCompLincene.find(strMonitorcntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpmonitorcnt = iter_lincene->second - usemonitorcnt;
+			}
+			iter_lincene = mapCompLincene.find(strVoicecntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpvoicecnt = iter_lincene->second - usevoicecnt;
+			}
+			iter_lincene = mapCompLincene.find(strReccntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surpreccnt = iter_lincene->second - usereccnt;
+			}
+			iter_lincene = mapCompLincene.find(strLivecntName);
+			if (iter_lincene != mapCompLincene.end())
+			{
+				surplivecnt = iter_lincene->second - uselivecnt;
+			}
+
+			vCompLinceneData.clear();
+			sprintf(cconfcntvalue, "%d", surpconfcnt);
+			sprintf(csrcntvalue, "%d", surpsrcnt);
+			sprintf(cstdcntvalue, "%d", surpstdcnt);
+			sprintf(cmonitorcntvalue, "%d", surpmonitorcnt);
+			sprintf(cvoicecntvalue, "%d", surpvoicecnt);
+			sprintf(creccntvalue, "%d", surpreccnt);
+			sprintf(clivecntvalue, "%d", surplivecnt);
+
+			REDISVALUE strsurpconfcntvalue = cconfcntvalue;
+			vCompLinceneData.push_back(strConfcntName);
+			vCompLinceneData.push_back(strsurpconfcntvalue);
+
+			REDISVALUE strsurpsrcntvalue = csrcntvalue;
+			vCompLinceneData.push_back(strSrcntName);
+			vCompLinceneData.push_back(strsurpsrcntvalue);
+
+			REDISVALUE strsurpstdcntvalue = cstdcntvalue;
+			vCompLinceneData.push_back(strStdcntName);
+			vCompLinceneData.push_back(strsurpstdcntvalue);
+
+			REDISVALUE strsurpmoncntvalue = cmonitorcntvalue;
+			vCompLinceneData.push_back(strMonitorcntName);
+			vCompLinceneData.push_back(strsurpmoncntvalue);
+
+			REDISVALUE strsurpvoicecntvalue = cvoicecntvalue;
+			vCompLinceneData.push_back(strVoicecntName);
+			vCompLinceneData.push_back(strsurpvoicecntvalue);
+
+			REDISVALUE strsurpreccntvalue = creccntvalue;
+			vCompLinceneData.push_back(strReccntName);
+			vCompLinceneData.push_back(strsurpreccntvalue);
+
+			REDISVALUE strsurplivecntvalue = clivecntvalue;
+			vCompLinceneData.push_back(strLivecntName);
+			vCompLinceneData.push_back(strsurplivecntvalue);
+
+			bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strrecoversuperlincenekey, vCompLinceneData);		
+
+		}
+		
+		CheckRedisTernumLicence(compid);
+
+	}
+
+}
+
+void CDevMgr::CheckMCConfLinceneInfo()
+{
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCConfLinceneInfo == ====>begin \n");
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+	char conference_deviceidkey[256] = { 0 };
+	sprintf(conference_deviceidkey, "%s", "conference_deviceid");
+	RedisReplyArray vrra_db2_conference_deviceid;
+	vrra_db2_conference_deviceid.clear();
+	unsigned int nMcGroupidList = 0;
+	bool bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(conference_deviceidkey, vrra_db2_conference_deviceid);
+	nMcGroupidList = vrra_db2_conference_deviceid.size();
+
+	std::map<string, map<std::string, int> > mapCompLinceneInfo;
+	std::map<string, map<std::string, int> > mapTotalUseCompLinceneInfo;
+
+	if (bHGetAllMcGroupid_ok && (nMcGroupidList > 0) && (nMcGroupidList % 2 == 0))
+	{
+		for (int index = 0; index < nMcGroupidList;)
+		{
+			std::string confid_s;
+			std::string deviceid;
+			confid_s = vrra_db2_conference_deviceid[index].str;
+			deviceid = vrra_db2_conference_deviceid[index + 1].str;
+			
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCConfLinceneInfo ==confid_s:%s====>deviceid:%s ==> begin \n", confid_s.c_str(), deviceid.c_str());
+			char company_confid_key[128] = { 0 };
+
+			sprintf(company_confid_key, "mclicene_%s_%s", deviceid.c_str(), confid_s.c_str());
+			RedisReplyArray vrra_db2_lincene_compid;
+			vrra_db2_lincene_compid.clear();
+			unsigned int nMcCompidList = 0;
+			bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(company_confid_key, vrra_db2_lincene_compid);
+			nMcCompidList = vrra_db2_lincene_compid.size();
+			string deviceid_compid = "mc=" + deviceid + ":" + "compid=";
+
+			if (bHGetAllMcGroupid_ok && (nMcCompidList > 0) && (nMcCompidList % 2 == 0))
+			{
+				for (int indexs = 0; indexs < nMcCompidList;)
+				{
+					std::string compid;
+					std::string linceneInfo;
+					compid = vrra_db2_lincene_compid[indexs].str;
+					linceneInfo = vrra_db2_lincene_compid[indexs + 1].str;
+					std::map<string, int> mapLinceneInfo; // key-LiceneType,value-linceneCount
+					mapLinceneInfo.clear();
+					deviceid_compid += compid;
+
+					sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCConfLinceneInfo ==compid:%s====>linceneInfo:%s ,deviceid_compid:%s  begin \n", compid.c_str(), linceneInfo.c_str(), deviceid_compid.c_str());
+					std::map<std::string, int> cmd_key_val;
+					SubString(cmd_key_val, linceneInfo);
+
+					for (std::map<std::string, int>::iterator iterCompanyLincene = cmd_key_val.begin(); iterCompanyLincene != cmd_key_val.end(); iterCompanyLincene++)
+					{
+						std::string sLiceneType;
+						sLiceneType = iterCompanyLincene->first;
+						int liceneCount = iterCompanyLincene->second;
+						sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCConfLinceneInfo ==cmd_key_val : first::%s ,value::%d  ====>  \n", sLiceneType.c_str(), liceneCount);
+						mapLinceneInfo.insert(make_pair(sLiceneType, liceneCount));
+					}
+
+					std::map<string, map<std::string, int> >::iterator iter_findcomp = mapCompLinceneInfo.find(deviceid_compid);
+					if (iter_findcomp != mapCompLinceneInfo.end())
+					{
+						//存在
+						for (map<std::string, int>::iterator iter_templinc = mapLinceneInfo.begin(); iter_templinc != mapLinceneInfo.end(); iter_templinc++)
+						{
+							std::map<string, int>::iterator iter_templincinfo = iter_findcomp->second.find(iter_templinc->first);
+							if (iter_templincinfo != iter_findcomp->second.end())
+							{
+								iter_templincinfo->second += iter_templinc->second;
+							}
+							else
+							{
+								map<std::string, int> templincene;
+								templincene = iter_findcomp->second;
+								templincene.insert(make_pair(iter_templinc->first, iter_templinc->second));
+								iter_findcomp->second = templincene;
+							}
+						}
+
+					}
+					else
+					{
+						mapCompLinceneInfo.insert(make_pair(deviceid_compid, mapLinceneInfo));
+					}
+
+					indexs += 2;
+				}
+			}
+			
+			index += 2;
+		}
+	}
+
+	//
+	for (std::map<string, map<std::string, int> >::iterator iter_compLinceneInfo = mapCompLinceneInfo.begin(); iter_compLinceneInfo != mapCompLinceneInfo.end(); iter_compLinceneInfo++)
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCConfLinceneInfo ==mapCompLinceneInfo first:%s====> ==> begin \n", iter_compLinceneInfo->first.c_str());
+		std::map<std::string, int> cmd_key_val;
+		SubString(cmd_key_val, iter_compLinceneInfo->first);
+		int mcid = 0;
+		int compid = 0;
+		std::map<std::string, int>::iterator itermcidcompid = cmd_key_val.find("mc");
+		if (itermcidcompid != cmd_key_val.end())
+		{
+			mcid = itermcidcompid->second;
+		}
+		itermcidcompid = cmd_key_val.find("compid");
+		if (itermcidcompid != cmd_key_val.end())
+		{
+			compid = itermcidcompid->second;
+		}
+		char mc_value[32] = { 0 };
+		sprintf(mc_value, "%d", mcid);
+		char compid_value[32] = { 0 };
+		sprintf(compid_value, "%d", compid);
+		string scompid = compid_value;
+		
+
+		std::map<string, map<std::string, int> >::iterator iter_findcomp = mapTotalUseCompLinceneInfo.find(scompid);
+		if (iter_findcomp != mapTotalUseCompLinceneInfo.end())
+		{
+			//存在
+			for (map<std::string, int>::iterator iter_templinc = iter_compLinceneInfo->second.begin(); iter_templinc != iter_compLinceneInfo->second.end(); iter_templinc++)
+			{
+				std::map<string, int>::iterator iter_templincinfo = iter_findcomp->second.find(iter_templinc->first);
+				if (iter_templincinfo != iter_findcomp->second.end())
+				{
+					iter_templincinfo->second += iter_templinc->second;
+				}
+				else
+				{
+					map<std::string, int> templincene;
+					templincene = iter_findcomp->second;
+					templincene.insert(make_pair(iter_templinc->first, iter_templinc->second));
+					iter_findcomp->second = templincene;
+				}
+			}
+
+		}
+		else
+		{
+			mapTotalUseCompLinceneInfo.insert(make_pair(scompid, iter_compLinceneInfo->second));
+		}
+		//
+		unsigned int groupid = 0;
+		groupid = GetMcGroupId(mcid);
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+		char compuselincene_key[256] = { 0 };
+
+		sprintf(compuselincene_key, "company_uselicinlocalmc_%d_%s_%s", groupid, mc_value, scompid.c_str());
+		char cSrcntName[32] = { 0 };
+		char cStdcntName[32] = { 0 };
+		char cMonitorcntName[32] = { 0 };
+		char cVoicecntName[32] = { 0 };
+		char cReccntName[32] = { 0 };
+		char cLivecntName[32] = { 0 };
+		char cConfcntName[32] = { 0 };
+		char cTernumName[32] = { 0 };
+
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+		sprintf(cTernumName, "%s", "ternum");
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strReccntName = cReccntName;
+		REDISKEY strLivecntName = cLivecntName;
+		REDISKEY strConfcntName = cConfcntName;
+		REDISKEY strTernumName = cTernumName;
+
+		int useconfcnt = 0;
+		int usesrcnt = 0;
+		int usestdcnt = 0;
+		int usemonitorcnt = 0;
+		int usevoicecnt = 0;
+		int usereccnt = 0;
+		int uselivecnt = 0;
+		int useternum = 0;
+
+		std::map<std::string, int>::iterator iter_find = iter_compLinceneInfo->second.find(strConfcntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			useconfcnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strSrcntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			usesrcnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strStdcntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			usestdcnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strMonitorcntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			usemonitorcnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strVoicecntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			usevoicecnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strReccntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			usereccnt = iter_find->second;
+		}
+		iter_find = iter_compLinceneInfo->second.find(strLivecntName);
+		if (iter_find != iter_compLinceneInfo->second.end())
+		{
+			uselivecnt = iter_find->second;
+		}
+
+		useternum = usesrcnt + usestdcnt + usemonitorcnt + usevoicecnt;
+		REDISVDATA vCompLinceneData;
+		vCompLinceneData.clear();
+		char cconfcntvalue[16] = { 0 };
+		sprintf(cconfcntvalue, "%d", useconfcnt);
+		char csrcntvalue[16] = { 0 };
+		sprintf(csrcntvalue, "%d", usesrcnt);
+		char cstdcntvalue[16] = { 0 };
+		sprintf(cstdcntvalue, "%d", usestdcnt);
+		char cmonitorcntvalue[16] = { 0 };
+		sprintf(cmonitorcntvalue, "%d", usemonitorcnt);
+		char cvoicecntvalue[16] = { 0 };
+		sprintf(cvoicecntvalue, "%d", usevoicecnt);
+		char creccntvalue[16] = { 0 };
+		sprintf(creccntvalue, "%d", usereccnt);
+		char clivecntvalue[16] = { 0 };
+		sprintf(clivecntvalue, "%d", uselivecnt);
+		char cternumvalue[16] = { 0 };
+		sprintf(cternumvalue, "%d", useternum);
+
+		REDISVALUE struseconfcntvalue = cconfcntvalue;
+		vCompLinceneData.push_back(strConfcntName);
+		vCompLinceneData.push_back(struseconfcntvalue);
+
+		REDISVALUE struseternumvalue = cternumvalue;
+		vCompLinceneData.push_back(strTernumName);
+		vCompLinceneData.push_back(struseternumvalue);
+
+		REDISVALUE strusesrcntvalue = csrcntvalue;
+		vCompLinceneData.push_back(strSrcntName);
+		vCompLinceneData.push_back(strusesrcntvalue);
+
+		REDISVALUE strusestdcntvalue = cstdcntvalue;
+		vCompLinceneData.push_back(strStdcntName);
+		vCompLinceneData.push_back(strusestdcntvalue);
+
+		REDISVALUE strusemoncntvalue = cmonitorcntvalue;
+		vCompLinceneData.push_back(strMonitorcntName);
+		vCompLinceneData.push_back(strusemoncntvalue);
+
+		REDISVALUE strusevoicecntvalue = cvoicecntvalue;
+		vCompLinceneData.push_back(strVoicecntName);
+		vCompLinceneData.push_back(strusevoicecntvalue);
+
+		REDISVALUE strusereccntvalue = creccntvalue;
+		vCompLinceneData.push_back(strReccntName);
+		vCompLinceneData.push_back(strusereccntvalue);
+
+		REDISVALUE struselivecntvalue = clivecntvalue;
+		vCompLinceneData.push_back(strLivecntName);
+		vCompLinceneData.push_back(struselivecntvalue);
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(compuselincene_key, vCompLinceneData);
+		
+	}
+
+	//
+	for (std::map<string, map<std::string, int> >::iterator iter_recover = mapTotalUseCompLinceneInfo.begin(); iter_recover != mapTotalUseCompLinceneInfo.end(); iter_recover++)
+	{
+		std::string strcompid = iter_recover->first;
+		int compid = 0;
+		sscanf(strcompid.c_str(), "%d", &compid);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===CheckMCConfLinceneInfo == strcompid：%s 。\n,", strcompid.c_str());
+		char recoveruselincene[128] = { 0 };
+		char recoversuperlincene[128] = { 0 };
+		sprintf(recoveruselincene, "company_uselic_%s", strcompid.c_str());
+		sprintf(recoversuperlincene, "company_surplic_%s", strcompid.c_str());
+
+		REDISKEY strrecoveruselincenekey = recoveruselincene;
+		REDISKEY strrecoversuperlincenekey = recoversuperlincene;
+
+		char cSrcntName[32] = { 0 };
+		char cStdcntName[32] = { 0 };
+		char cMonitorcntName[32] = { 0 };
+		char cVoicecntName[32] = { 0 };
+		char cReccntName[32] = { 0 };
+		char cLivecntName[32] = { 0 };
+		char cConfcntName[32] = { 0 };
+
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strReccntName = cReccntName;
+		REDISKEY strLivecntName = cLivecntName;
+		REDISKEY strConfcntName = cConfcntName;
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		vGetFileds.push_back(strConfcntName);
+		vGetFileds.push_back(strSrcntName);
+		vGetFileds.push_back(strStdcntName);
+		vGetFileds.push_back(strMonitorcntName);
+		vGetFileds.push_back(strVoicecntName);
+		vGetFileds.push_back(strReccntName);
+		vGetFileds.push_back(strLivecntName);
+
+		int useconfcnt = 0;
+		int usesrcnt = 0;
+		int usestdcnt = 0;
+		int usemonitorcnt = 0;
+		int usevoicecnt = 0;
+		int usereccnt = 0;
+		int uselivecnt = 0;
+
+		std::map<std::string, int>::iterator iter_find = iter_recover->second.find(strConfcntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			useconfcnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strSrcntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			usesrcnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strStdcntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			usestdcnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strMonitorcntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			usemonitorcnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strVoicecntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			usevoicecnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strReccntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			usereccnt = iter_find->second;
+		}
+		iter_find = iter_recover->second.find(strLivecntName);
+		if (iter_find != iter_recover->second.end())
+		{
+			uselivecnt = iter_find->second;
+		}
+
+		REDISVDATA vCompLinceneData;
+		vCompLinceneData.clear();
+		char cconfcntvalue[16] = { 0 };
+		sprintf(cconfcntvalue, "%d", useconfcnt);
+		char csrcntvalue[16] = { 0 };
+		sprintf(csrcntvalue, "%d", usesrcnt);
+		char cstdcntvalue[16] = { 0 };
+		sprintf(cstdcntvalue, "%d", usestdcnt);
+		char cmonitorcntvalue[16] = { 0 };
+		sprintf(cmonitorcntvalue, "%d", usemonitorcnt);
+		char cvoicecntvalue[16] = { 0 };
+		sprintf(cvoicecntvalue, "%d", usevoicecnt);
+		char creccntvalue[16] = { 0 };
+		sprintf(creccntvalue, "%d", usereccnt);
+		char clivecntvalue[16] = { 0 };
+		sprintf(clivecntvalue, "%d", uselivecnt);
+
+		REDISVALUE struseconfcntvalue = cconfcntvalue;
+		vCompLinceneData.push_back(strConfcntName);
+		vCompLinceneData.push_back(struseconfcntvalue);
+
+		REDISVALUE strusesrcntvalue = csrcntvalue;
+		vCompLinceneData.push_back(strSrcntName);
+		vCompLinceneData.push_back(strusesrcntvalue);
+
+		REDISVALUE strusestdcntvalue = cstdcntvalue;
+		vCompLinceneData.push_back(strStdcntName);
+		vCompLinceneData.push_back(strusestdcntvalue);
+
+		REDISVALUE strusemoncntvalue = cmonitorcntvalue;
+		vCompLinceneData.push_back(strMonitorcntName);
+		vCompLinceneData.push_back(strusemoncntvalue);
+
+		REDISVALUE strusevoicecntvalue = cvoicecntvalue;
+		vCompLinceneData.push_back(strVoicecntName);
+		vCompLinceneData.push_back(strusevoicecntvalue);
+
+		REDISVALUE strusereccntvalue = creccntvalue;
+		vCompLinceneData.push_back(strReccntName);
+		vCompLinceneData.push_back(strusereccntvalue);
+
+		REDISVALUE struselivecntvalue = clivecntvalue;
+		vCompLinceneData.push_back(strLivecntName);
+		vCompLinceneData.push_back(struselivecntvalue);
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strrecoveruselincenekey, vCompLinceneData);
+
+		std::map<string, int> mapCompLincene;
+		GetCompTotalLincene(compid, mapCompLincene);
+		int surpconfcnt = 0;
+		int surpsrcnt = 0;
+		int surpstdcnt = 0;
+		int surpmonitorcnt = 0;
+		int surpvoicecnt = 0;
+		int surpreccnt = 0;
+		int surplivecnt = 0;
+		std::map<string, int>::iterator iter_lincene = mapCompLincene.find(strConfcntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpconfcnt = iter_lincene->second - useconfcnt;
+		}
+		iter_lincene = mapCompLincene.find(strSrcntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpsrcnt = iter_lincene->second - usesrcnt;
+		}
+		iter_lincene = mapCompLincene.find(strStdcntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpstdcnt = iter_lincene->second - usestdcnt;
+		}
+		iter_lincene = mapCompLincene.find(strMonitorcntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpmonitorcnt = iter_lincene->second - usemonitorcnt;
+		}
+		iter_lincene = mapCompLincene.find(strVoicecntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpvoicecnt = iter_lincene->second - usevoicecnt;
+		}
+		iter_lincene = mapCompLincene.find(strReccntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surpreccnt = iter_lincene->second - usereccnt;
+		}
+		iter_lincene = mapCompLincene.find(strLivecntName);
+		if (iter_lincene != mapCompLincene.end())
+		{
+			surplivecnt = iter_lincene->second - uselivecnt;
+		}
+
+		vCompLinceneData.clear();
+		sprintf(cconfcntvalue, "%d", surpconfcnt);
+		sprintf(csrcntvalue, "%d", surpsrcnt);
+		sprintf(cstdcntvalue, "%d", surpstdcnt);
+		sprintf(cmonitorcntvalue, "%d", surpmonitorcnt);
+		sprintf(cvoicecntvalue, "%d", surpvoicecnt);
+		sprintf(creccntvalue, "%d", surpreccnt);
+		sprintf(clivecntvalue, "%d", surplivecnt);
+
+		REDISVALUE strsurpconfcntvalue = cconfcntvalue;
+		vCompLinceneData.push_back(strConfcntName);
+		vCompLinceneData.push_back(strsurpconfcntvalue);
+
+		REDISVALUE strsurpsrcntvalue = csrcntvalue;
+		vCompLinceneData.push_back(strSrcntName);
+		vCompLinceneData.push_back(strsurpsrcntvalue);
+
+		REDISVALUE strsurpstdcntvalue = cstdcntvalue;
+		vCompLinceneData.push_back(strStdcntName);
+		vCompLinceneData.push_back(strsurpstdcntvalue);
+
+		REDISVALUE strsurpmoncntvalue = cmonitorcntvalue;
+		vCompLinceneData.push_back(strMonitorcntName);
+		vCompLinceneData.push_back(strsurpmoncntvalue);
+
+		REDISVALUE strsurpvoicecntvalue = cvoicecntvalue;
+		vCompLinceneData.push_back(strVoicecntName);
+		vCompLinceneData.push_back(strsurpvoicecntvalue);
+
+		REDISVALUE strsurpreccntvalue = creccntvalue;
+		vCompLinceneData.push_back(strReccntName);
+		vCompLinceneData.push_back(strsurpreccntvalue);
+
+		REDISVALUE strsurplivecntvalue = clivecntvalue;
+		vCompLinceneData.push_back(strLivecntName);
+		vCompLinceneData.push_back(strsurplivecntvalue);
+
+		bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strrecoversuperlincenekey, vCompLinceneData);
+
+		CheckRedisTernumLicence(compid);
+
+	}
+
+}
+
+
+void CDevMgr::UpdateCheckMCHeartbeatLinceneInfo(const SRMsgs::IndsertodevHeart* ind)
+{
+	time_t timeNow;
+	timeNow = time(NULL);
+
+	char deviceid_s[64] = { 0 };
+	sprintf(deviceid_s, "%d", ind->deviceid());
+
+	unsigned int uidevicetype = 0;
+	uidevicetype = ind->svr_type();
+
+	iter_mapDeviceHeartbeatTime iter = m_MapDeviceHeartbeatTime.find(atoi(deviceid_s));
+
+	if (iter == m_MapDeviceHeartbeatTime.end())
+	{
+
+		sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndsertodevHeart deviceid_s:%s unregistered can't to update db\n", deviceid_s);
+		return;
+	}
+	else
+	{
+		if (uidevicetype != DEVICE_SERVER::DEVICE_MC)
+		{
+			//sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo Recv not mc Heart Ind, uidevicetype = %d\n", uidevicetype);
+			return;
+		}
+		if (m_pRedisConnList[e_RC_TT_MainThread] == NULL)
+		{
+			sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo m_pRedisConnList[e_RC_TT_MainThread] is NULL\n");
+			return;
+		}
+		//取出上次更新的时间
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+		char mcidktimeset_key[128] = { 0 };// <mcid, checkLincenetime>,updateLincenetime会在每次校验完授权后更新
+		sprintf(mcidktimeset_key, "%s", "mcidchecktimeset");
+		char updateLincenetime_s[128] = { 0 };
+
+		//当前时间插入
+#ifdef WIN32
+		sprintf(updateLincenetime_s, "%I64d", timeNow);
+
+#elif defined LINUX
+		sprintf(updateLincenetime_s, "%lld", timeNow);
+#endif
+
+		char * pMctime = m_pRedisConnList[e_RC_TT_UpMsqThread]->gethashvalue(mcidktimeset_key, deviceid_s);
+
+		if (pMctime != NULL)
+		{	
+			time_t updateLincenetime = 0;
+			
+#ifdef WIN32
+			sscanf(pMctime, "%I64d", &updateLincenetime);
+			sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo timeNow---> %I64d, updateLincenetime---> %I64d, m_nGetMCLinceneInfoTime = %d\n", timeNow, updateLincenetime, m_nGetMCLinceneInfoTime);
+#elif defined LINUX
+			sscanf(pMctime, "%lld", &updateLincenetime);
+			sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo timeNow---> %lld,, updateLincenetime---> %lld, m_nGetMCLinceneInfoTime = %d\n", timeNow, updateLincenetime, m_nGetMCLinceneInfoTime);
+#endif
+			
+
+			//判断时间是否到校验时间
+			if (timeNow - updateLincenetime >= m_nGetMCLinceneInfoTime)
+			{
+				//
+				m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(mcidktimeset_key, updateLincenetime_s, deviceid_s);
+
+				map<unsigned long int, map<unsigned int, string> >map_mcCompLincene;// <confid,<compid,lincenetype=count>>
+
+				map<unsigned int, map<string, int> > map_compLinceneInfo;
+
+				for (int i = 0; i < ind->confinfos_size(); i++)
+				{
+					
+					map<string, int>map_linceneinfo;
+					const SRMsgs::IndsertodevHeart_ConfInfo& confinfo = ind->confinfos(i);
+					SR_uint64 ullconfid = confinfo.confid();
+					SR_uint32 confrelcompid = confinfo.confrelcompid();
+					int reccent = 0;
+					int livecnt = 0;
+
+					if (ullconfid != 0 && confrelcompid != 0)
+					{
+						string conflictype;
+						//会议录制信息
+						reccent = confinfo.recinfos_size();
+						if (reccent > 0)
+						{
+							conflictype = "reccnt";
+							map_linceneinfo.insert(make_pair(conflictype, reccent));
+						}
+						//会议直播信息
+						livecnt = confinfo.liveinfos_size();
+						if (livecnt > 0)
+						{
+							conflictype = "livecnt";
+							map_linceneinfo.insert(make_pair(conflictype, livecnt));
+						}
+						conflictype = "confcnt";
+						map_linceneinfo.insert(make_pair(conflictype, 1));
+
+						// 解析会议用户信息
+						for (int jj = 0; jj < confinfo.userinfos_size(); jj++)
+						{
+							string linceneType;
+							int linceneCount = 1;
+							const SRMsgs::IndsertodevHeart_UserInfo& userinfo = confinfo.userinfos(jj);
+							SR_uint32 uiuserid = userinfo.userid();
+							SR_uint32 fromtype = userinfo.fromtype();
+							SR_uint32 termtype = userinfo.termtype();
+							SR_uint32 userrelcompid = userinfo.userrelcompid();
+							if (fromtype == e_Term_From_Platform)
+							{
+								linceneType = "srcnt"; 
+							}
+							else
+							{
+								if ((termtype & 0x00ff) == e_StdTermType_AUTO_MONITOR_LIVE
+									|| (termtype & 0x00ff) == e_StdTermType_AUTO_MONITOR_REC)
+								{
+									linceneType = "monitorcnt";
+								}
+								else if ((termtype & 0x00ff) == e_StdTermType_AUTO_PSTN)
+								{
+									linceneType = "voicecnt";
+								}
+								else
+								{
+									linceneType = "stdcnt";
+								}
+							}
+							
+							map_linceneinfo.insert(make_pair(linceneType, linceneCount));
+
+							map<unsigned int, map<string, int> >::iterator iter_lincene = map_compLinceneInfo.find(userrelcompid);
+
+							if (iter_lincene != map_compLinceneInfo.end())
+							{
+								
+								map<string, int>::iterator iter_info = iter_lincene->second.find(linceneType);
+								if (iter_info != iter_lincene->second.end())
+								{
+
+									iter_info->second += linceneCount;
+								}
+								else
+								{
+									map_compLinceneInfo.insert(make_pair(userrelcompid, map_linceneinfo));
+								}
+							}
+							else
+							{
+								map_compLinceneInfo.insert(make_pair(userrelcompid, map_linceneinfo));
+							}
+							
+
+						}
+					}
+					//更新校验
+
+					map<unsigned int, string> map_compTotalLincene;
+
+					for (map<unsigned int, map<string, int> >::iterator iter_confinfo = map_compLinceneInfo.begin(); iter_confinfo != map_compLinceneInfo.end();iter_confinfo++)
+					{
+						string slinceneinfo;
+						for (map<string, int>::iterator iter_info = iter_confinfo->second.begin(); iter_info != iter_confinfo->second.end();iter_info++)
+						{
+							char value[16] = { 0 };
+							sprintf(value, "%d", iter_info->second);
+							slinceneinfo += iter_info->first + "=" + value + ":";
+						}
+
+						map_compTotalLincene.insert(make_pair(iter_confinfo->first, slinceneinfo));
+
+						
+					}
+					for (map<unsigned int, string>::iterator iter_log = map_compTotalLincene.begin(); iter_log != map_compTotalLincene.end(); iter_log++)
+					{
+						sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo map_compTotalLincene  first: %d, second : %s \n", iter_log->first, iter_log->second.c_str());
+					}
+
+					char conf_id_value[64] = { 0 };
+#ifdef WIN32
+					sprintf(conf_id_value, "%I64d", ullconfid);
+#elif defined LINUX
+					sprintf(conf_id_value, "%lld", ullconfid);
+#endif
+
+					char company_confid_key[128] = { 0 };
+
+					sprintf(company_confid_key, "mclicene_%s_%s", deviceid_s, conf_id_value);
+					
+					for (map<unsigned int, string>::iterator iter_write = map_compTotalLincene.begin(); iter_write != map_compTotalLincene.end(); iter_write++)
+					{
+						char cCompName[64] = { 0 };
+						sprintf(cCompName, "%d", iter_write->first);
+
+						char result[256] = { 0 };
+						sprintf(result, "%s", iter_write->second.c_str());
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo::company_confid_key = %s =>>result =====:%s=====>>> cCompName = %s\n", company_confid_key, result, cCompName);
+
+						//insert redis
+						m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(company_confid_key, result, cCompName);
+
+					}
+
+
+				}
+				//
+				CheckMCConfLinceneInfo();
+
+			}
+
+			delete pMctime; // 不删除会导致内存泄漏
+		}
+		else
+		{
+
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(mcidktimeset_key, updateLincenetime_s, deviceid_s);//  <mcid, checkLincenetime>,updateLincenetime会在每次校验完授权后更新
+			sr_printf(SR_LOGLEVEL_DEBUG, "UpdateCheckMCHeartbeatLinceneInfo mcidktimeset_key---> %s,, updateLincenetime_s---> %s, deviceid_s = %s\n", mcidktimeset_key	, updateLincenetime_s, deviceid_s);
+
+			return;
+
+		}
+
+	}
+}
+
+void CDevMgr::GetCompTotalLincene(unsigned int compid, std::map<string, int>& mapCompLincene)
+{
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+	char company_totallic_compid[64] = { 0 };
+	sprintf(company_totallic_compid, "company_totallic_%d", compid);
+
+	char cSrcntName[32] = { 0 };
+	char cStdcntName[32] = { 0 };
+	char cMonitorcntName[32] = { 0 };
+	char cVoicecntName[32] = { 0 };
+	char cReccntName[32] = { 0 };
+	char cLivecntName[32] = { 0 };
+	char cConfcntName[32] = { 0 };
+
+	sprintf(cSrcntName, "%s", "srcnt");
+	
+	sprintf(cStdcntName, "%s", "stdcnt");
+	
+	sprintf(cMonitorcntName, "%s", "monitorcnt");
+	
+	sprintf(cVoicecntName, "%s", "voicecnt");
+	
+	sprintf(cReccntName, "%s", "reccnt");
+	
+	sprintf(cLivecntName, "%s", "livecnt");
+	
+	sprintf(cConfcntName, "%s", "confcnt");
+
+	REDISKEY strSrcntName = cSrcntName;
+	REDISKEY strStdcntName = cStdcntName;
+	REDISKEY strMonitorcntName = cMonitorcntName;
+	REDISKEY strVoicecntName = cVoicecntName;
+	REDISKEY strReccntName = cReccntName;
+	REDISKEY strLivecntName = cLivecntName;
+	REDISKEY strConfcntName = cConfcntName;
+	REDISKEY strcomptotallincenekey = company_totallic_compid;
+	REDISFILEDS vGetFileds;
+	vGetFileds.clear();
+	RedisReplyArray vRedisReplyArray;
+	vRedisReplyArray.clear();
+
+	vGetFileds.push_back(strConfcntName);
+	vGetFileds.push_back(strSrcntName);
+	vGetFileds.push_back(strStdcntName);
+	vGetFileds.push_back(strMonitorcntName);
+	vGetFileds.push_back(strVoicecntName);
+	vGetFileds.push_back(strReccntName);
+	vGetFileds.push_back(strLivecntName);
+
+	bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strcomptotallincenekey, vGetFileds, vRedisReplyArray);
+	if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+	{
+		int confcnt = 0;
+		int srcnt = 0;
+		int stdcnt = 0;
+		int monitorcnt = 0;
+		int voicecnt = 0;
+		int reccnt = 0;
+		int livecnt = 0;
+		sscanf(vRedisReplyArray[0].str.c_str(), "%d", &confcnt);
+		sscanf(vRedisReplyArray[1].str.c_str(), "%d", &srcnt);
+		sscanf(vRedisReplyArray[2].str.c_str(), "%d", &stdcnt);
+		sscanf(vRedisReplyArray[3].str.c_str(), "%d", &monitorcnt);
+		sscanf(vRedisReplyArray[4].str.c_str(), "%d", &voicecnt);
+		sscanf(vRedisReplyArray[5].str.c_str(), "%d", &reccnt);
+		sscanf(vRedisReplyArray[6].str.c_str(), "%d", &livecnt);
+		mapCompLincene.insert(make_pair(strConfcntName, confcnt));
+		mapCompLincene.insert(make_pair(strSrcntName, srcnt));
+		mapCompLincene.insert(make_pair(strStdcntName, stdcnt));
+		mapCompLincene.insert(make_pair(strMonitorcntName, monitorcnt));
+		mapCompLincene.insert(make_pair(strVoicecntName, voicecnt));
+		mapCompLincene.insert(make_pair(strReccntName, reccnt));
+		mapCompLincene.insert(make_pair(strLivecntName, livecnt));
+		
+	}
+}
+void CDevMgr::SetMcCompanyUseLincene(unsigned int deviceid, unsigned int compid, unsigned int lictype, int count, bool isues)
+{
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_INFO, "SetMcCompanyUseLincene ==deviceid:%d---compid:%d---licencetype:%d count=%d,isuse = %d ====>begin \n", deviceid, compid, lictype, count, isues);
+
+	unsigned int groupid = 0;
+	groupid = GetMcGroupId(deviceid);
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+	char compuselincene_key[256] = { 0 };
+
+	char lincene_value[16] = { 0 };
+
+	sprintf(compuselincene_key, "company_uselicinlocalmc_%d_%d_%d", groupid, deviceid, compid);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene ==deviceid:%d---groupid:%d ,compuselincene_key: %s ====> \n", deviceid, groupid, compuselincene_key);
+
+	bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compuselincene_key);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == bExistUse：%d ,compuselincene_key=%s \n,", bExistUse, compuselincene_key);
+
+	REDISKEY struselicincelocalmckey = compuselincene_key;
+
+	if (bExistUse)
+	{
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+		char lincenekey[16] = { 0 };
+
+		std::map<int, string>::iterator iter_type = m_MapCapRedisTables.find(lictype);
+		if (iter_type != m_MapCapRedisTables.end())
+		{
+			sprintf(lincenekey, "%s", iter_type->second.c_str());
+		}
+		sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == lincenekey：%s ---   lictype:%d  begin \n", lincenekey, lictype);
+
+
+		REDISKEY strKeyFieldName = lincenekey;
+
+		vGetFileds.push_back(strKeyFieldName);
+
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(struselicincelocalmckey, vGetFileds, vRedisReplyArray);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===SetMcCompanyUseLincene == bhashHMGet_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGet_ok, vRedisReplyArray.size());
+
+		if (bhashHMGet_ok
+			&& vRedisReplyArray.size() == vGetFileds.size())
+		{
+			//
+			int useLicencecnt = 0;
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useLicencecnt);
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == uselicencecnt：%d \n", useLicencecnt);
+
+			if (isues)
+			{
+				useLicencecnt += count;
+			}
+			else
+			{
+				useLicencecnt -= count;
+			}
+			//回写
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+			sprintf(lincene_value, "%d", useLicencecnt);
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == uselicencecnt：%d \n", useLicencecnt);
+			REDISVALUE strusecntvalue = lincene_value;
+			vCompLinceneData.push_back(strKeyFieldName);
+			vCompLinceneData.push_back(strusecntvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struselicincelocalmckey, vCompLinceneData);
+			////
+			vRedisReplyArray.clear();
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == struselicincelocalmckey-%s：lincene_value:%s,strKeyFieldName:%s,strusecntvalue:%s,bhashHMSet_ok=%d---begin \n", struselicincelocalmckey.c_str(), lincene_value, strKeyFieldName.c_str(), strusecntvalue.c_str(), bhashHMSet_ok);
+
+
+		}
+
+	}
+	else
+	{
+		char cSrcntName[128] = { 0 };
+		char cStdcntName[128] = { 0 };
+		char cMonitorcntName[128] = { 0 };
+		char cVoicecntName[128] = { 0 };
+		char cReccntName[128] = { 0 };
+		char cLivecntName[128] = { 0 };
+		char cConfcntName[128] = { 0 };
+		char cTernumName[128] = { 0 };
+
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+		sprintf(cTernumName, "%s", "ternum");
+
+		char srcnt_value[16] = { 0 };
+		char stdcnt_value[16] = { 0 };
+		char monitorcnt_value[16] = { 0 };
+		char voicecnt_value[16] = { 0 };
+		char reccnt_value[16] = { 0 };
+		char livecnt_value[16] = { 0 };
+		char confcnt_value[16] = { 0 };
+		char ternum_value[16] = { 0 };
+
+		sprintf(confcnt_value, "%d", 0);
+		sprintf(ternum_value, "%d", 0);
+		sprintf(srcnt_value, "%d", 0);
+		sprintf(stdcnt_value, "%d", 0);
+		sprintf(monitorcnt_value, "%d", 0);
+		sprintf(voicecnt_value, "%d", 0);
+		sprintf(reccnt_value, "%d", 0);
+		sprintf(livecnt_value, "%d", 0);
+
+
+		switch (lictype)
+		{
+		case e_CompanyLincene_Conf:
+
+			sprintf(confcnt_value, "%d", count);
+			break;
+		case e_CompanyLincene_Sr:
+			sprintf(srcnt_value, "%d", count);
+			sprintf(ternum_value, "%d", count);
+			break;
+		case e_CompanyLincene_Std:
+			sprintf(stdcnt_value, "%d", count);
+			sprintf(ternum_value, "%d", count);
+			break;
+		case e_CompanyLincene_Monitor:
+			sprintf(monitorcnt_value, "%d", count);
+			sprintf(ternum_value, "%d", count);
+			break;
+		case e_CompanyLincene_Voice:
+			sprintf(voicecnt_value, "%d", count);
+			sprintf(ternum_value, "%d", count);
+			break;
+		case e_CompanyLincene_Record:
+			sprintf(reccnt_value, "%d", count);
+			break;
+		case e_CompanyLincene_Live:
+			sprintf(livecnt_value, "%d", count);
+			break;
+		}
+
+		REDISVDATA vCompLinceneInfodata;
+		vCompLinceneInfodata.clear();
+
+		REDISKEY strConfcntName = cConfcntName;
+		REDISVALUE str_confcnt_value = confcnt_value;
+		vCompLinceneInfodata.push_back(strConfcntName);
+		vCompLinceneInfodata.push_back(str_confcnt_value);
+
+		REDISKEY strTernumName = cTernumName;
+		REDISVALUE str_ternum_value = ternum_value;
+		vCompLinceneInfodata.push_back(strTernumName);
+		vCompLinceneInfodata.push_back(str_ternum_value);
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISVALUE str_srcnt_value = srcnt_value;
+		vCompLinceneInfodata.push_back(strSrcntName);
+		vCompLinceneInfodata.push_back(str_srcnt_value);
+
+		REDISKEY strStdcntName = cStdcntName;
+		REDISVALUE str_stdcnt_value = stdcnt_value;
+		vCompLinceneInfodata.push_back(strStdcntName);
+		vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISVALUE str_monitorcnt_value = monitorcnt_value;
+		vCompLinceneInfodata.push_back(strMonitorcntName);
+		vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISVALUE str_voicecnt_value = voicecnt_value;
+		vCompLinceneInfodata.push_back(strVoicecntName);
+		vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+
+		REDISKEY strReccntName = cReccntName;
+		REDISVALUE str_reccnt_value = reccnt_value;
+		vCompLinceneInfodata.push_back(strReccntName);
+		vCompLinceneInfodata.push_back(str_reccnt_value);
+
+
+		REDISKEY strLivecntName = cLivecntName;
+		REDISVALUE str_livecnt_value = livecnt_value;
+		vCompLinceneInfodata.push_back(strLivecntName);
+		vCompLinceneInfodata.push_back(str_livecnt_value);
+
+		//for (std::vector<std::string>::iterator iter = vCompLinceneInfodata.begin(); iter != vCompLinceneInfodata.end(); iter++)
+		//{
+		//	std::string msg;
+		//	msg = *iter;
+		//	sr_printf(SR_LOGLEVEL_INFO, "SetMcCompanyUseLincene == vCompLinceneInfodata：%s ,vCompLinceneInfodata.size=%d \n,", msg.c_str(), vCompLinceneInfodata.size());
+
+		//}
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struselicincelocalmckey, vCompLinceneInfodata);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "SetMcCompanyUseLincene == bhashHMSet_ok：%d ,compuselincene_key=%s \n,", bhashHMSet_ok, compuselincene_key);
+
+	}
+
+
+	//
+	bool bExistUseMc = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compuselincene_key);
+	sr_printf(SR_LOGLEVEL_INFO, "CheckMcCompanyUseTernLicence == bExistUse：%d ,checkmckey=%s \n,", bExistUseMc, compuselincene_key);
+	if (bExistUseMc)
+	{
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		char cSrcntName[128] = { 0 };
+		char cStdcntName[128] = { 0 };
+		char cMonitorcntName[128] = { 0 };;
+		char cVoicecntName[128] = { 0 };
+		char cTernumName[128] = { 0 };
+
+		sprintf(cTernumName, "%s", "ternum");
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strTernumName = cTernumName;
+
+		vGetFileds.push_back(strSrcntName);
+		vGetFileds.push_back(strStdcntName);
+		vGetFileds.push_back(strMonitorcntName);
+		vGetFileds.push_back(strVoicecntName);
+
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(struselicincelocalmckey, vGetFileds, vRedisReplyArray);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===CheckMcCompanyUseTernLicence == bhashHMGet_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGet_ok, vRedisReplyArray.size());
+
+		if (bhashHMGet_ok
+			&& vRedisReplyArray.size() == vGetFileds.size())
+		{
+			//
+			int useSrcnt = 0;
+			int useStdcnt = 0;
+			int useMonitorcnt = 0;
+			int useVoicecnt = 0;
+			int useTernum = 0;
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useSrcnt);
+			sscanf(vRedisReplyArray[1].str.c_str(), "%d", &useStdcnt);
+			sscanf(vRedisReplyArray[2].str.c_str(), "%d", &useMonitorcnt);
+			sscanf(vRedisReplyArray[3].str.c_str(), "%d", &useVoicecnt);
+
+			useTernum = useSrcnt + useStdcnt + useMonitorcnt + useVoicecnt;
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMcCompanyUseTernLicence == useSrcnt：%d ,useStdcnt：%d ,useMonitorcnt：%d ,useVoicecnt：%d, useTernum:%d \n", useSrcnt, useStdcnt, useMonitorcnt, useVoicecnt, useTernum);
+
+			//回写
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+
+			char lincene_value[16] = { 0 };
+			sprintf(lincene_value, "%d", useTernum);
+
+			REDISVALUE sternumvalue = lincene_value;
+			vCompLinceneData.push_back(cTernumName);
+			vCompLinceneData.push_back(sternumvalue);
+
+			bool bhashHMSetMC_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struselicincelocalmckey, vCompLinceneData);
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMcCompanyUseTernLicence == checkmckey-%s ,bhashHMSetMC_ok:%d---end \n", struselicincelocalmckey.c_str(), bhashHMSetMC_ok);
+
+		}
+
+
+	}
+
+
+}
+
+unsigned int CDevMgr::GetMcGroupId(unsigned int mcid)
+{
+	if (mcid == 0)
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "====GetMcGroupId ==== mcid is 0, error !!!\n");
+		return 0;
+	}
+
+	char mc_deviceid_s[128] = { 0 };
+	sprintf(mc_deviceid_s, "%d", mcid);
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return 0;
+	}
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(3);
+
+	char * ptrRet = NULL;
+	SR_uint32 uiMcGroupid = 0;
+	ptrRet = m_pRedisConnList[e_RC_TT_UpMsqThread]->getvalue("dev_deviceidandgroupid", mc_deviceid_s);
+	if (ptrRet != NULL)
+	{
+		sscanf(ptrRet, "%u", &uiMcGroupid);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "====GetMcGroupId ==== uiReqGroupid=%u   !!!\n", uiMcGroupid);
+	}
+
+	return uiMcGroupid;
+
+}
+
+void CDevMgr::CheckRedisTernumLicence(int compid)
+{
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_DEBUG, "CheckRedisTernumValue == ,begin \n");
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+	char compuselincene_key[128] = { 0 };
+	char compsurplincene_key[128] = { 0 };
+	/*char localmc_compsurplincene_key[128] = { 0 };
+	char localmc_compuselincene_key[128] = { 0 };*/
+
+	sprintf(compuselincene_key, "company_uselic_%d", compid);
+	sprintf(compsurplincene_key, "company_surplic_%d", compid);
+
+	//sprintf(compsurplincene_key, "company_uselicinlocalmc_%d", compid);
+	//sprintf(compsurplincene_key, "company_uselicinlocalmc_%d", compid);
+
+	bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compuselincene_key);
+	bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+	sr_printf(SR_LOGLEVEL_DEBUG, "CheckRedisTernumValue == bExistUse：%d 。bExistSurp：%d,compuselincene_key=%s,compsurplincene_key=%s\n,", bExistUse, bExistSurp, compuselincene_key, compsurplincene_key);
+
+	if (bExistUse && bExistSurp)
+	{
+
+		REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+		REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		char cSrcntName[128] = { 0 };
+		char cStdcntName[128] = { 0 };
+		char cMonitorcntName[128] = { 0 };;
+		char cVoicecntName[128] = { 0 };
+		char cTernumName[128] = { 0 };
+
+		sprintf(cTernumName, "%s", "ternum");
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strTernumName = cTernumName;
+
+		vGetFileds.push_back(strSrcntName);
+		vGetFileds.push_back(strStdcntName);
+		vGetFileds.push_back(strMonitorcntName);
+		vGetFileds.push_back(strVoicecntName);
+
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===CheckRedisTernumValue == bhashHMGet_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGet_ok, vRedisReplyArray.size());
+
+		if (bhashHMGet_ok
+			&& vRedisReplyArray.size() == vGetFileds.size())
+		{
+			//
+			int useSrcnt = 0;
+			int useStdcnt = 0;
+			int useMonitorcnt = 0;
+			int useVoicecnt = 0;
+			int useTernum = 0;
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useSrcnt);
+			sscanf(vRedisReplyArray[1].str.c_str(), "%d", &useStdcnt);
+			sscanf(vRedisReplyArray[2].str.c_str(), "%d", &useMonitorcnt);
+			sscanf(vRedisReplyArray[3].str.c_str(), "%d", &useVoicecnt);
+
+			useTernum = useSrcnt + useStdcnt + useMonitorcnt + useVoicecnt;
+
+			sr_printf(SR_LOGLEVEL_INFO, "CheckRedisTernumValue == useSrcnt：%d ,useStdcnt：%d ,useMonitorcnt：%d ,useVoicecnt：%d, useTernum:%d \n", useSrcnt, useStdcnt, useMonitorcnt, useVoicecnt, useTernum);
+
+			//回写
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+
+			char lincene_value[16] = { 0 };
+			sprintf(lincene_value, "%d", useTernum);
+
+			REDISVALUE sternumvalue = lincene_value;
+			vCompLinceneData.push_back(cTernumName);
+			vCompLinceneData.push_back(sternumvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckRedisTernumValue == strCompanyUserLinceneKey-%s：lincene_value:%s,,bhashHMSet_ok:%d---end \n", strCompanyUseLinceneKey.c_str(), lincene_value, bhashHMSet_ok);
+
+		}
+
+		/////
+		vRedisReplyArray.clear();
+		bool bhashHMGetSurp_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "===CheckRedisTernumValue == bhashHMGetSurp_ok：%d 。vRedisReplyArray：%d \n,", bhashHMGetSurp_ok, vRedisReplyArray.size());
+		if (bhashHMGetSurp_ok
+			&& vRedisReplyArray.size() == vGetFileds.size())
+		{
+			int useSrcnt = 0;
+			int useStdcnt = 0;
+			int useMonitorcnt = 0;
+			int useVoicecnt = 0;
+			int useTernum = 0;
+			sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useSrcnt);
+			sscanf(vRedisReplyArray[1].str.c_str(), "%d", &useStdcnt);
+			sscanf(vRedisReplyArray[2].str.c_str(), "%d", &useMonitorcnt);
+			sscanf(vRedisReplyArray[3].str.c_str(), "%d", &useVoicecnt);
+
+			useTernum = useSrcnt + useStdcnt + useMonitorcnt + useVoicecnt;
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckRedisTernumValue == useSrcnt：%d ,useStdcnt：%d ,useMonitorcnt：%d ,useVoicecnt：%d, useTernum:%d \n", useSrcnt, useStdcnt, useMonitorcnt, useVoicecnt, useTernum);
+
+			//回写
+			REDISVDATA vCompLinceneData;
+			vCompLinceneData.clear();
+
+			char lincene_value[16] = { 0 };
+			sprintf(lincene_value, "%d", useTernum);
+
+			REDISVALUE sternumvalue = lincene_value;
+			vCompLinceneData.push_back(cTernumName);
+			vCompLinceneData.push_back(sternumvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+
+			sr_printf(SR_LOGLEVEL_INFO, "CheckRedisTernumValue == strCompanySurpLinceneKey-%s：lincene_value:%s,,bhashHMSet_ok:%d---end \n", strCompanySurpLinceneKey.c_str(), lincene_value, bhashHMSet_ok);
+
+		}
+	}
+}
+bool CDevMgr::GetAllCompLinceneInfo(std::map<int, map<std::string, sLinceneInfo> >& mapComplincene, CCompCapLincene* pCompLincene)
+{
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return false;
+	}
+
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	RedisReplyArray vrra_comp_id;
+	vrra_comp_id.clear();
+	unsigned int nAvailableCompIdNum = 0;
+
+	//是否存在表，不存在取db
+
+	bool bExistHGetCompid = m_pRedisConnList[e_RC_TT_MainThread]->existskey("company_available");
+	if (!bExistHGetCompid)
+	{
+		//
+		InitLicenceInfoToRedis(pCompLincene);
+	}
+
+	bool bHGetAllCompid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll("company_available", vrra_comp_id);
+	nAvailableCompIdNum = vrra_comp_id.size();
+	//sr_printf(SR_LOGLEVEL_DEBUG, "=GetAllCompLinceneInfo == nAvailableCompIdNum = %d,bHGetAllCompid_ok = %d \n", nAvailableCompIdNum, bHGetAllCompid_ok);
+
+	if (bHGetAllCompid_ok
+		&& (nAvailableCompIdNum > 0)
+		&& (nAvailableCompIdNum % 2 == 0))
+	{
+		//取出对应的compid
+		for (int k = 0; k < nAvailableCompIdNum;)
+		{
+			char compid_value[128] = { 0 };
+			char compid_status[128] = { 0 };
+			sprintf(compid_value, "%s", vrra_comp_id[k].str.c_str());
+			sprintf(compid_status, "%s", vrra_comp_id[k + 1].str.c_str());
+
+			int compStatus = 0;
+			int  companyId = 0;
+
+			sscanf(compid_status, "%d", &compStatus);
+			sscanf(compid_value, "%d", &companyId);
+
+			if (compStatus != 0 && companyId != 0)
+			{
+				map<std::string, sLinceneInfo> curCompLinceneInfo;
+
+				char company_totallic_compid_key[64] = { 0 };
+
+				sprintf(company_totallic_compid_key, "company_totallic_%s", compid_value);
+
+				bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_totallic_compid_key);
+				if (bExistIns)
+				{
+					//表存在，取值
+
+					RedisReplyArray vrra_company_lincene;
+					vrra_company_lincene.clear();
+					bool bGetAllCompanyLincene_ok = false;
+					unsigned int nCompanyLinceneInfoNum = 0;
+
+					bGetAllCompanyLincene_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_totallic_compid_key, vrra_company_lincene);
+					nCompanyLinceneInfoNum = vrra_company_lincene.size();
+					//sr_printf(SR_LOGLEVEL_INFO, "=GetAllCompLinceneInfo == nCompanyLinceneInfoNum = %d,bGetAllCompanyLincene_ok = %d \n", nCompanyLinceneInfoNum, bGetAllCompanyLincene_ok);
+
+					if (bGetAllCompanyLincene_ok
+						&& (nCompanyLinceneInfoNum > 0)
+						&& (nCompanyLinceneInfoNum % 2 == 0))
+					{
+						for (int kk = 0; kk < nCompanyLinceneInfoNum;)
+						{
+							char complincene_value[128] = { 0 };
+							char complincene_key[128] = { 0 };
+							sprintf(complincene_key, "%s", vrra_company_lincene[kk].str.c_str());
+							sprintf(complincene_value, "%s", vrra_company_lincene[kk + 1].str.c_str());
+
+							//sr_printf(SR_LOGLEVEL_DEBUG, "=GetAllCompLinceneInfo ==read Redis::company_available, %s, complincene_key = %s,complincene_value = %s \n", company_totallic_compid_key, complincene_key, complincene_value);
+
+							//SetCompLinceneInfo(&curCompLinceneInfo, complincene_key, complincene_value);
+							SetCompLinceneMapInfo(curCompLinceneInfo, complincene_key, complincene_value);
+						
+
+							kk += 2;
+						}
+
+						mapComplincene.insert(make_pair(companyId, curCompLinceneInfo));
+
+					}
+
+				}
+				else
+				{
+					//sr_printf(SR_LOGLEVEL_INFO, "=GetAllCompLinceneInfo --SelectSingleCompLinceneInfo ==read db:: %s, insert redis  \n", company_totallic_compid_key);
+					//读数据库查找companyId，compid_value
+					
+					bool select_ok = pCompLincene->SelectSingleCompLinceneInfo(companyId, curCompLinceneInfo);
+					if (select_ok)
+					{
+						mapComplincene.insert(make_pair(companyId, curCompLinceneInfo));
+						//redis
+						//sr_printf(SR_LOGLEVEL_DEBUG, "=GetAllCompLinceneInfo ==read Redis:: %s, insert redis  \n", company_totallic_compid_key);
+
+						char cSrcntName[32] = { 0 };
+						char cSrExptimeName[32] = { 0 };
+						char cSrStarttimeName[32] = { 0 };
+						char cStdcntName[32] = { 0 };
+						char cStdExptimeName[32] = { 0 };
+						char cStdStarttimeName[32] = { 0 };
+						char cMonitorcntName[32] = { 0 };
+						char cMonitorExptimeName[32] = { 0 };
+						char cMonitorStarttimeName[32] = { 0 };
+						char cVoicecntName[32] = { 0 };
+						char cVoiceExptimeName[32] = { 0 };
+						char cVoiceStarttimeName[32] = { 0 };
+						char cReccntName[32] = { 0 };
+						char cRecExptimeName[32] = { 0 };
+						char cRecStarttimeName[32] = { 0 };
+						char cLivecntName[32] = { 0 };
+						char cLiveExptimeName[32] = { 0 };
+						char cLiveStarttimeName[32] = { 0 };
+						char cConfcntName[32] = { 0 };
+
+						sprintf(cSrcntName, "%s", "srcnt");
+						sprintf(cSrExptimeName, "%s", "srexptime");
+						sprintf(cSrStarttimeName, "%s", "srstarttime");
+						sprintf(cStdcntName, "%s", "stdcnt");
+						sprintf(cStdExptimeName, "%s", "stdexptime");
+						sprintf(cStdStarttimeName, "%s", "stdstarttime");
+						sprintf(cMonitorcntName, "%s", "monitorcnt");
+						sprintf(cMonitorExptimeName, "%s", "monitorexptime");
+						sprintf(cMonitorStarttimeName, "%s", "monitorstarttime");
+						sprintf(cVoicecntName, "%s", "voicecnt");
+						sprintf(cVoiceExptimeName, "%s", "voiceexptime");
+						sprintf(cVoiceStarttimeName, "%s", "voicestarttime");
+						sprintf(cReccntName, "%s", "reccnt");
+						sprintf(cRecExptimeName, "%s", "recexptime");
+						sprintf(cRecStarttimeName, "%s", "recstarttime");
+						sprintf(cLivecntName, "%s", "livecnt");
+						sprintf(cLiveExptimeName, "%s", "liveexptime");
+						sprintf(cLiveStarttimeName, "%s", "livestarttime");
+						sprintf(cConfcntName, "%s", "confcnt");
+
+						char srcnt_value[65] = { 0 };
+						char srexptime_value[65] = { 0 };
+						char srstarttime_value[65] = { 0 };
+
+						char stdcnt_value[65] = { 0 };
+						char stdexptime_value[65] = { 0 };
+						char stdstarttime_value[65] = { 0 };
+
+						char monitorcnt_value[65] = { 0 };
+						char monitorexptime_value[65] = { 0 };
+						char monitorstarttime_value[65] = { 0 };
+
+						char voicecnt_value[65] = { 0 };
+						char voiceexptime_value[65] = { 0 };
+						char voicestarttime_value[65] = { 0 };
+
+						char reccnt_value[65] = { 0 };
+						char recexptime_value[65] = { 0 };
+						char recstarttime_value[65] = { 0 };
+
+						char livecnt_value[65] = { 0 };
+						char liveexptime_value[65] = { 0 };
+						char livestarttime_value[65] = { 0 };
+
+						char confcnt_value[65] = { 0 };
+
+						for (map<std::string, sLinceneInfo>::iterator iter = curCompLinceneInfo.begin(); iter != curCompLinceneInfo.end(); iter++)
+						{
+							if (strncmp("conf", iter->first.c_str(), 4) == 0){
+
+								sprintf(confcnt_value, "%d", iter->second.amount);
+							}
+							else if (strncmp("sr", iter->first.c_str(), 2) == 0)
+							{
+								sprintf(srcnt_value, "%d", iter->second.amount);
+								sprintf(srexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(srstarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+							else if (strncmp("std", iter->first.c_str(), 3) == 0)
+							{
+								sprintf(stdcnt_value, "%d", iter->second.amount);
+								sprintf(stdexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(stdstarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+							else if (strncmp("monitor", iter->first.c_str(), 7) == 0)
+							{
+								sprintf(monitorcnt_value, "%d", iter->second.amount);
+								sprintf(monitorexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(monitorstarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+							else if (strncmp("voice", iter->first.c_str(), 5) == 0)
+							{
+								sprintf(voicecnt_value, "%d", iter->second.amount);
+								sprintf(voiceexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(voicestarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+							else if (strncmp("rec", iter->first.c_str(), 3) == 0)
+							{
+								sprintf(reccnt_value, "%d", iter->second.amount);
+								sprintf(recexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(recstarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+							else if (strncmp("live", iter->first.c_str(), 4) == 0)
+							{
+								sprintf(livecnt_value, "%d", iter->second.amount);
+								sprintf(liveexptime_value, "%s", iter->second.expiretime.c_str());
+								sprintf(livestarttime_value, "%s", iter->second.starttime.c_str());
+
+							}
+
+							//sr_printf(SR_LOGLEVEL_DEBUG, "SelectSingleCompLinceneInfo update redis db(0) Table: temp_linceneInfo->first:%s,  temp_linceneInfo.second->amount:%d,temp_linceneInfo.second->starttime:%s,temp_linceneInfo.second->expiretime:%s  begin!!\n", iter->first.c_str(), iter->second.amount, iter->second.starttime.c_str(), iter->second.expiretime.c_str());
+						}
+
+						REDISKEY strcompanytotallicecompidkey = company_totallic_compid_key;
+
+						REDISVDATA vCompLinceneInfodata;
+						vCompLinceneInfodata.clear();
+
+						REDISKEY strSrcntName = cSrcntName;
+						REDISVALUE str_srcnt_value = srcnt_value;
+						vCompLinceneInfodata.push_back(strSrcntName);
+						vCompLinceneInfodata.push_back(str_srcnt_value);
+
+						REDISKEY strSrExptimeName = cSrExptimeName;
+						REDISVALUE str_srexptime_value = srexptime_value;
+						vCompLinceneInfodata.push_back(strSrExptimeName);
+						vCompLinceneInfodata.push_back(str_srexptime_value);
+
+						REDISKEY strSrStarttimeName = cSrStarttimeName;
+						REDISVALUE str_srstarttime_value = srstarttime_value;
+						vCompLinceneInfodata.push_back(strSrStarttimeName);
+						vCompLinceneInfodata.push_back(str_srstarttime_value);
+
+						REDISKEY strStdcntName = cStdcntName;
+						REDISVALUE str_stdcnt_value = stdcnt_value;
+						vCompLinceneInfodata.push_back(strStdcntName);
+						vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+						REDISKEY strStdExptimeName = cStdExptimeName;
+						REDISVALUE str_stdexptime_value = stdexptime_value;
+						vCompLinceneInfodata.push_back(strStdExptimeName);
+						vCompLinceneInfodata.push_back(str_stdexptime_value);
+
+						REDISKEY strStdStarttimeName = cStdStarttimeName;
+						REDISVALUE str_stdstarttime_value = stdstarttime_value;
+						vCompLinceneInfodata.push_back(strStdStarttimeName);
+						vCompLinceneInfodata.push_back(str_stdstarttime_value);
+
+
+						REDISKEY strMonitorcntName = cMonitorcntName;
+						REDISVALUE str_monitorcnt_value = monitorcnt_value;
+						vCompLinceneInfodata.push_back(strMonitorcntName);
+						vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+						REDISKEY strMonitorExptimeName = cMonitorExptimeName;
+						REDISVALUE str_monitorexptime_value = monitorexptime_value;
+						vCompLinceneInfodata.push_back(strMonitorExptimeName);
+						vCompLinceneInfodata.push_back(str_monitorexptime_value);
+
+						REDISKEY strMonitorStarttimeName = cMonitorStarttimeName;
+						REDISVALUE str_monitorstarttime_value = monitorstarttime_value;
+						vCompLinceneInfodata.push_back(strMonitorStarttimeName);
+						vCompLinceneInfodata.push_back(str_monitorstarttime_value);
+
+
+						REDISKEY strVoicecntName = cVoicecntName;
+						REDISVALUE str_voicecnt_value = voicecnt_value;
+						vCompLinceneInfodata.push_back(strVoicecntName);
+						vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+						REDISKEY strVoiceExptimeName = cVoiceExptimeName;
+						REDISVALUE str_voiceexptime_value = voiceexptime_value;
+						vCompLinceneInfodata.push_back(strVoiceExptimeName);
+						vCompLinceneInfodata.push_back(str_voiceexptime_value);
+
+						REDISKEY strVoiceStarttimeName = cVoiceStarttimeName;
+						REDISVALUE str_voicestarttime_value = voicestarttime_value;
+						vCompLinceneInfodata.push_back(strVoiceStarttimeName);
+						vCompLinceneInfodata.push_back(str_voicestarttime_value);
+
+
+						REDISKEY strReccntName = cReccntName;
+						REDISVALUE str_reccnt_value = reccnt_value;
+						vCompLinceneInfodata.push_back(strReccntName);
+						vCompLinceneInfodata.push_back(str_reccnt_value);
+
+						REDISKEY strRecExptimeName = cRecExptimeName;
+						REDISVALUE str_recexptime_value = recexptime_value;
+						vCompLinceneInfodata.push_back(strRecExptimeName);
+						vCompLinceneInfodata.push_back(str_recexptime_value);
+
+						REDISKEY strRecStarttimeName = cRecStarttimeName;
+						REDISVALUE str_recstarttime_value = recstarttime_value;
+						vCompLinceneInfodata.push_back(strRecStarttimeName);
+						vCompLinceneInfodata.push_back(str_recstarttime_value);
+
+
+						REDISKEY strLivecntName = cLivecntName;
+						REDISVALUE str_livecnt_value = livecnt_value;
+						vCompLinceneInfodata.push_back(strLivecntName);
+						vCompLinceneInfodata.push_back(str_livecnt_value);
+
+						REDISKEY strLiveExptimeName = cLiveExptimeName;
+						REDISVALUE str_liveexptime_value = liveexptime_value;
+						vCompLinceneInfodata.push_back(strLiveExptimeName);
+						vCompLinceneInfodata.push_back(str_liveexptime_value);
+
+						REDISKEY strLiveStarttimeName = cLiveStarttimeName;
+						REDISVALUE str_livestarttime_value = livestarttime_value;
+						vCompLinceneInfodata.push_back(strLiveStarttimeName);
+						vCompLinceneInfodata.push_back(str_livestarttime_value);
+
+						REDISKEY strConfcntName = cConfcntName;
+						REDISVALUE str_confcnt_value = confcnt_value;
+						vCompLinceneInfodata.push_back(strConfcntName);
+						vCompLinceneInfodata.push_back(str_confcnt_value);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanytotallicecompidkey, vCompLinceneInfodata);
+
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>GetAllCompLinceneInfo redis db(0)  %s  **bhashHMSet_ok=%d\n", strcompanytotallicecompidkey, bhashHMSet_ok);
+
+					}
+
+				}
+			}
+
+			k += 2;
+		}
+	}
+
+
+
+	return true;
+}
+
+void CDevMgr::CompLinceneUpdateToMC(std::map<unsigned int, map<std::string, sLinceneInfo> > mapLinceneInfo)
+{
+	//获取当前时间串
+	time_t timeNow;
+	struct tm *ptmNow;
+	char szTime[30];
+	timeNow = time(NULL);
+	ptmNow = localtime(&timeNow);
+	sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+#ifdef WIN32
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::CompLinceneUpdateToMC=======timeNow---> %I64d, %s\n", timeNow, szTime);
+#elif defined LINUX
+	sr_printf(SR_LOGLEVEL_DEBUG, "======CDevMgr::CompLinceneUpdateToMC=======timeNow---> %lld, %s\n", timeNow, szTime);
+#endif
+
+#ifdef LINUX
+	float time_use = 0;
+	struct timeval start;
+	struct timeval end;
+	gettimeofday(&start, NULL); // μs level
+#endif
+
+	//查找已经注册成功的mc
+	iter_mapDeviceHeartbeatTime iter = m_MapDeviceHeartbeatTime.begin();
+	while (iter != m_MapDeviceHeartbeatTime.end())
+	{
+#ifdef WIN32
+		sr_printf(SR_LOGLEVEL_DEBUG, "==device_id--->> %d, ==-->> %I64d\n", iter->first, iter->second.time);
+#elif defined LINUX
+		sr_printf(SR_LOGLEVEL_DEBUG, "==device_id--->> %d, ==-->> %lld\n", iter->first, iter->second.time);
+#endif
+
+		int deviceid = iter->first;
+		unsigned int uiDeviceType = iter->second.devicetype;
+
+		if (uiDeviceType == DEVICE_SERVER::DEVICE_MC)
+		{
+			SRMsgs::IndCompLicenseInfo rspsend;
+			rspsend.set_isok(true);
+			rspsend.set_deviceid(deviceid);
+			rspsend.set_token(iter->second.token);
+
+			for (std::map<unsigned int, map<std::string, sLinceneInfo> >::iterator iter_lincene = mapLinceneInfo.begin(); iter_lincene != mapLinceneInfo.end();iter_lincene++)
+			{
+				SRMsgs::IndCompLicenseInfo_CompanyInfo* paddcompinfo = rspsend.add_compinfos();
+				paddcompinfo->set_companyid(iter_lincene->first);
+				paddcompinfo->set_companyname("");
+				for (map<std::string, sLinceneInfo>::iterator iter_compcap = iter_lincene->second.begin(); iter_compcap != iter_lincene->second.end();iter_compcap++)
+				{
+					SRMsgs::IndCompLicenseInfo_LicenceInfo* paddliceneinfo = paddcompinfo->add_licenceinfos();
+					std::map<std::string, int>::iterator iter_tables = m_MapCompCapReverTables.find(iter_compcap->first);
+					if (iter_tables != m_MapCompCapReverTables.end())
+					{
+						paddliceneinfo->set_licencetype(iter_tables->second);
+
+						paddliceneinfo->set_licencenum(iter_compcap->second.amount);
+
+						paddliceneinfo->set_starttime(iter_compcap->second.starttime);
+
+						paddliceneinfo->set_exptime(iter_compcap->second.expiretime);
+
+					}						
+				}
+			}
+
+			//发送给注册成功的mc
+			if (iter->second.pClient != NULL)
+			{
+				SerialProtoMsgAndSend(iter->second.pClient, SRMsgId_IndCompLicenseInfo, &rspsend);
+			}
+		}
+
+		iter++;
+
+	} // while
+
+
+#ifdef LINUX
+	gettimeofday(&end, NULL); // μs level
+	time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "********CDevMgr::Handle_CheckDeviceHeartbeat*****time_use** is: %lf us\n", time_use);
+
+#endif
+
+
+}
+
+void CDevMgr::DeleteMcConfCompLinceneTables(unsigned long long confid, unsigned int deviceid)
+{
+	
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==DeleteMcConfCompLinceneTables is begin ==== deviceid= %d,>>>confid=%s>>>> .\n", deviceid, conf_id_value);
+
+	char company_confid_key[128] = { 0 };
+
+
+	sprintf(company_confid_key, "mclicene_%d_%s", deviceid, conf_id_value);
+
+	bool bRedisFlag = m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(company_confid_key);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==DeleteMcConfCompLinceneTables is end ==== company_confid_key= %s,>>>bRedisFlag=%d>>>> .\n", company_confid_key, bRedisFlag);
+}
+
+void CDevMgr::RecoveryConfCompLinceneInfo(std::map<string, map<string, int> > mapLinceneInfo, unsigned long long confid, unsigned int deviceid)
+{
+
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==RecoveryConfCompLinceneInfo is begin ==== mapLinceneInfo is size = %d,>>>   confid = %s ====>>> deviceid = %d .\n", mapLinceneInfo.size(), conf_id_value, deviceid);
+
+	// 回收到 company_uselic_%compid 表中，同时更新company_surplic_%compid表
+	for (std::map<string, map<string, int> >::iterator iter_compLincene = mapLinceneInfo.begin(); iter_compLincene != mapLinceneInfo.end(); iter_compLincene++)
+	{
+		map<string, int> linceneInfo = iter_compLincene->second;
+		string compid = iter_compLincene->first;
+
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+		
+		sprintf(compuselincene_key, "company_uselic_%s", compid.c_str());
+		sprintf(compsurplincene_key, "company_surplic_%s", compid.c_str());
+
+		REDISKEY strcompanyuselicecompidkey = compuselincene_key;
+		REDISKEY strcompanysurplicecompidkey = compsurplincene_key;
+
+		RedisReplyArray vrra_db0_compid_lincene;
+		vrra_db0_compid_lincene.clear();
+		unsigned int nCompidLinceneList = 0;
+		bool bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(compuselincene_key, vrra_db0_compid_lincene);
+		nCompidLinceneList = vrra_db0_compid_lincene.size();
+
+		map<string, int> companyUseLicInfo;
+		companyUseLicInfo.clear();
+		if (bHGetAllMcGroupid_ok && (nCompidLinceneList > 0) && (nCompidLinceneList % 2 == 0))
+		{
+			
+			for (int index = 0; index < nCompidLinceneList;)
+			{
+				std::string linceneType;
+				std::string linceneCount;
+				int count = 0;
+				linceneType = vrra_db0_compid_lincene[index].str;
+				linceneCount = vrra_db0_compid_lincene[index + 1].str;
+				sscanf(linceneCount.c_str(), "%d", &count);
+				companyUseLicInfo.insert(make_pair(linceneType, count));
+				sr_printf(SR_LOGLEVEL_INFO, "RecoveryConfCompLinceneInfo ==linceneType:%s====>linceneCount:%s  begin \n", linceneType.c_str(), linceneCount.c_str());
+				index += 2;
+			}
+		}
+
+		REDISVDATA vCompLinceneInfodata;
+		vCompLinceneInfodata.clear();
+		REDISKEY strLincenecntName;
+		REDISVALUE str_Lincenecnt_value;
+		//
+		for (map<string, int>::iterator iter_recovery = linceneInfo.begin(); iter_recovery != linceneInfo.end(); iter_recovery++)
+		{
+			std::string linceneType;
+			int linceneCount = 0;
+			linceneType = iter_recovery->first;
+			linceneCount = iter_recovery->second;
+
+			map<string, int>::iterator iter_find = companyUseLicInfo.find(linceneType);
+			if (iter_find != companyUseLicInfo.end())
+			{
+				int compUseLinceneCount = iter_find->second;
+				
+				compUseLinceneCount -= linceneCount;
+				if (compUseLinceneCount < 0 )
+				{
+					compUseLinceneCount = 0;
+				}
+				char valueCount[32] = { 0 };
+				sprintf(valueCount, "%d", compUseLinceneCount);
+				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) %s tables is  exits =====linceneType:%s  compUseLinceneCount=%d\n", compuselincene_key, linceneType.c_str(), compUseLinceneCount);
+				str_Lincenecnt_value = valueCount;
+				strLincenecntName = linceneType;
+				vCompLinceneInfodata.push_back(strLincenecntName);
+				vCompLinceneInfodata.push_back(str_Lincenecnt_value);
+			}
+
+		}
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) exits   %s  **bhashHMSet_ok=%d\n", strcompanyuselicecompidkey.c_str(), bhashHMSet_ok);
+
+		/////
+		vrra_db0_compid_lincene.clear();
+		nCompidLinceneList = 0;
+		bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(compsurplincene_key, vrra_db0_compid_lincene);
+		nCompidLinceneList = vrra_db0_compid_lincene.size();
+		map<string, int> companySurpLicInfo;
+		companySurpLicInfo.clear();
+		if (bHGetAllMcGroupid_ok && (nCompidLinceneList > 0) && (nCompidLinceneList % 2 == 0))
+		{
+
+			for (int index = 0; index < nCompidLinceneList;)
+			{
+				std::string linceneType;
+				std::string linceneCount;
+				int count = 0;
+				linceneType = vrra_db0_compid_lincene[index].str;
+				linceneCount = vrra_db0_compid_lincene[index + 1].str;
+				sscanf(linceneCount.c_str(), "%d", &count);
+				companySurpLicInfo.insert(make_pair(linceneType, count));
+				sr_printf(SR_LOGLEVEL_INFO, "RecoveryConfCompLinceneInfo ==linceneType:%s====>linceneCount:%s ==>companySurpLicInfo.size:%d  begin \n", linceneType.c_str(), linceneCount.c_str(), companySurpLicInfo.size());
+				index += 2;
+			}
+		}
+
+		vCompLinceneInfodata.clear();
+		for (map<string, int>::iterator iter_recovery = linceneInfo.begin(); iter_recovery != linceneInfo.end(); iter_recovery++)
+		{
+			std::string linceneType;
+			int linceneCount = 0;
+			linceneType = iter_recovery->first;
+			linceneCount = iter_recovery->second;
+
+			map<string, int>::iterator iter_find = companySurpLicInfo.find(linceneType);
+			if (iter_find != companySurpLicInfo.end())
+			{
+				int compSurpLinceneCount = iter_find->second;
+
+				compSurpLinceneCount += linceneCount;
+				
+				char valueCount[32] = { 0 };
+				sprintf(valueCount, "%d", compSurpLinceneCount);
+				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) %s tables is  exits =====linceneType:%s  compSurpLinceneCount=%d\n", compsurplincene_key, linceneType.c_str(), compSurpLinceneCount);
+				str_Lincenecnt_value = valueCount;
+				strLincenecntName = linceneType;
+				vCompLinceneInfodata.push_back(strLincenecntName);
+				vCompLinceneInfodata.push_back(str_Lincenecnt_value);
+			}
+
+		}
+
+		bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) exits   %s  **bhashHMSet_ok=%d\n", strcompanysurplicecompidkey.c_str(), bhashHMSet_ok);
+		
+		int compareid = 0;
+		sscanf(compid.c_str(), "%d", &compareid);
+		CheckRedisTernumLicence(compareid);
+
+		////////
+		
+		unsigned int groupid = 0;
+		groupid = GetMcGroupId(deviceid);
+		char compUseLinceneMc_key[256] = { 0 };
+
+		char lincene_value[16] = { 0 };
+
+		sprintf(compUseLinceneMc_key, "company_uselicinlocalmc_%d_%d_%s", groupid, deviceid, compid.c_str());
+		REDISKEY strcompanysurplicecompidMckey = compUseLinceneMc_key;
+
+		vrra_db0_compid_lincene.clear();
+		nCompidLinceneList = 0;
+		bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(compUseLinceneMc_key, vrra_db0_compid_lincene);
+		nCompidLinceneList = vrra_db0_compid_lincene.size();
+
+		companyUseLicInfo.clear();
+		if (bHGetAllMcGroupid_ok && (nCompidLinceneList > 0) && (nCompidLinceneList % 2 == 0))
+		{
+
+			for (int index = 0; index < nCompidLinceneList;)
+			{
+				std::string linceneType;
+				std::string linceneCount;
+				int count = 0;
+				linceneType = vrra_db0_compid_lincene[index].str;
+				linceneCount = vrra_db0_compid_lincene[index + 1].str;
+				sscanf(linceneCount.c_str(), "%d", &count);
+				companyUseLicInfo.insert(make_pair(linceneType, count));
+				sr_printf(SR_LOGLEVEL_INFO, "RecoveryConfCompLinceneInfo tables：%s ==linceneType:%s====>linceneCount:%s  begin \n", compUseLinceneMc_key, linceneType.c_str(), linceneCount.c_str());
+				index += 2;
+			}
+		}
+
+		vCompLinceneInfodata.clear();
+	
+		//
+		for (map<string, int>::iterator iter_recovery = linceneInfo.begin(); iter_recovery != linceneInfo.end(); iter_recovery++)
+		{
+			std::string linceneType;
+			int linceneCount = 0;
+			linceneType = iter_recovery->first;
+			linceneCount = iter_recovery->second;
+
+			map<string, int>::iterator iter_find = companyUseLicInfo.find(linceneType);
+			if (iter_find != companyUseLicInfo.end())
+			{
+				int compUseLinceneCount = iter_find->second;
+
+				compUseLinceneCount -= linceneCount;
+				if (compUseLinceneCount < 0)
+				{
+					compUseLinceneCount = 0;
+				}
+				char valueCount[32] = { 0 };
+				sprintf(valueCount, "%d", compUseLinceneCount);
+				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) %s tables is  exits =====linceneType:%s  compUseLinceneCount=%d\n", compUseLinceneMc_key, linceneType.c_str(), compUseLinceneCount);
+				str_Lincenecnt_value = valueCount;
+				strLincenecntName = linceneType;
+				vCompLinceneInfodata.push_back(strLincenecntName);
+				vCompLinceneInfodata.push_back(str_Lincenecnt_value);
+			}
+
+		}
+
+		bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidMckey, vCompLinceneInfodata);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>RecoveryConfCompLinceneInfo redis db(0) exits   %s  **bhashHMSet_ok=%d\n", strcompanysurplicecompidMckey.c_str(), bhashHMSet_ok);
+
+	}
+
+
+}
+
+void CDevMgr::CheckMCSynConfCompLinceneInfo(unsigned long long confid, unsigned int deviceid, unsigned int confcompid, int liveCount, int recordCount)
+{
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==CheckMCSynConfCompLinceneInfo is begin ==== confcompid = %d,>>>   confid = %s ====>>> deviceid = %d  ,liveCount =%d, recordCount=%d .\n", confcompid, conf_id_value, deviceid,liveCount, recordCount);
+
+	char company_confid_key[128] = { 0 };
+
+	sprintf(company_confid_key, "mclicene_%d_%s", deviceid, conf_id_value);
+
+
+	char cReccntName[16] = { 0 };
+	char cLivecntName[16] = { 0 };
+	char cConfcntName[16] = { 0 };
+
+	sprintf(cReccntName, "%s", "reccnt");
+	sprintf(cLivecntName, "%s", "livecnt");
+	sprintf(cConfcntName, "%s", "confcnt");
+
+	char reccnt_value[16] = { 0 };
+	char livecnt_value[16] = { 0 };
+	char confcnt_value[16] = { 0 };
+	
+	REDISKEY struselicincelocalmckey = company_confid_key;
+	char cCompName[64] = { 0 };
+	sprintf(cCompName, "%d", confcompid);
+
+	// 直接刷表
+	bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_confid_key);
+
+	if (bExistIns)
+	{
+	
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		REDISKEY strCompName = cCompName;
+
+		vGetFileds.push_back(strCompName);
+		//取值回存
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(struselicincelocalmckey, vGetFileds, vRedisReplyArray);
+
+		if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+		{
+			std::string sCompanyInfoMc;
+			sCompanyInfoMc.clear();
+			sCompanyInfoMc = vRedisReplyArray[0].str;
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfCompLinceneInfo == linceneInfo：tables:%s---bhashHMGet_ok:%d,sCompanyInfoMc：%s, ccompid ： %s begin \n", struselicincelocalmckey.c_str(), bhashHMGet_ok, sCompanyInfoMc.c_str(), cCompName);
+			//截取字符串
+			std::map<std::string, int>map_companyidamount;
+			map_companyidamount.clear();
+
+			SubString(map_companyidamount, sCompanyInfoMc);
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfCompLinceneInfo == sCompanyInfoMc:%s---- map_companyidamount.size:%d  \n", sCompanyInfoMc.c_str(), map_companyidamount.size());
+			for (std::map<string, int>::iterator it = map_companyidamount.begin(); it != map_companyidamount.end(); it++)
+			{
+				if (strncmp(cConfcntName, it->first.c_str(), 7) == 0)
+				{
+					it->second = 1;
+				}
+				else if (strncmp(cReccntName, it->first.c_str(), 6) == 0)
+				{
+					it->second = recordCount;
+				}
+				else if (strncmp(cLivecntName, it->first.c_str(), 7) == 0)
+				{
+					it->second = liveCount;
+				}
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfCompLinceneInfo == map_companyidamount：first:%s---- second:%d  \n", it->first.c_str(), it->second);
+
+			}
+			std::string sResult;
+			sResult.clear();
+
+			for (std::map<std::string, int>::iterator iter = map_companyidamount.begin(); iter != map_companyidamount.end(); iter++)
+			{
+				if (iter->second > 0)
+				{
+					char value[16] = { 0 };
+					sprintf(value, "%d", iter->second);
+					sResult += iter->first + "=" + value + ":";
+				}
+			}
+			//sResult.pop_back();
+			sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfCompLinceneInfo ==》》》》 sResult =====:%s \n", sResult.c_str());
+			if (sResult.length() > 0)
+			{
+				sResult.erase(sResult.end() - 1);
+			}
+			char result[256] = { 0 };
+			sprintf(result, "%s", sResult.c_str());
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis::=>>sResult =====:%s=====>>> result = %s\n", sResult.c_str(), result);
+
+			//insert redis
+			m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(company_confid_key, result, cCompName);
+
+
+		}
+
+	}
+	else
+	{
+		sprintf(confcnt_value, "%d", 1);
+		sprintf(reccnt_value, "%d", recordCount);
+		sprintf(livecnt_value, "%d", liveCount);
+		std::string sResult;
+		sResult.clear();
+		REDISKEY sConfName = cConfcntName;
+		REDISKEY sReccntName = cReccntName;
+		REDISKEY sLivecntName = cLivecntName;
+
+		sResult = sConfName + "=" + confcnt_value + ":" + sReccntName + "=" + reccnt_value + ":" + sLivecntName + "=" + livecnt_value;
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>CheckMCSynConfCompLinceneInfo redis db(0) %s tables is  exits ===>>> sResult =%s \n", company_confid_key, sResult.c_str());
+		
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(company_confid_key, sResult.c_str(), cCompName);
+
+
+	}
+
+
+
+}
+
+void CDevMgr::GetMCSynConfTernCompLinceneInfo(std::map<unsigned int, map<std::string, int> >& mapComplincene, unsigned int terncompid, int fromtype, int termtype)
+{
+	sr_printf(SR_LOGLEVEL_DEBUG, "==GetMCSynConfTernCompLinceneInfo is begin ==== terncompid = %d,>>>  ,fromtype =%d, termtype=%d .\n", terncompid, fromtype, termtype);
+
+	//终端
+	char cTernCntFieldName[32] = { 0 };
+
+	if (fromtype == e_Term_From_Platform)
+	{
+		sprintf(cTernCntFieldName, "%s", "srcnt");
+		
+	}
+	else
+	{
+		
+		switch (termtype & 0x0f)
+		{
+		case e_StdTermType_AUTO_TER:
+		case e_StdTermType_AUTO_MCU:
+		case e_StdTermType_AUTO_VX:
+		case e_StdTermType_AUTO_STREAM_LIVE:
+		case e_StdTermType_AUTO_TRUNK:
+			sprintf(cTernCntFieldName, "%s", "stdcnt");
+		
+			break;
+		case e_StdTermType_AUTO_MONITOR_LIVE:
+		case e_StdTermType_AUTO_MONITOR_REC:
+			sprintf(cTernCntFieldName, "%s", "monitorcnt");
+		
+			break;
+		case e_StdTermType_AUTO_PSTN:
+			sprintf(cTernCntFieldName, "%s", "voicecnt");
+		
+			break;
+		}
+	}
+
+
+	string lincenetype;
+	lincenetype = cTernCntFieldName;
+	map<std::string, int> linceneinfo;
+
+	std::map<unsigned int, map<std::string, int> >::iterator iter_complincene = mapComplincene.find(terncompid);
+	if (iter_complincene != mapComplincene.end())
+	{
+		map<std::string, int>::iterator iter_lincene = iter_complincene->second.find(lincenetype);
+		if (iter_lincene != iter_complincene->second.end())
+		{
+			int count = iter_lincene->second + 1;
+			
+			linceneinfo.insert(make_pair(lincenetype, count));
+
+			mapComplincene[terncompid] = linceneinfo;
+		}
+		else
+		{
+			linceneinfo.insert(make_pair(lincenetype, 1));
+			mapComplincene[terncompid] = linceneinfo;
+		}
+	}
+	else
+	{
+		linceneinfo.insert(make_pair(lincenetype, 1));
+		mapComplincene.insert(make_pair(terncompid, linceneinfo));
+	}
+
+	
+}
+
+void CDevMgr::CheckMCSynConfTernCompLinceneInfo(unsigned long long confid, unsigned int deviceid, std::map<unsigned int, map<std::string, int> > mapComplincene)
+{
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==CheckMCSynConfTernCompLinceneInfo is begin ==== >>>   confid = %s ====>>> deviceid = %d  .\n", conf_id_value, deviceid);
+	char company_confid_key[128] = { 0 };
+
+	sprintf(company_confid_key, "mclicene_%d_%s", deviceid, conf_id_value);
+
+
+	char cSrcntName[32] = { 0 };
+	char cStdcntName[32] = { 0 };
+	char cMonitorcntName[32] = { 0 };
+	char cVoicecntName[32] = { 0 };
+
+	sprintf(cSrcntName, "%s", "srcnt");
+	sprintf(cStdcntName, "%s", "stdcnt");
+	sprintf(cMonitorcntName, "%s", "monitorcnt");
+	sprintf(cVoicecntName, "%s", "voicecnt");
+
+	char srcnt_value[16] = { 0 };
+	char stdcnt_value[16] = { 0 };
+	char monitorcnt_value[16] = { 0 };
+	char voicecnt_value[16] = { 0 };
+
+	REDISKEY struselicincelocalmckey = company_confid_key;
+	
+
+	// 直接刷表
+	bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_confid_key);
+
+	if (bExistIns)
+	{
+
+		REDISFILEDS vGetFileds;
+		vGetFileds.clear();
+		RedisReplyArray vRedisReplyArray;
+		vRedisReplyArray.clear();
+
+		for (std::map<unsigned int, map<std::string, int> >::iterator iter_complincene = mapComplincene.begin(); iter_complincene != mapComplincene.end(); iter_complincene++)
+		{
+			char cCompName[64] = { 0 };
+			sprintf(cCompName, "%d", iter_complincene->first);
+
+			REDISKEY strCompName = cCompName;
+			vGetFileds.push_back(strCompName);
+
+			//取值回存
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(struselicincelocalmckey, vGetFileds, vRedisReplyArray);
+
+			if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+			{
+				std::string sCompanyInfoMc;
+				sCompanyInfoMc.clear();
+				sCompanyInfoMc = vRedisReplyArray[0].str;
+
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfTernCompLinceneInfo == linceneInfo：tables:%s---bhashHMGet_ok:%d,sCompanyInfoMc：%s, ccompid ： %s begin \n", struselicincelocalmckey.c_str(), bhashHMGet_ok, sCompanyInfoMc.c_str(), cCompName);
+				//截取字符串
+				std::map<std::string, int>map_companyidamount;
+				map_companyidamount.clear();
+
+				SubString(map_companyidamount, sCompanyInfoMc);
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfTernCompLinceneInfo == sCompanyInfoMc:%s---- map_companyidamount.size:%d  \n", sCompanyInfoMc.c_str(), map_companyidamount.size());
+				
+				std::map<string, int> map_lincene_info;
+				for (std::map<string, int>::iterator it = map_companyidamount.begin(); it != map_companyidamount.end(); it++)
+				{
+					if (strncmp("confcnt", it->first.c_str(), 6) == 0)
+					{
+						map_lincene_info.insert(make_pair(it->first, it->second));
+					}
+					else if (strncmp("reccnt", it->first.c_str(), 6) == 0)
+					{
+						map_lincene_info.insert(make_pair(it->first, it->second));
+					}
+					else if (strncmp("livecnt", it->first.c_str(), 7) == 0)
+					{
+						map_lincene_info.insert(make_pair(it->first, it->second));
+					}
+					sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfTernCompLinceneInfo == map_companyidamount：first:%s---- second:%d  \n", it->first.c_str(), it->second);
+
+				}
+				for (map<std::string, int>::iterator iter_lincene = iter_complincene->second.begin(); iter_lincene != iter_complincene->second.end(); iter_lincene++)
+				{
+					map_lincene_info.insert(make_pair(iter_lincene->first, iter_lincene->second));
+				}
+
+				std::string sResult;
+				sResult.clear();
+
+				for (std::map<std::string, int>::iterator iter = map_lincene_info.begin(); iter != map_lincene_info.end(); iter++)
+				{
+					if (iter->second > 0)
+					{
+						char value[16] = { 0 };
+						sprintf(value, "%d", iter->second);
+						sResult += iter->first + "=" + value + ":";
+					}
+				}
+				//sResult.pop_back();
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfTernCompLinceneInfo ==》》》》 sResult =====:%s \n", sResult.c_str());
+				if (sResult.length() > 0)
+				{
+					sResult.erase(sResult.end() - 1);
+				}
+				char result[256] = { 0 };
+				sprintf(result, "%s", sResult.c_str());
+
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckMCSynConfTernCompLinceneInfo::=>>sResult =====:%s=====>>> result = %s\n", sResult.c_str(), result);
+
+				//insert redis
+				m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(company_confid_key, result, cCompName);
+
+
+			}
+
+
+		}
+
+	}
+	else
+	{
+		for (std::map<unsigned int, map<std::string, int> >::iterator iter_complincene = mapComplincene.begin(); iter_complincene != mapComplincene.end();iter_complincene++)
+		{
+			char cCompName[64] = { 0 };
+			sprintf(cCompName, "%d", iter_complincene->first);
+			std::string sResult;
+			sResult.clear();
+
+			for (map<std::string, int>::iterator iter_lincene = iter_complincene->second.begin(); iter_lincene != iter_complincene->second.end(); iter_lincene++)
+			{
+				if (iter_lincene->second > 0)
+				{
+					char value[16] = { 0 };
+					sprintf(value, "%d", iter_lincene->second);
+					sResult += iter_lincene->first + "=" + value + ":";
+				}
+
+			}
+			if (sResult.length() > 0)
+			{
+				sResult.erase(sResult.end() - 1);
+			}
+			char result[256] = { 0 };
+			sprintf(result, "%s", sResult.c_str());
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>CheckMCSynConfTernCompLinceneInfo redis db(0) %s tables is  exits ===>>> sResult =%s \n", company_confid_key, sResult.c_str());
+
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(company_confid_key, result, cCompName);
+
+		}
+
+	}
+
+}
+
+void CDevMgr::CheckConfReqInfoAndRecoveryLincene(unsigned long long confid, unsigned int deviceid)
+{
+	
+
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+	
+	char company_confid_key[128] = { 0 };
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==CheckConfReqInfoAndRecoveryLincene is begin ==== deviceid= %d,>>>confid=%s>>>> .\n", deviceid, conf_id_value);
+
+	sprintf(company_confid_key, "mclicene_%d_%s", deviceid, conf_id_value);
+
+	bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_confid_key);
+
+	if (bExistIns)
+	{
+		// 存在，需要回收授权
+		RedisReplyArray vrra_db2_deviceid_compid;
+		vrra_db2_deviceid_compid.clear();
+		unsigned int nMcCompidList = 0;
+		bool bHGetAllMcGroupid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_confid_key, vrra_db2_deviceid_compid);
+		nMcCompidList = vrra_db2_deviceid_compid.size();
+
+		std::map<string, int> mapLinceneInfo; // key-LiceneType,value-linceneCount
+		mapLinceneInfo.clear();
+		std::map<string, map<std::string, int> > mapCompLinceneInfo; // key-compid,value-linceneCount
+		mapCompLinceneInfo.clear();
+
+		if (bHGetAllMcGroupid_ok && (nMcCompidList > 0) && (nMcCompidList % 2 == 0))
+		{
+			for (int index = 0; index < nMcCompidList;)
+			{
+				std::string compid;
+				std::string linceneInfo;
+				compid = vrra_db2_deviceid_compid[index].str;
+				linceneInfo = vrra_db2_deviceid_compid[index + 1].str;
+				sr_printf(SR_LOGLEVEL_DEBUG, "CheckConfReqInfoAndRecoveryLincene ==compid:%s====>linceneInfo:%s   begin \n", compid.c_str(), linceneInfo.c_str());
+				std::map<std::string, int> cmd_key_val;
+				SubString(cmd_key_val, linceneInfo);
+				for (std::map<std::string, int>::iterator iterCompanyLincene = cmd_key_val.begin(); iterCompanyLincene != cmd_key_val.end(); iterCompanyLincene++)
+				{
+					std::string sLiceneType;
+					sLiceneType = iterCompanyLincene->first;
+					int liceneCount = iterCompanyLincene->second;
+					
+					sr_printf(SR_LOGLEVEL_DEBUG, "CheckConfReqInfoAndRecoveryLincene ==cmd_key_val : first::%s ,value::%d  ====>  \n", sLiceneType.c_str(), liceneCount);
+					mapLinceneInfo.insert(make_pair(sLiceneType, liceneCount));
+				}
+				mapCompLinceneInfo.insert(make_pair(compid, mapLinceneInfo));
+				index += 2;
+			}
+		}
+
+		RecoveryConfCompLinceneInfo(mapCompLinceneInfo,confid,deviceid);
+
+		DeleteMcConfCompLinceneTables(confid,deviceid);
+	} 
+	
+
+}
+
+void CDevMgr::SetConfCompLinceneInfoToRedis(unsigned long long confid, unsigned int deviceid, unsigned int compid, unsigned int lictype, int count)
+{
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(2);
+
+	char company_confid_key[128] = { 0 };
+
+	char conf_id_value[64] = { 0 };
+#ifdef WIN32
+	sprintf(conf_id_value, "%I64d", confid);
+#elif defined LINUX
+	sprintf(conf_id_value, "%lld", confid);
+#endif
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==SetConfCompLinceneInfoToRedis is begin ==== deviceid= %d,>>>confid=%s>>>>compid=%d lictype= %d, count = %d.\n", deviceid, conf_id_value, compid, lictype, count);
+
+
+	sprintf(company_confid_key, "mclicene_%d_%s", deviceid, conf_id_value);
+
+	char cCompName[64] = { 0 };
+	sprintf(cCompName, "%d", compid);
+
+	std::string liceneType;
+	liceneType.clear();
+
+	REDISKEY strcompanysurplicecompidkey = company_confid_key;
+	REDISFILEDS vGetFileds;
+	vGetFileds.clear();
+	RedisReplyArray vRedisReplyArray;
+	vRedisReplyArray.clear();
+
+	REDISKEY strCompName = cCompName;
+
+	vGetFileds.push_back(strCompName);
+
+	std::map<int, std::string>::iterator iter_lictype = m_MapCapRedisTables.find(lictype);
+	if (iter_lictype != m_MapCapRedisTables.end())
+	{
+		liceneType = iter_lictype->second;
+	}
+
+	bool bExistIns = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(company_confid_key);
+
+	if (bExistIns)
+	{
+		//取值回存
+		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strcompanysurplicecompidkey, vGetFileds, vRedisReplyArray);
+
+		if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+		{
+			std::string sCompanyInfoMc;
+			sCompanyInfoMc.clear();
+			sCompanyInfoMc = vRedisReplyArray[0].str;
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis == linceneInfo：tables:%s---bhashHMGet_ok:%d,sCompanyInfoMc：%s, ccompid ： %s begin \n", strcompanysurplicecompidkey.c_str(), bhashHMGet_ok, sCompanyInfoMc.c_str(), cCompName);
+			//截取字符串
+			std::map<std::string, int>map_companyidamount;
+			map_companyidamount.clear();
+			SubString(map_companyidamount, sCompanyInfoMc);
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis == sCompanyInfoMc:%s---- map_companyidamount.size:%d  \n", sCompanyInfoMc.c_str(), map_companyidamount.size());
+			for (std::map<string, int>::iterator it = map_companyidamount.begin(); it != map_companyidamount.end(); it++)
+			{
+				sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis == map_companyidamount：first:%s---- second:%d  \n", it->first.c_str(), it->second);
+			}
+			std::string sResult;
+			sResult.clear();
+
+
+			std::map<std::string, int>::iterator iter = map_companyidamount.find(liceneType);
+			if (iter != map_companyidamount.end())
+			{
+				iter->second += count;
+				
+			}
+			else
+			{
+				map_companyidamount.insert(make_pair(liceneType, count));
+			}
+
+			for (iter = map_companyidamount.begin(); iter != map_companyidamount.end(); iter++)
+			{
+				if (iter->second > 0)
+				{
+					char value[16] = { 0 };
+					sprintf(value, "%d", iter->second);
+					sResult += iter->first + "=" + value + ":";
+				}
+			}
+			//sResult.pop_back();
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis ==》》》》 sResult =====:%s \n", sResult.c_str());
+			if (sResult.length() > 0)
+			{
+				sResult.erase(sResult.end() - 1);
+			}
+			char result[256] = { 0 };
+			sprintf(result, "%s", sResult.c_str());
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis::=>>sResult =====:%s=====>>> result = %s\n", sResult.c_str(), result);
+
+			//insert redis
+			bool bRedisSetFlag = m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(company_confid_key, result, cCompName);
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "SetConfCompLinceneInfoToRedis::=>>end  bRedisSetFlag=====:%d=====>>> company_confid_key = %s, cCompName = %s \n", bRedisSetFlag, company_confid_key, cCompName);
+
+		}
+		
+	}
+	else
+	{
+		//直接创建
+		if (count < 0)
+		{
+			return;
+		}
+
+		char cmc_companyinfo[128] = { 0 };
+		sprintf(cmc_companyinfo, "%s=%d", liceneType.c_str(), count);
+		m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(company_confid_key, cmc_companyinfo, cCompName);
+
+	}
+
+
+}
+
+bool CDevMgr::ReqCompLinceneInfo(const SRMsgs::ReqLicenseFromDevMgr* req, CCompCapLincene* pCompLincene, SRMsgs::RspLicenseToMC* rspsend)
+{
+	//sr_printf(SR_LOGLEVEL_INFO, "ReqCompLinceneInfo OK: begin \n");
+
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		//设置响应值
+		rspsend->set_isok(false);
+		rspsend->set_deviceid(0);
+		rspsend->set_token("");
+		rspsend->set_confid(0);
+		return false;
+	}
+
+	if (req->complicinfos_size() > 0)
+	{
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+		for (int i = 0; i < req->complicinfos_size(); i++)
+		{
+			const SRMsgs::ReqLicenseFromDevMgr_CompanyInfo getCompLinceneInfo = req->complicinfos(i);
+			SRMsgs::RspLicenseToMC_CompanyInfo* pAddCompInfo = rspsend->add_compinfos();
+
+			pAddCompInfo->set_companyid(getCompLinceneInfo.companyid());
+
+			for (int j = 0; j < getCompLinceneInfo.getlicinfos_size(); j++)
+			{
+				const SRMsgs::ReqLicenseFromDevMgr_LicenceInfo lincinfo = getCompLinceneInfo.getlicinfos(j);
+
+				int linceneCount = GetCompLinceneSuperInfo(getCompLinceneInfo.companyid(), lincinfo.licencetype(), lincinfo.licencenum(), true);
+				if (linceneCount > 0)
+				{
+					SetMcCompanyUseLincene(req->deviceid(), getCompLinceneInfo.companyid(), lincinfo.licencetype(), lincinfo.licencenum(), true);
+
+					SetConfCompLinceneInfoToRedis(req->confid(), req->deviceid(), getCompLinceneInfo.companyid(), lincinfo.licencetype(), linceneCount);
+
+					std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(lincinfo.licencetype());
+					if (iter_comp_type != m_MapCompCapTables.end())
+					{
+						sLinceneInfo tempinfo;
+						tempinfo.starttime = "";
+						tempinfo.expiretime = "";
+						tempinfo.amount = 0 - linceneCount;
+						syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+						
+					}
+				}
+
+				if (linceneCount > 0 && (lincinfo.licencetype() >= e_CompanyLincene_Conf && lincinfo.licencetype() <= e_CompanyLincene_Voice))
+				{
+					SetMcCompLinceneInfo(req->deviceid(), getCompLinceneInfo.companyid(), lincinfo.licencenum(), true);
+				}
+
+				SRMsgs::RspLicenseToMC_LicenceInfo* pAddLinceneList = pAddCompInfo->add_getlicinfos();
+				pAddLinceneList->set_licencetype(lincinfo.licencetype());
+				pAddLinceneList->set_licencenum(linceneCount);
+			}
+			synclinceneInfo.insert(make_pair(getCompLinceneInfo.companyid(), syncinfo));
+		}
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+	}
+
+	//set value
+	rspsend->set_isok(true);
+	rspsend->set_deviceid(req->deviceid());
+	rspsend->set_token(req->token());
+	rspsend->set_confid(req->confid());
+	rspsend->set_seqnum(req->seqnum());
+	//
+
+
+	return true;
+}
+
+
+void CDevMgr::CompanyUseLicenceACK(const SRMsgs::IndCompanyUseLicenceACK* req)
+{
+
+
+	sr_printf(SR_LOGLEVEL_INFO, "==Handle_CompanyUseLicenceACK is begin ==== deviceid= %d,>>>token=%s>>>>confid=%d .\n", req->deviceid(), req->token().c_str(), req->confid());
+
+
+#ifdef LINUX
+	float time_use = 0;
+	struct timeval start;
+	struct timeval end;
+	gettimeofday(&start, NULL); // μs level
+#endif	
+	if (req->complicinfos_size()>0)
+	{
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+
+		for (int i = 0; i < req->complicinfos_size(); i++)
+		{
+			const SRMsgs::IndCompanyUseLicenceACK_CompanyInfo companyInfo = req->complicinfos(i);
+
+			unsigned int companyId = companyInfo.companyid();
+			char cRelCompidValue[128] = { 0 };
+
+			sprintf(cRelCompidValue, "%d", companyId);
+			sprintf(compuselincene_key, "company_uselic_%s", cRelCompidValue);
+			sprintf(compsurplincene_key, "company_surplic_%s", cRelCompidValue);
+
+			for (int j = 0; j < companyInfo.surplicinfos_size(); j++)
+			{
+				const SRMsgs::IndCompanyUseLicenceACK_LicenceInfo surplincinfo = companyInfo.surplicinfos(j);
+
+				char cLinceneFieldName[128] = { 0 };
+				char lincene_value[128] = { 0 };
+				bool brealUse = false;
+
+				std::map<int, string>::iterator iter_type = m_MapCapRedisTables.find(surplincinfo.licencetype());
+				if (iter_type != m_MapCapRedisTables.end())
+				{
+					sprintf(cLinceneFieldName, "%s", iter_type->second.c_str());
+				}
+				sr_printf(SR_LOGLEVEL_DEBUG, "CompanyUseLicenceACK == cLinceneFieldName：%s ---   surplincinfo.licencetype:%d  begin \n", cLinceneFieldName, surplincinfo.licencetype());
+
+				m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+				bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+				bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+				if (bExistUse && bExistSurp)
+				{
+
+					REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+					REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+					REDISFILEDS vGetFileds;
+					vGetFileds.clear();
+
+					RedisReplyArray vRedisReplyArray;
+					vRedisReplyArray.clear();
+
+					REDISKEY strConfcntFieldName = cLinceneFieldName;
+
+					vGetFileds.push_back(strConfcntFieldName);
+
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size())
+					{
+						//
+						int useConfcnt = 0;
+						sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useConfcnt);
+						
+						if (useConfcnt > 0)
+						{
+							useConfcnt -= surplincinfo.licencenum();
+							brealUse = true;
+						}
+
+						//回写
+						REDISVDATA vCompLinceneData;
+						vCompLinceneData.clear();
+						sprintf(lincene_value, "%d", useConfcnt);
+
+						REDISVALUE strconfcntvalue = lincene_value;
+						vCompLinceneData.push_back(strConfcntFieldName);
+						vCompLinceneData.push_back(strconfcntvalue);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+						////
+
+
+						std::map<string, int> mapCompLincene;
+						GetCompTotalLincene(companyId, mapCompLincene);
+						std::map<string, int>::iterator iter_lincene = mapCompLincene.find(strConfcntFieldName);
+						if (iter_lincene != mapCompLincene.end())
+						{
+							int surpLinceneCount = iter_lincene->second - useConfcnt;
+							//回写
+							vCompLinceneData.clear();
+							sprintf(lincene_value, "%d", surpLinceneCount);
+
+							strconfcntvalue = lincene_value;
+							vCompLinceneData.push_back(strConfcntFieldName);
+							vCompLinceneData.push_back(strconfcntvalue);
+
+							bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+							sr_printf(SR_LOGLEVEL_INFO, "CompanyUseLicenceACK == strCompanySurpLinceneKey-%s：lincene_value:%s,strConfcntFieldName%s,strconfcntvalue:%s--bhashHMSet_ok:%d---begin \n", strCompanySurpLinceneKey.c_str(), lincene_value, strConfcntFieldName.c_str(), strconfcntvalue.c_str(), bhashHMSet_ok);
+
+						}
+
+						//vRedisReplyArray.clear();
+
+						//bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+						//if (bhashHMGet_ok
+						//	&& vRedisReplyArray.size() == vGetFileds.size())
+						//{
+						//	int surpReccnt = 0;
+
+						//	sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpReccnt);
+
+						//	if (brealUse)
+						//	{
+						//		surpReccnt += surplincinfo.licencenum();
+						//	}
+
+						//	//回写
+						//	vCompLinceneData.clear();
+						//	sprintf(lincene_value, "%d", surpReccnt);
+
+
+						//	strconfcntvalue = lincene_value;
+						//	vCompLinceneData.push_back(strConfcntFieldName);
+						//	vCompLinceneData.push_back(strconfcntvalue);
+
+						//	bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+
+						//}
+
+					}
+
+				}
+
+				SetMcCompanyUseLincene(req->deviceid(), companyInfo.companyid(), surplincinfo.licencetype(), surplincinfo.licencenum(), false);
+				int linceneCount = 0 - surplincinfo.licencenum();
+				SetConfCompLinceneInfoToRedis(req->confid(), req->deviceid(), companyInfo.companyid(), surplincinfo.licencetype(), linceneCount);
+
+				std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(surplincinfo.licencetype());
+				if (iter_comp_type != m_MapCompCapTables.end())
+				{
+					sLinceneInfo tempinfo;
+					tempinfo.starttime = "";
+					tempinfo.expiretime = "";
+					tempinfo.amount = surplincinfo.licencenum();
+					syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+
+				}
+			}
+			synclinceneInfo.insert(make_pair(companyInfo.companyid(), syncinfo));
+
+			CheckRedisTernumLicence(companyInfo.companyid());
+		}
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+	}
+
+
+#ifdef LINUX
+	gettimeofday(&end, NULL); // μs level
+	time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+	//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_CompanyUseLicenceACK into redis(0) ** (%s)---(%s) **time_use** is: %lf us \n", compuselincene_key, compsurplincene_key, time_use);
+#endif
+
+
+
+}
+
+void CDevMgr::UpdateCompLinceneInfo(std::map<unsigned int, map<std::string, sLinceneInfo> > linceneInfo)
+{
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+	std::set<unsigned int> setCompid;
+	setCompid.clear();
+	
+	for (std::map<unsigned int, map<std::string, sLinceneInfo> >::iterator iter_lic = linceneInfo.begin(); iter_lic != linceneInfo.end(); iter_lic++)
+	{
+
+		char company_surplic_compid_key[128] = { 0 };
+		char company_uselic_compid_key[128] = { 0 };
+		
+		char company_available[32] = { 0 };
+		sprintf(company_available, "company_available");
+
+		//先插入redis，然后在去数据库查询，如果没有，就将该数据删除，查询数据库做校验
+		
+		char cCompIdName[32] = { 0 };
+		sprintf(cCompIdName, "%d", iter_lic->first);
+
+		char comp_status_value[16] = { 0 };
+		sprintf(comp_status_value, "%d", 1);
+
+		REDISKEY strcompanyavaliableidkey = company_available;
+
+		REDISVDATA vCompIdListdata;
+		vCompIdListdata.clear();
+
+		REDISKEY strCompIdName = cCompIdName;
+		REDISVALUE str_status_value = comp_status_value;
+
+		vCompIdListdata.push_back(strCompIdName);
+		vCompIdListdata.push_back(str_status_value);
+
+		bool bhashHMSet_ = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strcompanyavaliableidkey, vCompIdListdata);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0) company_available  compid:%s  **bhashHMSet_ok=%d\n", cCompIdName, bhashHMSet_);
+
+		setCompid.insert(iter_lic->first);
+
+		sprintf(company_surplic_compid_key, "company_surplic_%d", iter_lic->first);
+		sprintf(company_uselic_compid_key, "company_uselic_%d", iter_lic->first);
+
+		bool bExistIns = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(company_surplic_compid_key);
+		bool bExistInsUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(company_uselic_compid_key);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "=UpdateCompLinceneInfo == company_surplic_compid_key = %s,bExistIns = %d,company_uselic_compid_key=%s,bExistInsUse=%d \n", company_surplic_compid_key, bExistIns, company_uselic_compid_key, bExistInsUse);
+
+		char cSrcntName[64] = { 0 };
+		char cStdcntName[64] = { 0 };
+		char cMonitorcntName[64] = { 0 };
+		char cVoicecntName[64] = { 0 };
+		char cReccntName[64] = { 0 };
+		char cLivecntName[64] = { 0 };
+		char cConfcntName[64] = { 0 };
+		char cTernumName[64] = { 0 };
+
+		sprintf(cTernumName, "%s", "ternum");
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+
+		char srcnt_value[32] = { 0 };
+		char stdcnt_value[32] = { 0 };
+		char monitorcnt_value[32] = { 0 };
+		char voicecnt_value[32] = { 0 };
+		char reccnt_value[32] = { 0 };
+		char livecnt_value[32] = { 0 };
+		char confcnt_value[32] = { 0 };
+		char ternum_value[32] = { 0 };
+
+		int confamount = 0;
+		int sramount = 0;
+		int stdamount = 0;
+		int monitoramount = 0;
+		int voiceamount = 0;
+		int recamount = 0;
+		int liveamount = 0;
+
+		for (map<std::string, sLinceneInfo>::iterator iter_cnt = iter_lic->second.begin(); iter_cnt != iter_lic->second.end(); iter_cnt++)
+		{
+			if (strncmp("conf", iter_cnt->first.c_str(), 4) == 0)
+			{
+				sprintf(confcnt_value, "%d", iter_cnt->second.amount);
+				confamount = iter_cnt->second.amount;
+			}
+			else if (strncmp("sr", iter_cnt->first.c_str(), 2) == 0)
+			{
+				sprintf(srcnt_value, "%d", iter_cnt->second.amount);
+				sramount = iter_cnt->second.amount;
+			}
+			else if (strncmp("std", iter_cnt->first.c_str(), 3) == 0)
+			{
+				sprintf(stdcnt_value, "%d", iter_cnt->second.amount);
+				stdamount = iter_cnt->second.amount;
+			}
+			else if (strncmp("monitor", iter_cnt->first.c_str(), 7) == 0)
+			{
+				sprintf(monitorcnt_value, "%d", iter_cnt->second.amount);
+				monitoramount = iter_cnt->second.amount;
+			}
+			else if (strncmp("voice", iter_cnt->first.c_str(), 5) == 0)
+			{
+				sprintf(voicecnt_value, "%d", iter_cnt->second.amount);
+				voiceamount = iter_cnt->second.amount;
+			}
+			else if (strncmp("rec", iter_cnt->first.c_str(), 3) == 0)
+			{
+				sprintf(reccnt_value, "%d", iter_cnt->second.amount);
+				recamount = iter_cnt->second.amount;
+			}
+			else if (strncmp("live", iter_cnt->first.c_str(), 4) == 0)
+			{
+				sprintf(livecnt_value, "%d", iter_cnt->second.amount);
+				liveamount = iter_cnt->second.amount;
+			}
+		}
+
+		//sr_printf(SR_LOGLEVEL_DEBUG, "=UpdateCompLinceneInfo==>totallic ==>srcnt_value= %s,stdcnt_value=%s,monitorcnt_value=%s,voicecnt_value=%s,reccnt_value=%s,livecnt_value=%s,confcnt_value=%s \n", srcnt_value, stdcnt_value, monitorcnt_value, voicecnt_value, reccnt_value, livecnt_value, confcnt_value);
+		REDISKEY strcompanysurplicecompidkey = company_surplic_compid_key;
+		REDISKEY strcompanyuselicecompidkey = company_uselic_compid_key;
+
+
+		REDISVDATA vCompLinceneInfodata;
+		vCompLinceneInfodata.clear();
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strReccntName = cReccntName;
+		REDISKEY strLivecntName = cLivecntName;
+		REDISKEY strConfcntName = cConfcntName;
+		REDISKEY strTernumName = cTernumName;
+
+		REDISVALUE str_srcnt_value;
+		str_srcnt_value.clear();
+		REDISVALUE str_stdcnt_value;
+		str_stdcnt_value.clear();
+		REDISVALUE str_monitorcnt_value;
+		str_monitorcnt_value.clear();
+		REDISVALUE str_voicecnt_value;
+		str_voicecnt_value.clear();
+		REDISVALUE str_reccnt_value;
+		str_reccnt_value.clear();
+		REDISVALUE str_livecnt_value;
+		str_livecnt_value.clear();
+		REDISVALUE str_confcnt_value;
+		str_confcnt_value.clear();
+		REDISVALUE str_ternum_value;
+		str_ternum_value.clear();
+
+		if (bExistIns && bExistInsUse)
+		{
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits   **bhashHMSet_ok\n");
+
+			//表存在，取值
+			RedisReplyArray vrra_comp_lincene;
+			vrra_comp_lincene.clear();
+			unsigned int nCompLinceneCount = 0;
+
+			bool bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(company_uselic_compid_key, vrra_comp_lincene);
+			nCompLinceneCount = vrra_comp_lincene.size();
+
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)company_uselic_compid_key=%s  bHGetAllCompUseLic_ok is :%d  nCompLinceneCount:%d\n", company_uselic_compid_key, bHGetAllCompUseLic_ok, nCompLinceneCount);
+			std::map<string, int> map_temp_uselincene;
+			map_temp_uselincene.clear();
+
+			if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+			{
+				for (int index = 0; index < nCompLinceneCount;)
+				{
+					char temp_key[128] = { 0 };
+					char temp_value[128] = { 0 };
+					sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+					sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+					int licenceCount = 0;
+					sscanf(temp_value, "%d", &licenceCount);
+					sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+					map_temp_uselincene.insert(make_pair(temp_key, licenceCount));
+					index += 2;
+				}
+			}
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  map_temp_uselincene is size:%d \n", map_temp_uselincene.size());
+
+			vCompLinceneInfodata.clear();
+
+			char valueCount[32] = { 0 };
+			int tempTotalCount = 0;// iter_lic->second.srcnt + iter_lic->second.stdcnt + iter_lic->second.monitorcnt + iter_lic->second.voicecnt;
+
+			map<string, int>::iterator iter_find = map_temp_uselincene.find("confcnt");
+			tempTotalCount = confamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====confcnt:%s  tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strConfcntName);
+			vCompLinceneInfodata.push_back(valueCount);
+			//////////////////////////////////////////////////////////////////////////
+			iter_find = map_temp_uselincene.find("ternum");
+			tempTotalCount = sramount + stdamount + monitoramount + voiceamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====ternum:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strTernumName);
+			vCompLinceneInfodata.push_back(str_ternum_value);
+
+			iter_find = map_temp_uselincene.find("srcnt");
+			tempTotalCount = sramount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====srcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strSrcntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			iter_find = map_temp_uselincene.find("stdcnt");
+			tempTotalCount = stdamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====stdcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strStdcntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			iter_find = map_temp_uselincene.find("monitorcnt");
+			tempTotalCount = monitoramount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====monitorcnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strMonitorcntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			iter_find = map_temp_uselincene.find("voicecnt");
+			tempTotalCount = voiceamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====voicecnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strVoicecntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			iter_find = map_temp_uselincene.find("reccnt");
+			tempTotalCount = recamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====reccnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strReccntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			iter_find = map_temp_uselincene.find("livecnt");
+			tempTotalCount = liveamount - iter_find->second;
+			sprintf(valueCount, "%d", tempTotalCount);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is  exits =====livecnt:%s,tempTotalCount=%d\n", valueCount, tempTotalCount);
+			vCompLinceneInfodata.push_back(strLivecntName);
+			vCompLinceneInfodata.push_back(valueCount);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0) exits   %s  **bhashHMSet_ok=%d\n", strcompanysurplicecompidkey.c_str(), bhashHMSet_ok);
+
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)  tables is not exits  \n");
+			//表不存在
+			int temCount = sramount + stdamount + monitoramount + voiceamount;
+			sprintf(ternum_value, "%d", temCount);
+
+			vCompLinceneInfodata.clear();
+
+			vCompLinceneInfodata.push_back(strConfcntName);
+			str_confcnt_value = srcnt_value;
+			vCompLinceneInfodata.push_back(str_confcnt_value);
+
+			vCompLinceneInfodata.push_back(strTernumName);
+			str_ternum_value = ternum_value;
+			vCompLinceneInfodata.push_back(str_ternum_value);
+
+			vCompLinceneInfodata.push_back(strSrcntName);
+			str_srcnt_value = srcnt_value;
+			vCompLinceneInfodata.push_back(str_srcnt_value);
+
+			vCompLinceneInfodata.push_back(strStdcntName);
+			str_stdcnt_value = stdcnt_value;
+			vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+			vCompLinceneInfodata.push_back(strMonitorcntName);
+			str_monitorcnt_value = monitorcnt_value;
+			vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+			vCompLinceneInfodata.push_back(strVoicecntName);
+			str_voicecnt_value = voicecnt_value;
+			vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+			vCompLinceneInfodata.push_back(strReccntName);
+			str_reccnt_value = reccnt_value;
+			vCompLinceneInfodata.push_back(str_reccnt_value);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "=UpdateCompLinceneInfo==>str_reccnt_value=%s \n", str_reccnt_value.c_str());
+
+			vCompLinceneInfodata.push_back(strLivecntName);
+			str_livecnt_value = livecnt_value;
+			vCompLinceneInfodata.push_back(str_livecnt_value);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+			//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0) surp tables  %s  **bhashHMSet_ok=%d\n", strcompanysurplicecompidkey.c_str(), bhashHMSet_ok);
+
+			char use_value[32] = { 0 };
+			sprintf(use_value, "%d", 0);
+
+			REDISVALUE str_value = use_value;
+			vCompLinceneInfodata.clear();
+
+			vCompLinceneInfodata.push_back(strConfcntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strTernumName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strSrcntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strStdcntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strMonitorcntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strVoicecntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strReccntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			vCompLinceneInfodata.push_back(strLivecntName);
+			vCompLinceneInfodata.push_back(str_value);
+
+			bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0) no exits use tables  %s  **bhashHMSet_ok=%d\n", strcompanyuselicecompidkey.c_str(), bhashHMSet_ok);
+		}
+
+		//
+		CheckRedisTernumLicence(iter_lic->first);
+	}
+
+	//数据库进行查询
+	if (m_pWriteDBThread)
+	{
+		typedef CBufferT<CAsyncThread*, std::set<unsigned int>, void*, void*, void*, void*, void*, void*> CParam;
+		CParam* pParam;
+		pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, m_pWriteDBThread, setCompid);
+
+		typedef void (CDevMgr::* ACTION)(void*);
+		m_pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+			*this, &CDevMgr::Handle_SelectCompLinceneInfoToDB, (void*)pParam));
+	}
+
+}
+
+void CDevMgr::Handle_SelectCompLinceneInfoToDB(void* pArg)
+{
+
+	typedef CBufferT<CAsyncThread*, std::set<unsigned int>, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg1);
+	std::set<unsigned int> setCompid = pParam->m_Arg2;
+
+	for (std::set<unsigned int>::iterator iter_compid = setCompid.begin(); iter_compid != setCompid.end(); iter_compid++)
+	{
+			int currentCompId = *iter_compid;
+			sr_printf(SR_LOGLEVEL_DEBUG, "Handle_SelectCompLinceneInfoToDB setCompid is set ：currentCompId:%d   \n", currentCompId);
+	}
+
+	if (pWriteDBThread == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+		sr_printf(SR_LOGLEVEL_DEBUG, "== Handle_SelectCompLinceneInfoToDB == pWriteDBThread == NULL = return !!!!\n");
+		printf("== Handle_SelectCompLinceneInfoToDB == pWriteDBThread == NULL = return !!!!\n");
+		return;
+	}
+
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pWriteDBThread);
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
+	delete pParam;
+	pParam = NULL;
+
+	SelectCompLinceneInfoToDB(pCompLincene, setCompid);
+
+}
+
+void CDevMgr::SelectCompLinceneInfoToDB(CCompCapLincene* pCompLincene, std::set<unsigned int> scompid)
+{
+	if (pCompLincene == NULL)
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "== SelectCompLinceneInfoToDB == pCompLincene == NULL = return !!!!\n");
+		return ;
+	}
+
+	if (m_pRedisConnList[e_RC_TT_UpMsqThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+	for (std::set<unsigned int>::iterator iter_compid = scompid.begin(); iter_compid != scompid.end(); iter_compid++)
+	{
+	
+		unsigned int currentCompId = *iter_compid;
+		map<std::string, sLinceneInfo> curCompLinceneInfo;
+		bool bExist = pCompLincene->SelectSingleCompLinceneInfo(currentCompId, curCompLinceneInfo);
+		if (!bExist)
+		{
+			//不存在，删除redis表
+			char company_available[32] = { 0 };
+			sprintf(company_available, "company_available");
+
+			//先插入redis，然后在去数据库查询，如果没有，就将该数据删除，查询数据库做校验
+
+			char cCompIdName[32] = { 0 };
+			sprintf(cCompIdName, "%d", currentCompId);
+
+			bool bhashHMdel = m_pRedisConnList[e_RC_TT_UpMsqThread]->deletehashvalue(company_available, cCompIdName);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>SelectCompLinceneInfoToDB redis db(0) company_available  compid:%s  **bhashHMSet_ok=%d\n", cCompIdName, bhashHMdel);
+
+
+		}
+	}
+
+
+}
+
+void CDevMgr::SyncCompIdToRedis(unsigned int deviceid, unsigned int compid)
+{
+	// 将企业id存入redis
+	if(m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false || compid == 0 || deviceid == 0)
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "SyncCompIdToRedis ：compid:%d---deviceid:%d  error \n", compid, deviceid );
+
+		return ;
+	}
+	sr_printf(SR_LOGLEVEL_DEBUG, "SyncCompIdToRedis ：compid:%d---deviceid:%d		begin \n", compid, deviceid);
+
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	char cCompIdName[32] = { 0 };
+	sprintf(cCompIdName, "%d", compid);
+
+	char cDeviceIdName[32] = { 0 };
+	sprintf(cDeviceIdName, "%d", deviceid);
+
+	char sync_compid[128] = { 0 };
+	sprintf(sync_compid, "sync_deviceid_%s", cDeviceIdName);
+
+
+	REDISKEY strcompanyavaliableidkey = sync_compid;
+
+	REDISVDATA vCompIdListdata;
+	vCompIdListdata.clear();
+
+	REDISKEY strCompIdName = cCompIdName;
+	REDISVALUE strDeviceIdName = cDeviceIdName;
+
+	vCompIdListdata.push_back(cCompIdName);
+	vCompIdListdata.push_back(cDeviceIdName);
+
+	bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyavaliableidkey, vCompIdListdata);
+
+	sr_printf(SR_LOGLEVEL_DEBUG, "==-->>SyncCompIdToRedis redis db(0) sync_deviceid_%d ,  compid:%d  **bhashHMSet_ok=%d\n", deviceid,compid, bhashHMSet_ok);
+
+}
+void CDevMgr::DeleteCompanyInfoRedis(int deviceid)
+{
+	if (m_pMainThread == NULL)
+	{
+		//printf("======pDevmgr->m_pMainThread == NULL====-return--->>>>\n");
+		return;
+	}
+
+	typedef CBufferT<int, CAsyncThread*, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, m_pMainThread);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pMainThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_DeleteCompanyInfoRedis, (void*)pParam));
+
+}
+// delete企业授权信息
+void CDevMgr::Handle_DeleteCompanyInfoRedis(void *pArg)
+{
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+	//unsigned int deviceid, CCompCapLincene* pCompLincene
+	typedef CBufferT<int, CAsyncThread*, void*, void*, void*, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+	int deviceid = (int)(pParam->m_Arg1);
+	CAsyncThread * pMainThread = (CAsyncThread *)(pParam->m_Arg2);
+	if (pMainThread == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+		printf("== DeleteCompanyInfoRedis == pMainThread == NULL = return !!!!\n");
+		return;
+	}
+
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCapList = m_mapAsyncThreadLinceneCompCap.find(pMainThread);
+	if (iter_mapAsyncThreadLinceneCompCapList != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCapList->second;
+	}
+
+	delete pParam;
+	pParam = NULL;
+
+	//查询redis中对应deviceid的compid
+	if(m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false || deviceid == 0)
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "DeleteCompanyInfoRedis ：deviceid:%d  error \n", deviceid);
+
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_DEBUG, "DeleteCompanyInfoRedis ：deviceid:%d		begin \n", deviceid);
+
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	char cDeviceIdName[32] = { 0 };
+	sprintf(cDeviceIdName, "%d", deviceid);
+
+	char sync_compid[128] = { 0 };
+	sprintf(sync_compid, "sync_deviceid_%s", cDeviceIdName);
+	
+	REDISKEY strcompanysynclicecompidkey = sync_compid; 
+	bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(strcompanysynclicecompidkey.c_str());
+	if (!bExistUP)
+	{
+		return;
+	}
+	std::set<string> sSnycCompId;
+	sSnycCompId.clear();
+	RedisReplyArray vrra_db2_deviceid_compid;
+	vrra_db2_deviceid_compid.clear();
+
+	bool bHGetAllCompid_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(sync_compid, vrra_db2_deviceid_compid);
+	unsigned int nDevCompidList = vrra_db2_deviceid_compid.size();
+	if (bHGetAllCompid_ok && (nDevCompidList > 0) && (nDevCompidList % 2 == 0))
+	{
+		for (int index = 0; index < nDevCompidList;)
+		{
+			std::string deviceid;
+			std::string compid;
+			compid = vrra_db2_deviceid_compid[index].str;
+			deviceid = vrra_db2_deviceid_compid[index + 1].str;
+
+			sSnycCompId.insert(compid);
+			
+			index += 2;
+		}
+	}
+	//查mysql中本地的redis的company licence
+	if (!pCompLincene->SelectCompLinceneDB())
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "DeleteCompanyInfoRedis CCompCapLincene::SelectCompLinceneDB()  not exists.\n");
+		return ;
+	}
+	std::set<int>sRealCompId = pCompLincene->GetCompIdList();
+	//update 本地redis
+	for (std::set<string>::iterator iter_compid = sSnycCompId.begin(); iter_compid != sSnycCompId.end(); iter_compid++)
+	{
+		std::string strCompid;
+		strCompid.clear();
+		strCompid = *iter_compid;
+		int tempCompid = 0;
+		sscanf(strCompid.c_str(), "%d", &tempCompid);
+
+		std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapLinceneInfo;
+		map<unsigned int, sLinceneInfo> licenceInfo;
+
+		std::set<int>::iterator iter_compid_real = sRealCompId.find(tempCompid);
+		if (iter_compid_real != sRealCompId.end())
+		{
+			map<std::string, sLinceneInfo> companylinceneInfo;
+			//本地有企业信息
+			pCompLincene->GetCompLinceneInfo(tempCompid, companylinceneInfo);
+			licenceInfo.clear();
+			for (map<std::string, sLinceneInfo>::iterator iter_local_complic = companylinceneInfo.begin(); iter_local_complic != companylinceneInfo.end(); iter_local_complic++)
+			{
+				std::map<std::string, int>::iterator iter_comp_type = m_MapCompCapReverTables.find(iter_local_complic->first);
+				if (iter_comp_type != m_MapCompCapReverTables.end())
+				{
+					licenceInfo.insert(make_pair(iter_comp_type->second, iter_local_complic->second));
+				}
+			} 
+		}
+		else
+		{
+			//本地没有该企业信息
+			// update company_totallic_
+			sLinceneInfo info;
+			info.amount = 0;
+			info.starttime.clear();
+			info.expiretime.clear();
+			licenceInfo.clear();
+			for (std::map<int, std::string>::iterator iter_type_lic = m_MapCompCapTables.begin(); iter_type_lic != m_MapCompCapTables.end(); iter_type_lic++)
+			{
+				licenceInfo.insert(make_pair(iter_type_lic->first, info));
+			}
+			
+		}
+
+		mapLinceneInfo.insert(make_pair(tempCompid, licenceInfo));
+
+		UpdateCompanyInfoRedis(mapLinceneInfo, 1, true);
+	}
+}
+
+void CDevMgr::UpdateTotalCompanyInfoRedis(unsigned int compid, map<unsigned int, sLinceneInfo> mapLinceneInfo, bool isdelete)
+{
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+	char company_totallic_compid_key[128] = { 0 };
+	sprintf(company_totallic_compid_key, "company_totallic_%d", compid);
+
+	char cSrcntName[32] = { 0 };
+	char cSrExptimeName[32] = { 0 };
+	char cSrStarttimeName[32] = { 0 };
+	char cStdcntName[32] = { 0 };
+	char cStdExptimeName[32] = { 0 };
+	char cStdStarttimeName[32] = { 0 };
+	char cMonitorcntName[32] = { 0 };
+	char cMonitorExptimeName[32] = { 0 };
+	char cMonitorStarttimeName[32] = { 0 };
+	char cVoicecntName[32] = { 0 };
+	char cVoiceExptimeName[32] = { 0 };
+	char cVoiceStarttimeName[32] = { 0 };
+	char cReccntName[32] = { 0 };
+	char cRecExptimeName[32] = { 0 };
+	char cRecStarttimeName[32] = { 0 };
+	char cLivecntName[32] = { 0 };
+	char cLiveExptimeName[32] = { 0 };
+	char cLiveStarttimeName[32] = { 0 };
+	char cConfcntName[32] = { 0 };
+
+	sprintf(cSrcntName, "%s", "srcnt");
+	sprintf(cSrExptimeName, "%s", "srexptime");
+	sprintf(cSrStarttimeName, "%s", "srstarttime");
+	sprintf(cStdcntName, "%s", "stdcnt");
+	sprintf(cStdExptimeName, "%s", "stdexptime");
+	sprintf(cStdStarttimeName, "%s", "stdstarttime");
+	sprintf(cMonitorcntName, "%s", "monitorcnt");
+	sprintf(cMonitorExptimeName, "%s", "monitorexptime");
+	sprintf(cMonitorStarttimeName, "%s", "monitorstarttime");
+	sprintf(cVoicecntName, "%s", "voicecnt");
+	sprintf(cVoiceExptimeName, "%s", "voiceexptime");
+	sprintf(cVoiceStarttimeName, "%s", "voicestarttime");
+	sprintf(cReccntName, "%s", "reccnt");
+	sprintf(cRecExptimeName, "%s", "recexptime");
+	sprintf(cRecStarttimeName, "%s", "recstarttime");
+	sprintf(cLivecntName, "%s", "livecnt");
+	sprintf(cLiveExptimeName, "%s", "liveexptime");
+	sprintf(cLiveStarttimeName, "%s", "livestarttime");
+	sprintf(cConfcntName, "%s", "confcnt");
+
+	char srcnt_value[65] = { 0 };
+	char srexptime_value[65] = { 0 };
+	char srstarttime_value[65] = { 0 };
+
+	char stdcnt_value[65] = { 0 };
+	char stdexptime_value[65] = { 0 };
+	char stdstarttime_value[65] = { 0 };
+
+	char monitorcnt_value[65] = { 0 };
+	char monitorexptime_value[65] = { 0 };
+	char monitorstarttime_value[65] = { 0 };
+
+	char voicecnt_value[65] = { 0 };
+	char voiceexptime_value[65] = { 0 };
+	char voicestarttime_value[65] = { 0 };
+
+	char reccnt_value[65] = { 0 };
+	char recexptime_value[65] = { 0 };
+	char recstarttime_value[65] = { 0 };
+
+	char livecnt_value[65] = { 0 };
+	char liveexptime_value[65] = { 0 };
+	char livestarttime_value[65] = { 0 };
+
+	char confcnt_value[65] = { 0 };
+	
+	REDISKEY strcompanytotallicecompidkey = company_totallic_compid_key;
+
+	REDISVDATA vCompLinceneInfodata;
+	vCompLinceneInfodata.clear();
+
+	REDISKEY strSrcntName = cSrcntName;
+	REDISVALUE str_srcnt_value;
+
+	REDISKEY strSrExptimeName = cSrExptimeName;
+	REDISVALUE str_srexptime_value ;
+
+	REDISKEY strSrStarttimeName = cSrStarttimeName;
+	REDISVALUE str_srstarttime_value;
+
+	REDISKEY strStdcntName = cStdcntName;
+	REDISVALUE str_stdcnt_value;
+
+	REDISKEY strStdExptimeName = cStdExptimeName;
+	REDISVALUE str_stdexptime_value;
+
+	REDISKEY strStdStarttimeName = cStdStarttimeName;
+	REDISVALUE str_stdstarttime_value;
+
+	REDISKEY strMonitorcntName = cMonitorcntName;
+	REDISVALUE str_monitorcnt_value;
+
+	REDISKEY strMonitorExptimeName = cMonitorExptimeName;
+	REDISVALUE str_monitorexptime_value;
+
+	REDISKEY strMonitorStarttimeName = cMonitorStarttimeName;
+	REDISVALUE str_monitorstarttime_value;
+
+	REDISKEY strVoicecntName = cVoicecntName;
+	REDISVALUE str_voicecnt_value;
+
+	REDISKEY strVoiceExptimeName = cVoiceExptimeName;
+	REDISVALUE str_voiceexptime_value;
+
+	REDISKEY strVoiceStarttimeName = cVoiceStarttimeName;
+	REDISVALUE str_voicestarttime_value;
+
+	REDISKEY strReccntName = cReccntName;
+	REDISVALUE str_reccnt_value;
+
+	REDISKEY strRecExptimeName = cRecExptimeName;
+	REDISVALUE str_recexptime_value;
+
+	REDISKEY strRecStarttimeName = cRecStarttimeName;
+	REDISVALUE str_recstarttime_value;
+
+	REDISKEY strLivecntName = cLivecntName;
+	REDISVALUE str_livecnt_value;
+
+	REDISKEY strLiveExptimeName = cLiveExptimeName;
+	REDISVALUE str_liveexptime_value;
+
+	REDISKEY strLiveStarttimeName = cLiveStarttimeName;
+	REDISVALUE str_livestarttime_value;
+
+	REDISKEY strConfcntName = cConfcntName;
+	REDISVALUE str_confcnt_value;
+
+	if (isdelete)
+	{
+		for (map<unsigned int, sLinceneInfo>::iterator iter_lic = mapLinceneInfo.begin(); iter_lic != mapLinceneInfo.end(); iter_lic++)
+		{
+			if (iter_lic->first == e_CompanyLincene_Conf){
+
+				sprintf(confcnt_value, "%d", iter_lic->second.amount);
+			}
+			else if (iter_lic->first == e_CompanyLincene_Sr )
+			{
+				sprintf(srcnt_value, "%d", iter_lic->second.amount);
+				sprintf(srexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(srstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Std )
+			{
+				sprintf(stdcnt_value, "%d", iter_lic->second.amount);
+				sprintf(stdexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(stdstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Monitor)
+			{
+				sprintf(monitorcnt_value, "%d", iter_lic->second.amount);
+				sprintf(monitorexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(monitorstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Voice)
+			{
+				sprintf(voicecnt_value, "%d", iter_lic->second.amount);
+				sprintf(voiceexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(voicestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Record)
+			{
+				sprintf(reccnt_value, "%d", iter_lic->second.amount);
+				sprintf(recexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(recstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Live)
+			{
+				sprintf(livecnt_value, "%d", iter_lic->second.amount);
+				sprintf(liveexptime_value, "%s", iter_lic->second.expiretime.c_str());
+				sprintf(livestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+			}
+		}
+		vCompLinceneInfodata.clear();
+		str_srcnt_value = srcnt_value;
+		vCompLinceneInfodata.push_back(strSrcntName);
+		vCompLinceneInfodata.push_back(str_srcnt_value);
+	
+		str_stdcnt_value = stdcnt_value;
+		vCompLinceneInfodata.push_back(strStdcntName);
+		vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+		str_monitorcnt_value = monitorcnt_value;
+		vCompLinceneInfodata.push_back(strMonitorcntName);
+		vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+		str_voicecnt_value = voicecnt_value;
+		vCompLinceneInfodata.push_back(strVoicecntName);
+		vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+		str_reccnt_value = reccnt_value;
+		vCompLinceneInfodata.push_back(strReccntName);
+		vCompLinceneInfodata.push_back(str_reccnt_value);
+
+		str_livecnt_value = livecnt_value;
+		vCompLinceneInfodata.push_back(strLivecntName);
+		vCompLinceneInfodata.push_back(str_livecnt_value);
+
+		str_confcnt_value = confcnt_value;
+		vCompLinceneInfodata.push_back(strConfcntName);
+		vCompLinceneInfodata.push_back(str_confcnt_value);
+
+		bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(strcompanytotallicecompidkey.c_str());
+		if (bExistUP)
+		{
+			m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(strcompanytotallicecompidkey.c_str());
+		}
+
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanytotallicecompidkey, vCompLinceneInfodata);
+
+	} 
+	else
+	{
+		bool bExistUP = m_pRedisConnList[e_RC_TT_MainThread]->existskey(strcompanytotallicecompidkey.c_str());
+		if (bExistUP)
+		{
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
+			int uiSrcnt = 0;
+			int uiStdcnt = 0;
+			int uiMonitorcnt = 0;
+			int uiVoicecnt = 0;;
+			int uiReccnt = 0;
+			int uiConfcnt = 0;
+			int uiLivecnt = 0;
+
+			vGetFileds.push_back(strSrcntName);
+			vGetFileds.push_back(strStdcntName);
+			vGetFileds.push_back(strMonitorcntName);
+			vGetFileds.push_back(strVoicecntName);
+			vGetFileds.push_back(strReccntName);
+			vGetFileds.push_back(strLivecntName);
+			vGetFileds.push_back(strConfcntName);
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strcompanytotallicecompidkey, vGetFileds, vRedisReplyArray);
+			if (bhashHMGet_ok
+				&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+			{
+				sscanf(vRedisReplyArray[0].str.c_str(), "%u", &uiSrcnt);
+				sscanf(vRedisReplyArray[1].str.c_str(), "%u", &uiStdcnt);
+				sscanf(vRedisReplyArray[2].str.c_str(), "%u", &uiMonitorcnt);
+				sscanf(vRedisReplyArray[3].str.c_str(), "%u", &uiVoicecnt);
+				sscanf(vRedisReplyArray[4].str.c_str(), "%u", &uiReccnt);
+				sscanf(vRedisReplyArray[5].str.c_str(), "%u", &uiLivecnt);
+				sscanf(vRedisReplyArray[6].str.c_str(), "%u", &uiConfcnt);
+
+			}
+			for (map<unsigned int, sLinceneInfo>::iterator iter_lic = mapLinceneInfo.begin(); iter_lic != mapLinceneInfo.end(); iter_lic++)
+			{
+				if (iter_lic->first == e_CompanyLincene_Conf){
+
+					sprintf(confcnt_value, "%d", iter_lic->second.amount+uiConfcnt);
+				}
+				else if (iter_lic->first == e_CompanyLincene_Sr)
+				{
+					sprintf(srcnt_value, "%d", iter_lic->second.amount+uiSrcnt);
+					sprintf(srexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(srstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Std)
+				{
+					sprintf(stdcnt_value, "%d", iter_lic->second.amount+uiStdcnt);
+					sprintf(stdexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(stdstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Monitor)
+				{
+					sprintf(monitorcnt_value, "%d", iter_lic->second.amount+uiMonitorcnt);
+					sprintf(monitorexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(monitorstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Voice)
+				{
+					sprintf(voicecnt_value, "%d", iter_lic->second.amount+uiVoicecnt);
+					sprintf(voiceexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(voicestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Record)
+				{
+					sprintf(reccnt_value, "%d", iter_lic->second.amount+uiReccnt);
+					sprintf(recexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(recstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Live)
+				{
+					sprintf(livecnt_value, "%d", iter_lic->second.amount+uiLivecnt);
+					sprintf(liveexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(livestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+			}
+			vCompLinceneInfodata.clear();
+			str_srcnt_value = srcnt_value;
+			vCompLinceneInfodata.push_back(strSrcntName);
+			vCompLinceneInfodata.push_back(str_srcnt_value);
+
+			str_srexptime_value = srexptime_value;
+			vCompLinceneInfodata.push_back(strSrExptimeName);
+			vCompLinceneInfodata.push_back(str_srexptime_value);
+
+			str_srstarttime_value = srstarttime_value;
+			vCompLinceneInfodata.push_back(strSrStarttimeName);
+			vCompLinceneInfodata.push_back(str_srstarttime_value);
+
+			str_stdcnt_value = stdcnt_value;
+			vCompLinceneInfodata.push_back(strStdcntName);
+			vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+			str_stdexptime_value = stdexptime_value;
+			vCompLinceneInfodata.push_back(strStdExptimeName);
+			vCompLinceneInfodata.push_back(str_stdexptime_value);
+
+			str_stdstarttime_value = stdstarttime_value;
+			vCompLinceneInfodata.push_back(strStdStarttimeName);
+			vCompLinceneInfodata.push_back(str_stdstarttime_value);
+
+			str_monitorcnt_value = monitorcnt_value;
+			vCompLinceneInfodata.push_back(strMonitorcntName);
+			vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+			str_monitorexptime_value = monitorexptime_value;
+			vCompLinceneInfodata.push_back(strMonitorExptimeName);
+			vCompLinceneInfodata.push_back(str_monitorexptime_value);
+
+			str_monitorstarttime_value = monitorstarttime_value;
+			vCompLinceneInfodata.push_back(strMonitorStarttimeName);
+			vCompLinceneInfodata.push_back(str_monitorstarttime_value);
+
+			str_voicecnt_value = voicecnt_value;
+			vCompLinceneInfodata.push_back(strVoicecntName);
+			vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+			str_voiceexptime_value = voiceexptime_value;
+			vCompLinceneInfodata.push_back(strVoiceExptimeName);
+			vCompLinceneInfodata.push_back(str_voiceexptime_value);
+
+			str_voicestarttime_value = voicestarttime_value;
+			vCompLinceneInfodata.push_back(strVoiceStarttimeName);
+			vCompLinceneInfodata.push_back(str_voicestarttime_value);
+
+			str_reccnt_value = reccnt_value;
+			vCompLinceneInfodata.push_back(strReccntName);
+			vCompLinceneInfodata.push_back(str_reccnt_value);
+
+			str_recexptime_value = recexptime_value;
+			vCompLinceneInfodata.push_back(strRecExptimeName);
+			vCompLinceneInfodata.push_back(str_recexptime_value);
+
+			str_recstarttime_value = recstarttime_value;
+			vCompLinceneInfodata.push_back(strRecStarttimeName);
+			vCompLinceneInfodata.push_back(str_recstarttime_value);
+
+			str_livecnt_value = livecnt_value;
+			vCompLinceneInfodata.push_back(strLivecntName);
+			vCompLinceneInfodata.push_back(str_livecnt_value);
+
+			str_liveexptime_value = liveexptime_value;
+			vCompLinceneInfodata.push_back(strLiveExptimeName);
+			vCompLinceneInfodata.push_back(str_liveexptime_value);
+
+			str_livestarttime_value = livestarttime_value;
+			vCompLinceneInfodata.push_back(strLiveStarttimeName);
+			vCompLinceneInfodata.push_back(str_livestarttime_value);
+
+			str_confcnt_value = confcnt_value;
+			vCompLinceneInfodata.push_back(strConfcntName);
+			vCompLinceneInfodata.push_back(str_confcnt_value);
+
+			m_pRedisConnList[e_RC_TT_MainThread]->deletevalue(strcompanytotallicecompidkey.c_str());
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanytotallicecompidkey, vCompLinceneInfodata);
+
+		}
+		else
+		{
+			for (map<unsigned int, sLinceneInfo>::iterator iter_lic = mapLinceneInfo.begin(); iter_lic != mapLinceneInfo.end(); iter_lic++)
+			{
+				if (iter_lic->first == e_CompanyLincene_Conf){
+
+					sprintf(confcnt_value, "%d", iter_lic->second.amount);
+				}
+				else if (iter_lic->first == e_CompanyLincene_Sr)
+				{
+					sprintf(srcnt_value, "%d", iter_lic->second.amount);
+					sprintf(srexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(srstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Std)
+				{
+					sprintf(stdcnt_value, "%d", iter_lic->second.amount);
+					sprintf(stdexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(stdstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Monitor)
+				{
+					sprintf(monitorcnt_value, "%d", iter_lic->second.amount);
+					sprintf(monitorexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(monitorstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Voice)
+				{
+					sprintf(voicecnt_value, "%d", iter_lic->second.amount);
+					sprintf(voiceexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(voicestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Record)
+				{
+					sprintf(reccnt_value, "%d", iter_lic->second.amount);
+					sprintf(recexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(recstarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+				else if (iter_lic->first == e_CompanyLincene_Live)
+				{
+					sprintf(livecnt_value, "%d", iter_lic->second.amount);
+					sprintf(liveexptime_value, "%s", iter_lic->second.expiretime.c_str());
+					sprintf(livestarttime_value, "%s", iter_lic->second.starttime.c_str());
+
+				}
+			}
+			vCompLinceneInfodata.clear();
+
+			str_srcnt_value = srcnt_value;
+			vCompLinceneInfodata.push_back(strSrcntName);
+			vCompLinceneInfodata.push_back(str_srcnt_value);
+
+			str_srexptime_value = srexptime_value;
+			vCompLinceneInfodata.push_back(strSrExptimeName);
+			vCompLinceneInfodata.push_back(str_srexptime_value);
+
+			str_srstarttime_value = srstarttime_value;
+			vCompLinceneInfodata.push_back(strSrStarttimeName);
+			vCompLinceneInfodata.push_back(str_srstarttime_value);
+
+			str_stdcnt_value = stdcnt_value;
+			vCompLinceneInfodata.push_back(strStdcntName);
+			vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+			str_stdexptime_value = stdexptime_value;
+			vCompLinceneInfodata.push_back(strStdExptimeName);
+			vCompLinceneInfodata.push_back(str_stdexptime_value);
+
+			str_stdstarttime_value = stdstarttime_value;
+			vCompLinceneInfodata.push_back(strStdStarttimeName);
+			vCompLinceneInfodata.push_back(str_stdstarttime_value);
+
+			str_monitorcnt_value = monitorcnt_value;
+			vCompLinceneInfodata.push_back(strMonitorcntName);
+			vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+			str_monitorexptime_value = monitorexptime_value;
+			vCompLinceneInfodata.push_back(strMonitorExptimeName);
+			vCompLinceneInfodata.push_back(str_monitorexptime_value);
+
+			str_monitorstarttime_value = monitorstarttime_value;
+			vCompLinceneInfodata.push_back(strMonitorStarttimeName);
+			vCompLinceneInfodata.push_back(str_monitorstarttime_value);
+
+			str_voicecnt_value = voicecnt_value;
+			vCompLinceneInfodata.push_back(strVoicecntName);
+			vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+			str_voiceexptime_value = voiceexptime_value;
+			vCompLinceneInfodata.push_back(strVoiceExptimeName);
+			vCompLinceneInfodata.push_back(str_voiceexptime_value);
+
+			str_voicestarttime_value = voicestarttime_value;
+			vCompLinceneInfodata.push_back(strVoiceStarttimeName);
+			vCompLinceneInfodata.push_back(str_voicestarttime_value);
+
+			str_reccnt_value = reccnt_value;
+			vCompLinceneInfodata.push_back(strReccntName);
+			vCompLinceneInfodata.push_back(str_reccnt_value);
+
+			str_recexptime_value = recexptime_value;
+			vCompLinceneInfodata.push_back(strRecExptimeName);
+			vCompLinceneInfodata.push_back(str_recexptime_value);
+
+			str_recstarttime_value = recstarttime_value;
+			vCompLinceneInfodata.push_back(strRecStarttimeName);
+			vCompLinceneInfodata.push_back(str_recstarttime_value);
+
+			str_livecnt_value = livecnt_value;
+			vCompLinceneInfodata.push_back(strLivecntName);
+			vCompLinceneInfodata.push_back(str_livecnt_value);
+
+			str_liveexptime_value = liveexptime_value;
+			vCompLinceneInfodata.push_back(strLiveExptimeName);
+			vCompLinceneInfodata.push_back(str_liveexptime_value);
+
+			str_livestarttime_value = livestarttime_value;
+			vCompLinceneInfodata.push_back(strLiveStarttimeName);
+			vCompLinceneInfodata.push_back(str_livestarttime_value);
+
+			str_confcnt_value = confcnt_value;
+			vCompLinceneInfodata.push_back(strConfcntName);
+			vCompLinceneInfodata.push_back(str_confcnt_value);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanytotallicecompidkey, vCompLinceneInfodata);
+		}
+
+	}
+
+
+}
+
+void CDevMgr::UpdateCompanyInfoRedis(std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapLinceneInfo, int opertype, bool isdelete)
+{
+	//todo 存在的和不存在的两种存储
+	if (m_pRedisConnList[e_RC_TT_MainThread]->isconnectok() == false)
+	{
+		return;
+	}
+
+	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+	
+	for (std::map<unsigned int, map<unsigned int, sLinceneInfo> >::iterator iter_lic = mapLinceneInfo.begin(); iter_lic != mapLinceneInfo.end(); iter_lic++)
+	{
+	
+		char company_surplic_compid_key[128] = { 0 };
+		char company_uselic_compid_key[128] = { 0 };
+
+		sprintf(company_surplic_compid_key, "company_surplic_%d", iter_lic->first);
+		sprintf(company_uselic_compid_key, "company_uselic_%d", iter_lic->first);
+
+		char cSrcntName[64] = { 0 };
+		char cStdcntName[64] = { 0 };
+		char cMonitorcntName[64] = { 0 };
+		char cVoicecntName[64] = { 0 };
+		char cReccntName[64] = { 0 };
+		char cLivecntName[64] = { 0 };
+		char cConfcntName[64] = { 0 };
+		char cTernumName[64] = { 0 };
+
+		sprintf(cTernumName, "%s", "ternum");
+		sprintf(cSrcntName, "%s", "srcnt");
+		sprintf(cStdcntName, "%s", "stdcnt");
+		sprintf(cMonitorcntName, "%s", "monitorcnt");
+		sprintf(cVoicecntName, "%s", "voicecnt");
+		sprintf(cReccntName, "%s", "reccnt");
+		sprintf(cLivecntName, "%s", "livecnt");
+		sprintf(cConfcntName, "%s", "confcnt");
+
+		char srcnt_value[32] = { 0 };
+		char stdcnt_value[32] = { 0 };
+		char monitorcnt_value[32] = { 0 };
+		char voicecnt_value[32] = { 0 };
+		char reccnt_value[32] = { 0 };
+		char livecnt_value[32] = { 0 };
+		char confcnt_value[32] = { 0 };
+
+		int confamount = 0;
+		int sramount = 0;
+		int stdamount = 0;
+		int monitoramount = 0;
+		int voiceamount = 0;
+		int recamount = 0;
+		int liveamount = 0;
+		REDISKEY strcompanysurplicecompidkey = company_surplic_compid_key;
+		REDISKEY strcompanyuselicecompidkey = company_uselic_compid_key;
+		REDISVDATA vCompLinceneInfodata;
+		vCompLinceneInfodata.clear();
+		REDISKEY strSrcntName = cSrcntName;
+		REDISKEY strStdcntName = cStdcntName;
+		REDISKEY strMonitorcntName = cMonitorcntName;
+		REDISKEY strVoicecntName = cVoicecntName;
+		REDISKEY strReccntName = cReccntName;
+		REDISKEY strLivecntName = cLivecntName;
+		REDISKEY strConfcntName = cConfcntName;
+		REDISKEY strTernumName = cTernumName;
+
+		REDISVALUE str_srcnt_value;
+		REDISVALUE str_surpsrcnt_value;
+		str_srcnt_value.clear();
+		str_surpsrcnt_value.clear();
+
+		REDISVALUE str_stdcnt_value;
+		REDISVALUE str_surpstdcnt_value;
+		str_stdcnt_value.clear();
+		str_surpstdcnt_value.clear();
+
+		REDISVALUE str_monitorcnt_value;
+		REDISVALUE str_surpmonitorcnt_value;
+		str_monitorcnt_value.clear();
+		str_surpmonitorcnt_value.clear();
+
+		REDISVALUE str_voicecnt_value;
+		REDISVALUE str_surpvoicecnt_value;
+		str_voicecnt_value.clear();
+		str_surpvoicecnt_value.clear();
+
+		REDISVALUE str_reccnt_value;
+		REDISVALUE str_surpreccnt_value;
+		str_reccnt_value.clear();
+		str_surpreccnt_value.clear();
+
+		REDISVALUE str_livecnt_value;
+		REDISVALUE str_surplivecnt_value;
+		str_livecnt_value.clear();
+		str_surplivecnt_value.clear();
+
+		REDISVALUE str_confcnt_value;
+		REDISVALUE str_surpconfcnt_value;
+		str_confcnt_value.clear();
+		str_surpconfcnt_value.clear();
+
+		for (map<unsigned int, sLinceneInfo>::iterator iter_cnt = iter_lic->second.begin(); iter_cnt != iter_lic->second.end(); iter_cnt++)
+		{
+			if (iter_lic->first == e_CompanyLincene_Conf){
+
+				confamount = iter_cnt->second.amount;
+			}
+			else if (iter_lic->first == e_CompanyLincene_Sr)
+			{
+				sramount = iter_cnt->second.amount;
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Std)
+			{
+				stdamount = iter_cnt->second.amount;
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Monitor)
+			{
+				monitoramount = iter_cnt->second.amount;
+			}
+			else if (iter_lic->first == e_CompanyLincene_Voice)
+			{
+				voiceamount = iter_cnt->second.amount;
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Record)
+			{
+				recamount = iter_cnt->second.amount;
+
+			}
+			else if (iter_lic->first == e_CompanyLincene_Live)
+			{
+				liveamount = iter_cnt->second.amount;
+			}
+
+		}
+
+		bool bExistIns = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_surplic_compid_key);
+		bool bExistInsUse = m_pRedisConnList[e_RC_TT_MainThread]->existskey(company_uselic_compid_key);
+
+		if (opertype == 1)
+		{
+			UpdateTotalCompanyInfoRedis(iter_lic->first, iter_lic->second, isdelete);
+
+			if (!bExistInsUse)
+			{
+				vCompLinceneInfodata.clear();
+
+				sprintf(confcnt_value, "%d", 0);
+				str_confcnt_value = confcnt_value;
+				vCompLinceneInfodata.push_back(strConfcntName);
+				vCompLinceneInfodata.push_back(str_confcnt_value);
+
+				sprintf(srcnt_value, "%d", 0);
+				str_srcnt_value = srcnt_value;
+				vCompLinceneInfodata.push_back(strSrcntName);
+				vCompLinceneInfodata.push_back(str_srcnt_value);
+
+				sprintf(stdcnt_value, "%d", 0);
+				str_stdcnt_value = stdcnt_value;
+				vCompLinceneInfodata.push_back(strStdcntName);
+				vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+				sprintf(monitorcnt_value, "%d", 0);
+				str_monitorcnt_value = monitorcnt_value;
+				vCompLinceneInfodata.push_back(strMonitorcntName);
+				vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+				sprintf(voicecnt_value, "%d", 0);
+				str_voicecnt_value = voicecnt_value;
+				vCompLinceneInfodata.push_back(strVoicecntName);
+				vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+				sprintf(reccnt_value, "%d", 0);
+				str_reccnt_value = reccnt_value;
+				vCompLinceneInfodata.push_back(strReccntName);
+				vCompLinceneInfodata.push_back(str_reccnt_value);
+
+				sprintf(livecnt_value, "%d", 0);
+				str_livecnt_value = livecnt_value;
+				vCompLinceneInfodata.push_back(strLivecntName);
+				vCompLinceneInfodata.push_back(str_livecnt_value);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+			}
+
+			//先取出total表，use表
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			vGetFileds.push_back(strSrcntName);
+			vGetFileds.push_back(strStdcntName);
+			vGetFileds.push_back(strMonitorcntName);
+			vGetFileds.push_back(strVoicecntName);
+			vGetFileds.push_back(strReccntName);
+			vGetFileds.push_back(strLivecntName);
+			vGetFileds.push_back(strConfcntName);
+
+			char company_totallic_compid_key[128] = { 0 };
+			sprintf(company_totallic_compid_key, "company_totallic_%d", iter_lic->first);
+			REDISKEY strCompanyTotalLinceneKey = company_totallic_compid_key;
+
+
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strCompanyTotalLinceneKey, vGetFileds, vRedisReplyArray);
+
+			if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+			{
+				int	totalSrcnt = 0;
+				int totalStdcnt = 0;
+				int totalMonitorcnt = 0;
+				int totalVoicecnt = 0;
+				int toatlReccnt = 0;
+				int toatlLivecnt = 0;
+				int toatlConfcnt = 0;
+
+				int	useSrcnt = 0;
+				int useStdcnt = 0;
+				int useMonitorcnt = 0;
+				int useVoicecnt = 0;
+				int useReccnt = 0;
+				int useLivecnt = 0;
+				int useConfcnt = 0;
+
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &totalSrcnt);
+				sscanf(vRedisReplyArray[1].str.c_str(), "%d", &totalStdcnt);
+				sscanf(vRedisReplyArray[2].str.c_str(), "%d", &totalMonitorcnt);
+				sscanf(vRedisReplyArray[3].str.c_str(), "%d", &totalVoicecnt);
+				sscanf(vRedisReplyArray[4].str.c_str(), "%d", &toatlReccnt);
+				sscanf(vRedisReplyArray[5].str.c_str(), "%d", &toatlLivecnt);
+				sscanf(vRedisReplyArray[6].str.c_str(), "%d", &toatlConfcnt);
+
+				vRedisReplyArray.clear();
+				bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strcompanyuselicecompidkey, vGetFileds, vRedisReplyArray);
+
+				if (bhashHMGet_ok && vRedisReplyArray.size() == vGetFileds.size())
+				{
+					sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useSrcnt);
+					sscanf(vRedisReplyArray[1].str.c_str(), "%d", &useStdcnt);
+					sscanf(vRedisReplyArray[2].str.c_str(), "%d", &useMonitorcnt);
+					sscanf(vRedisReplyArray[3].str.c_str(), "%d", &useVoicecnt);
+					sscanf(vRedisReplyArray[4].str.c_str(), "%d", &useReccnt);
+					sscanf(vRedisReplyArray[5].str.c_str(), "%d", &useLivecnt);
+					sscanf(vRedisReplyArray[6].str.c_str(), "%d", &useConfcnt);
+
+					int tempTotalCount = 0;
+					tempTotalCount = toatlConfcnt - useConfcnt;
+					sprintf(confcnt_value, "%d", tempTotalCount);
+					str_surpconfcnt_value = confcnt_value;
+					vCompLinceneInfodata.push_back(strConfcntName);
+					vCompLinceneInfodata.push_back(str_surpconfcnt_value);
+
+					tempTotalCount = totalSrcnt - useSrcnt;
+					sprintf(srcnt_value, "%d", tempTotalCount);
+					str_surpsrcnt_value = srcnt_value;
+					vCompLinceneInfodata.push_back(strSrcntName);
+					vCompLinceneInfodata.push_back(str_surpsrcnt_value);
+
+					tempTotalCount = totalStdcnt - useStdcnt;
+					sprintf(stdcnt_value, "%d", tempTotalCount);
+					str_surpstdcnt_value = stdcnt_value;
+					vCompLinceneInfodata.push_back(strStdcntName);
+					vCompLinceneInfodata.push_back(str_surpstdcnt_value);
+
+					tempTotalCount = totalMonitorcnt - useMonitorcnt;
+					sprintf(monitorcnt_value, "%d", tempTotalCount);
+					str_surpmonitorcnt_value = monitorcnt_value;
+					vCompLinceneInfodata.push_back(strMonitorcntName);
+					vCompLinceneInfodata.push_back(str_surpmonitorcnt_value);
+
+					tempTotalCount = totalVoicecnt - useVoicecnt;
+					sprintf(voicecnt_value, "%d", tempTotalCount);
+					str_surpvoicecnt_value = voicecnt_value;
+					vCompLinceneInfodata.push_back(strVoicecntName);
+					vCompLinceneInfodata.push_back(str_surpvoicecnt_value);
+
+					tempTotalCount = toatlReccnt - useReccnt;
+					sprintf(reccnt_value, "%d", tempTotalCount);
+					str_surpreccnt_value = reccnt_value;
+					vCompLinceneInfodata.push_back(strReccntName);
+					vCompLinceneInfodata.push_back(str_reccnt_value);
+
+					tempTotalCount = toatlLivecnt - useLivecnt;
+					sprintf(livecnt_value, "%d", tempTotalCount);
+					str_surplivecnt_value = livecnt_value;
+					vCompLinceneInfodata.push_back(strLivecntName);
+					vCompLinceneInfodata.push_back(str_surplivecnt_value);
+
+					bool bHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+
+				}
+
+
+			}
+
+		}
+		else if (opertype == 2)
+		{
+			if (bExistInsUse)
+			{
+				RedisReplyArray vrra_comp_lincene;
+				vrra_comp_lincene.clear();
+				unsigned int nCompLinceneCount = 0;
+
+				bool bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_uselic_compid_key, vrra_comp_lincene);
+				nCompLinceneCount = vrra_comp_lincene.size();
+
+				//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)company_uselic_compid_key=%s  bHGetAllCompUseLic_ok is :%d  nCompLinceneCount:%d\n", company_uselic_compid_key, bHGetAllCompUseLic_ok, nCompLinceneCount);
+				std::map<string, int> map_temp_uselincene;
+				map_temp_uselincene.clear();
+
+				if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+				{
+					for (int index = 0; index < nCompLinceneCount;)
+					{
+						char temp_key[128] = { 0 };
+						char temp_value[128] = { 0 };
+						sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+						sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+						int licenceCount = 0;
+						sscanf(temp_value, "%d", &licenceCount);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompanyInfoRedis redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+						map_temp_uselincene.insert(make_pair(temp_key, licenceCount));
+						index += 2;
+					}
+				}
+				int tempTotalCount = 0;
+				map<string, int>::iterator iter_find = map_temp_uselincene.find("confcnt");
+				tempTotalCount = iter_find->second - confamount;
+				sprintf(confcnt_value, "%d", tempTotalCount);
+				str_confcnt_value = confcnt_value;
+				vCompLinceneInfodata.push_back(strConfcntName);
+				vCompLinceneInfodata.push_back(str_confcnt_value);
+
+				iter_find = map_temp_uselincene.find("srcnt");
+				tempTotalCount = iter_find->second - sramount;
+				sprintf(srcnt_value, "%d", tempTotalCount);
+				str_srcnt_value = srcnt_value;
+				vCompLinceneInfodata.push_back(strSrcntName);
+				vCompLinceneInfodata.push_back(str_srcnt_value);
+
+				iter_find = map_temp_uselincene.find("stdcnt");
+				tempTotalCount = iter_find->second - stdamount;
+				sprintf(stdcnt_value, "%d", tempTotalCount);
+				str_stdcnt_value = stdcnt_value;
+				vCompLinceneInfodata.push_back(strStdcntName);
+				vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+				iter_find = map_temp_uselincene.find("monitorcnt");
+				tempTotalCount = iter_find->second - monitoramount;
+				sprintf(monitorcnt_value, "%d", tempTotalCount);
+				str_monitorcnt_value = monitorcnt_value;
+				vCompLinceneInfodata.push_back(strMonitorcntName);
+				vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+				iter_find = map_temp_uselincene.find("voicecnt");
+				tempTotalCount = iter_find->second - voiceamount;
+				sprintf(voicecnt_value, "%d", tempTotalCount);
+				str_voicecnt_value = voicecnt_value;
+				vCompLinceneInfodata.push_back(strVoicecntName);
+				vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+				iter_find = map_temp_uselincene.find("reccnt");
+				tempTotalCount = iter_find->second - recamount;
+				sprintf(reccnt_value, "%d", tempTotalCount);
+				str_reccnt_value = reccnt_value;
+				vCompLinceneInfodata.push_back(strReccntName);
+				vCompLinceneInfodata.push_back(str_reccnt_value);
+
+				iter_find = map_temp_uselincene.find("livecnt");
+				tempTotalCount = iter_find->second - liveamount;
+				sprintf(livecnt_value, "%d", tempTotalCount);
+				str_livecnt_value = livecnt_value;
+				vCompLinceneInfodata.push_back(strLivecntName);
+				vCompLinceneInfodata.push_back(str_livecnt_value);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+
+			}
+			else
+			{
+				
+				sprintf(confcnt_value, "%d", confamount);
+				str_confcnt_value = confcnt_value;
+				vCompLinceneInfodata.push_back(strConfcntName);
+				vCompLinceneInfodata.push_back(str_confcnt_value);
+
+				sprintf(srcnt_value, "%d", sramount);
+				str_srcnt_value = srcnt_value;
+				vCompLinceneInfodata.push_back(strSrcntName);
+				vCompLinceneInfodata.push_back(str_srcnt_value);
+
+				sprintf(stdcnt_value, "%d", stdamount);
+				str_stdcnt_value = stdcnt_value;
+				vCompLinceneInfodata.push_back(strStdcntName);
+				vCompLinceneInfodata.push_back(str_stdcnt_value);
+
+				sprintf(monitorcnt_value, "%d", monitoramount);
+				str_monitorcnt_value = monitorcnt_value;
+				vCompLinceneInfodata.push_back(strMonitorcntName);
+				vCompLinceneInfodata.push_back(str_monitorcnt_value);
+
+				sprintf(voicecnt_value, "%d", voiceamount);
+				str_voicecnt_value = voicecnt_value;
+				vCompLinceneInfodata.push_back(strVoicecntName);
+				vCompLinceneInfodata.push_back(str_voicecnt_value);
+
+				sprintf(reccnt_value, "%d", recamount);
+				str_reccnt_value = reccnt_value;
+				vCompLinceneInfodata.push_back(strReccntName);
+				vCompLinceneInfodata.push_back(str_reccnt_value);
+
+				sprintf(livecnt_value, "%d", liveamount);
+				str_livecnt_value = livecnt_value;
+				vCompLinceneInfodata.push_back(strLivecntName);
+				vCompLinceneInfodata.push_back(str_livecnt_value);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanyuselicecompidkey, vCompLinceneInfodata);
+			}
+
+			if (bExistIns)
+			{
+				RedisReplyArray vrra_comp_lincene;
+				vrra_comp_lincene.clear();
+				unsigned int nCompLinceneCount = 0;
+
+				bool bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_surplic_compid_key, vrra_comp_lincene);
+				nCompLinceneCount = vrra_comp_lincene.size();
+
+				//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)company_uselic_compid_key=%s  bHGetAllCompUseLic_ok is :%d  nCompLinceneCount:%d\n", company_uselic_compid_key, bHGetAllCompUseLic_ok, nCompLinceneCount);
+				std::map<string, int> map_temp_uselincene;
+				map_temp_uselincene.clear();
+
+				if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+				{
+					for (int index = 0; index < nCompLinceneCount;)
+					{
+						char temp_key[128] = { 0 };
+						char temp_value[128] = { 0 };
+						sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+						sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+						int licenceCount = 0;
+						sscanf(temp_value, "%d", &licenceCount);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompanyInfoRedis redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+						map_temp_uselincene.insert(make_pair(temp_key, licenceCount));
+						index += 2;
+					}
+				}
+				int tempTotalCount = 0;
+				map<string, int>::iterator iter_find = map_temp_uselincene.find("confcnt");
+				tempTotalCount = iter_find->second + confamount;
+				sprintf(confcnt_value, "%d", tempTotalCount);
+				str_surpconfcnt_value = confcnt_value;
+				vCompLinceneInfodata.push_back(strConfcntName);
+				vCompLinceneInfodata.push_back(str_surpconfcnt_value);
+
+				iter_find = map_temp_uselincene.find("srcnt");
+				tempTotalCount = iter_find->second + sramount;
+				sprintf(srcnt_value, "%d", tempTotalCount);
+				str_surpsrcnt_value = srcnt_value;
+				vCompLinceneInfodata.push_back(strSrcntName);
+				vCompLinceneInfodata.push_back(str_surpsrcnt_value);
+
+				iter_find = map_temp_uselincene.find("stdcnt");
+				tempTotalCount = iter_find->second + stdamount;
+				sprintf(stdcnt_value, "%d", tempTotalCount);
+				str_surpstdcnt_value = stdcnt_value;
+				vCompLinceneInfodata.push_back(strStdcntName);
+				vCompLinceneInfodata.push_back(str_surpstdcnt_value);
+
+				iter_find = map_temp_uselincene.find("monitorcnt");
+				tempTotalCount = iter_find->second + monitoramount;
+				sprintf(monitorcnt_value, "%d", tempTotalCount);
+				str_surpmonitorcnt_value = monitorcnt_value;
+				vCompLinceneInfodata.push_back(strMonitorcntName);
+				vCompLinceneInfodata.push_back(str_surpmonitorcnt_value);
+
+				iter_find = map_temp_uselincene.find("voicecnt");
+				tempTotalCount = iter_find->second + voiceamount;
+				sprintf(voicecnt_value, "%d", tempTotalCount);
+				str_surpvoicecnt_value = voicecnt_value;
+				vCompLinceneInfodata.push_back(strVoicecntName);
+				vCompLinceneInfodata.push_back(str_surpvoicecnt_value);
+
+				iter_find = map_temp_uselincene.find("reccnt");
+				tempTotalCount = iter_find->second + recamount;
+				sprintf(reccnt_value, "%d", tempTotalCount);
+				str_surpreccnt_value = reccnt_value;
+				vCompLinceneInfodata.push_back(strReccntName);
+				vCompLinceneInfodata.push_back(str_reccnt_value);
+
+				iter_find = map_temp_uselincene.find("livecnt");
+				tempTotalCount = iter_find->second + liveamount;
+				sprintf(livecnt_value, "%d", tempTotalCount);
+				str_surplivecnt_value = livecnt_value;
+				vCompLinceneInfodata.push_back(strLivecntName);
+				vCompLinceneInfodata.push_back(str_surplivecnt_value);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+			}
+			else
+			{
+				char company_totallic_compid_key[128] = { 0 };
+				sprintf(company_totallic_compid_key, "company_totallic_%d", iter_lic->first);
+
+
+				RedisReplyArray vrra_comp_lincene;
+				vrra_comp_lincene.clear();
+				unsigned int nCompLinceneCount = 0;
+
+				bool bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_totallic_compid_key, vrra_comp_lincene);
+				nCompLinceneCount = vrra_comp_lincene.size();
+
+				//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompLinceneInfo redis db(0)company_uselic_compid_key=%s  bHGetAllCompUseLic_ok is :%d  nCompLinceneCount:%d\n", company_uselic_compid_key, bHGetAllCompUseLic_ok, nCompLinceneCount);
+				std::map<string, int> map_temp_totallincene;
+				map_temp_totallincene.clear();
+
+				if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+				{
+					for (int index = 0; index < nCompLinceneCount;)
+					{
+						char temp_key[128] = { 0 };
+						char temp_value[128] = { 0 };
+						sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+						sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+						int licenceCount = 0;
+						sscanf(temp_value, "%d", &licenceCount);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompanyInfoRedis redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+						map_temp_totallincene.insert(make_pair(temp_key, licenceCount));
+						index += 2;
+					}
+				}
+
+				vrra_comp_lincene.clear();
+				nCompLinceneCount = 0;
+
+				bHGetAllCompUseLic_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHGetAll(company_uselic_compid_key, vrra_comp_lincene);
+				nCompLinceneCount = vrra_comp_lincene.size();
+
+				std::map<string, int> map_temp_uselincene;
+				map_temp_uselincene.clear();
+
+				if (bHGetAllCompUseLic_ok && (nCompLinceneCount > 0) && (nCompLinceneCount % 2 == 0))
+				{
+					for (int index = 0; index < nCompLinceneCount;)
+					{
+						char temp_key[128] = { 0 };
+						char temp_value[128] = { 0 };
+						sprintf(temp_key, "%s", vrra_comp_lincene[index].str.c_str());
+						sprintf(temp_value, "%s", vrra_comp_lincene[index + 1].str.c_str());
+
+						int licenceCount = 0;
+						sscanf(temp_value, "%d", &licenceCount);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>UpdateCompanyInfoRedis redis db(0)  temp_value is :%s  temp_key:%s,licenceCount:%d\n", temp_value, temp_key, licenceCount);
+						map_temp_uselincene.insert(make_pair(temp_key, licenceCount));
+						index += 2;
+					}
+				}
+
+				int tempTotalCount = 0;
+				map<string, int>::iterator iter_find = map_temp_uselincene.find("confcnt");
+				map<string, int>::iterator iter_find_total = map_temp_totallincene.find("confcnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(confcnt_value, "%d", tempTotalCount);
+				str_surpconfcnt_value = confcnt_value;
+				vCompLinceneInfodata.push_back(strConfcntName);
+				vCompLinceneInfodata.push_back(str_surpconfcnt_value);
+
+				iter_find = map_temp_uselincene.find("srcnt");
+				iter_find_total = map_temp_totallincene.find("srcnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(srcnt_value, "%d", tempTotalCount);
+				str_surpsrcnt_value = srcnt_value;
+				vCompLinceneInfodata.push_back(strSrcntName);
+				vCompLinceneInfodata.push_back(str_surpsrcnt_value);
+
+				iter_find = map_temp_uselincene.find("stdcnt");
+				iter_find_total = map_temp_totallincene.find("stdcnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(stdcnt_value, "%d", tempTotalCount);
+				str_surpstdcnt_value = stdcnt_value;
+				vCompLinceneInfodata.push_back(strStdcntName);
+				vCompLinceneInfodata.push_back(str_surpstdcnt_value);
+
+				iter_find = map_temp_uselincene.find("monitorcnt");
+				iter_find_total = map_temp_totallincene.find("monitorcnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(monitorcnt_value, "%d", tempTotalCount);
+				str_surpmonitorcnt_value = monitorcnt_value;
+				vCompLinceneInfodata.push_back(strMonitorcntName);
+				vCompLinceneInfodata.push_back(str_surpmonitorcnt_value);
+
+				iter_find = map_temp_uselincene.find("voicecnt");
+				iter_find_total = map_temp_totallincene.find("voicecnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(voicecnt_value, "%d", tempTotalCount);
+				str_surpvoicecnt_value = voicecnt_value;
+				vCompLinceneInfodata.push_back(strVoicecntName);
+				vCompLinceneInfodata.push_back(str_surpvoicecnt_value);
+
+				iter_find = map_temp_uselincene.find("reccnt");
+				iter_find_total = map_temp_totallincene.find("reccnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(reccnt_value, "%d", tempTotalCount);
+				str_surpreccnt_value = reccnt_value;
+				vCompLinceneInfodata.push_back(strReccntName);
+				vCompLinceneInfodata.push_back(str_reccnt_value);
+
+				iter_find = map_temp_uselincene.find("livecnt");
+				iter_find_total = map_temp_totallincene.find("livecnt");
+				tempTotalCount = iter_find_total->second - iter_find->second;
+				sprintf(livecnt_value, "%d", tempTotalCount);
+				str_surplivecnt_value = livecnt_value;
+				vCompLinceneInfodata.push_back(strLivecntName);
+				vCompLinceneInfodata.push_back(str_surplivecnt_value);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strcompanysurplicecompidkey, vCompLinceneInfodata);
+
+			}
+
+		}
+
+		CheckRedisTernumLicence(iter_lic->first);
+
+	}
+
+
+}
+
+void CDevMgr::RecoverTermLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, unsigned int termtype, unsigned int confrelcompid, unsigned int fromtype, char* time, time_t lltime)
+{
+	if (!m_pUpMsqThread)
+		return;
+
+	if (time == NULL)
+		return;
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, unsigned int, unsigned int, unsigned int, CAsyncThread*, time_t > CParam;
+	CParam* pParam;
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, confid, userrelcompid, termtype, confrelcompid, fromtype, m_pUpMsqThread, lltime);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_RecoverTermLincene, (void*)pParam));
+	return;
+}
+void CDevMgr::Handle_RecoverTermLincene(void* pArg)
+{
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, unsigned int, unsigned int, unsigned int, CAsyncThread*, time_t> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	char* ptime = (char*)pParam->m_pData1;
+	unsigned int deviceid = pParam->m_Arg1;
+	unsigned long long confid = pParam->m_Arg2;
+	unsigned int userrelcompid = pParam->m_Arg3;
+	unsigned int termtype = pParam->m_Arg4;
+	unsigned int confrelcompid = pParam->m_Arg5;
+	unsigned int fromtype = pParam->m_Arg6;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg7);
+	time_t hand_recover_time = (time_t)(pParam->m_Arg8);
+
+	if (userrelcompid == 0
+		|| confid == 0
+		|| confrelcompid == 0
+		|| deviceid == 0
+		|| pUpMsgThread == NULL
+		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL) // test delet by csh at 2016.10.21
+	{
+		delete pParam;
+		pParam = NULL;
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverTermLincene pUpMsgThread and m_pRedisConnList is NULL.deviceid=%d, userrelcompid=%d,confrelcompid=%d\n", deviceid, userrelcompid, confrelcompid);
+
+		return;
+	}
+	sr_printf(SR_LOGLEVEL_INFO, "==Handle_RecoverTermLincene is begin ====deviceid= %d>>> userrelcompid= %d,>>>confrelcompid=%d>>>>termtype=%d>>>fromtype=%d .\n", deviceid, userrelcompid, confrelcompid, termtype, fromtype);
+
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pUpMsgThread);
+
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
+	if (pCompLincene == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverTermLincene pUserConfDetail is NULL.\n");
+
+		return;
+	}
+
+	do
+	{
+#ifdef LINUX
+		float time_use = 0;
+		struct timeval start;
+		struct timeval end;
+		gettimeofday(&start, NULL); // μs level
+#endif	
+
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+
+		//终端
+		char cTernCntFieldName[32] = { 0 };
+		char terncnt_value[128] = { 0 };
+
+		int ternLicencetype = 0;
+
+		if (fromtype == e_Term_From_Platform)
+		{
+			sprintf(cTernCntFieldName, "%s", "srcnt");
+			ternLicencetype = e_CompanyLincene_Sr;
+		}
+		else
+		{
+			switch (termtype & 0x0f)
+			{
+			case e_StdTermType_AUTO_TER:
+			case e_StdTermType_AUTO_MCU:
+			case e_StdTermType_AUTO_VX:
+			case e_StdTermType_AUTO_STREAM_LIVE:
+			case e_StdTermType_AUTO_TRUNK:
+				sprintf(cTernCntFieldName, "%s", "stdcnt");
+				ternLicencetype = e_CompanyLincene_Std;
+				break;
+			case e_StdTermType_AUTO_MONITOR_LIVE:
+			case e_StdTermType_AUTO_MONITOR_REC:
+				sprintf(cTernCntFieldName, "%s", "monitorcnt");
+				ternLicencetype = e_CompanyLincene_Monitor;
+				break;
+			case e_StdTermType_AUTO_PSTN:
+				sprintf(cTernCntFieldName, "%s", "voicecnt");
+				ternLicencetype = e_CompanyLincene_Voice;
+				break;
+			}
+		}
+
+		sprintf(compuselincene_key, "company_uselic_%d", userrelcompid);
+		sprintf(compsurplincene_key, "company_surplic_%d", userrelcompid);
+
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+		bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compuselincene_key);
+		bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+
+		sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverTermLincene == bExistUse：%d 。bExistSurp：%d,compuselincene_key=%s,compsurplincene_key=%s\n,", bExistUse, bExistSurp, compuselincene_key, compsurplincene_key);
+
+		if (bExistUse && bExistSurp)
+		{
+			//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			//PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+			REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			REDISKEY strTernCntFieldName = cTernCntFieldName;
+
+			vGetFileds.push_back(strTernCntFieldName);
+
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+			//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverTermLincene == bhashHMGet_ok：%d ,strTernCntFieldName=%s,vRedisReplyArray=%d\n,", bhashHMGet_ok, strTernCntFieldName.c_str(), vRedisReplyArray.size());
+
+			if (bhashHMGet_ok
+				&& vRedisReplyArray.size() == vGetFileds.size())
+			{
+				//
+				int useTernCnt = 0;
+
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useTernCnt);
+
+				useTernCnt -= 1;
+				//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverTermLincene ==  useTernCnt=%d strTernCntFieldName=%s===>end\n,", useTernCnt, strTernCntFieldName.c_str());
+
+				//回写
+				REDISVDATA vCompLinceneData;
+				vCompLinceneData.clear();
+
+				sprintf(terncnt_value, "%d", useTernCnt);
+
+				REDISVALUE strterncntvalue = terncnt_value;
+				vCompLinceneData.push_back(strTernCntFieldName);
+				vCompLinceneData.push_back(strterncntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+				////
+				vRedisReplyArray.clear();
+
+				bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size())
+				{
+					int surpTernCnt = 0;
+					sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpTernCnt);
+
+					surpTernCnt += 1;
+					//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverTermLincene ==  surpTernCnt=%d strCompanySurpLinceneKey=%s===>end\n,", surpTernCnt, strCompanySurpLinceneKey.c_str());
+
+					//回写
+					vCompLinceneData.clear();
+
+					sprintf(terncnt_value, "%d", surpTernCnt);
+
+					REDISVALUE strternumvalue = terncnt_value;
+					vCompLinceneData.push_back(strTernCntFieldName);
+					vCompLinceneData.push_back(strternumvalue);
+
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+					//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverTermLincene == bhashHMSet_ok :%d===>end\n,", bhashHMSet_ok);
+
+				}
+
+			}
+
+		}
+
+		CheckRedisTernumLicence(userrelcompid);
+
+		SetMcCompanyUseLincene(deviceid, userrelcompid, ternLicencetype, 1, false);
+
+		SetMcCompLinceneInfo(deviceid, userrelcompid, 1, false);
+
+	
+		SetConfCompLinceneInfoToRedis(confid, deviceid, userrelcompid, ternLicencetype, -1);
+
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+		std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(ternLicencetype);
+		if (iter_comp_type != m_MapCompCapTables.end())
+		{
+			sLinceneInfo tempinfo;
+			tempinfo.starttime = "";
+			tempinfo.expiretime = "";
+			tempinfo.amount = 1;
+			syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+
+		}
+	
+		synclinceneInfo.insert(make_pair(userrelcompid, syncinfo));
+
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+
+
+#ifdef LINUX
+		gettimeofday(&end, NULL); // μs level
+		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_RecoverTermLincene into redis(0) ** (%s)---(%s) **time_use** is: %lf us \n", compuselincene_key, compsurplincene_key, time_use);
+#endif
+
+	} while (0);
+
+
+	delete pParam;
+	pParam = NULL;
+}
+
+//回收会议授
+void CDevMgr::RecoverConfLincene(unsigned int deviceid, unsigned long long confid, unsigned int confrelcompid, char* time, time_t lltime)
+{
+	if (!m_pUpMsqThread)
+		return;
+
+	if (time == NULL)
+		return;
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, confid, confrelcompid, m_pUpMsqThread, lltime);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_RecoverConfincene, (void*)pParam));
+	return;
+}
+void CDevMgr::Handle_RecoverConfincene(void* pArg)
+{
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	char* ptime = (char*)pParam->m_pData1;
+
+	unsigned int deviceid = pParam->m_Arg1;
+	unsigned long long confid = pParam->m_Arg2;
+	unsigned int confrelcompid = pParam->m_Arg3;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg4);
+	time_t add_time = (time_t)(pParam->m_Arg5);
+
+	if (confrelcompid == 0
+		|| confid == 0
+		|| deviceid == 0
+		|| pUpMsgThread == NULL
+		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverConfincene pUpMsgThread and m_pRedisConnList is NULL.confrelcompid=%d, device=%d \n", confrelcompid, deviceid);
+
+		return;
+	}
+	//sr_printf(SR_LOGLEVEL_DEBUG, "Handle_RecoverConfincene ====>confrelcompid=%d   ====>deviceid = %d  begin\n", confrelcompid, deviceid);
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pUpMsgThread);
+
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
+	if (pCompLincene == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverConfincene pCompLincene is NULL.\n");
+
+		return;
+	}
+
+	{
+#ifdef LINUX
+		float time_use = 0;
+		struct timeval start;
+		struct timeval end;
+		gettimeofday(&start, NULL); // μs level
+#endif 
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+
+		char cConfcntFieldName[128] = { 0 };
+		char confcnt_value[128] = { 0 };
+
+		char cConfRelCompidValue[128] = { 0 };
+
+		sprintf(cConfRelCompidValue, "%d", confrelcompid);
+
+		sprintf(cConfcntFieldName, "%s", "confcnt");
+
+		sprintf(compuselincene_key, "company_uselic_%s", cConfRelCompidValue);
+		sprintf(compsurplincene_key, "company_surplic_%s", cConfRelCompidValue);
+
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+		bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverConfincene == bExistUse：%d 。bExistSurp：%d,compuselincene_key=%s,compsurplincene_key=%s\n,", bExistUse, bExistSurp, compuselincene_key, compsurplincene_key);
+
+		if (bExistUse && bExistSurp)
+		{
+			//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			//PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+			REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			REDISKEY strConfcntFieldName = cConfcntFieldName;
+
+			vGetFileds.push_back(strConfcntFieldName);
+
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+			if (bhashHMGet_ok
+				&& vRedisReplyArray.size() == vGetFileds.size())
+			{
+				//
+				int useConfcnt = 0;
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useConfcnt);
+
+				useConfcnt -= 1;
+				//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverConfincene == useConfcnt：%d 。strCompanyUseLinceneKey=%s\n,", useConfcnt, strCompanyUseLinceneKey.c_str());
+
+				//回写
+				REDISVDATA vCompLinceneData;
+				vCompLinceneData.clear();
+				sprintf(confcnt_value, "%d", useConfcnt);
+
+				REDISVALUE strconfcntvalue = confcnt_value;
+				vCompLinceneData.push_back(strConfcntFieldName);
+				vCompLinceneData.push_back(strconfcntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+				////
+				vRedisReplyArray.clear();
+
+				bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size())
+				{
+					int surpReccnt = 0;
+
+					sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpReccnt);
+					surpReccnt += 1;
+
+					//sr_printf(SR_LOGLEVEL_INFO, "Handle_RecoverConfincene == surpReccnt：%d 。strCompanySurpLinceneKey=%s\n,", surpReccnt, strCompanySurpLinceneKey.c_str());
+
+					//回写
+					vCompLinceneData.clear();
+					sprintf(confcnt_value, "%d", surpReccnt);
+
+
+					strconfcntvalue = confcnt_value;
+					vCompLinceneData.push_back(strConfcntFieldName);
+					vCompLinceneData.push_back(strconfcntvalue);
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+
+				}
+
+			}
+
+		}
+
+		SetMcCompanyUseLincene(deviceid, confrelcompid, e_CompanyLincene_Conf, 1, false);
+
+		SetMcCompLinceneInfo(deviceid, confrelcompid, 1, false);
+
+		SetConfCompLinceneInfoToRedis(confid, deviceid, confrelcompid, e_CompanyLincene_Conf, -1);
+
+		DeleteMcConfCompLinceneTables(confid, deviceid);
+
+		SetConfToCompList(confrelcompid, confid, 0);
+
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+		std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(e_CompanyLincene_Conf);
+		if (iter_comp_type != m_MapCompCapTables.end())
+		{
+			sLinceneInfo tempinfo;
+			tempinfo.starttime = "";
+			tempinfo.expiretime = "";
+			tempinfo.amount = 1;
+			syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+
+		}
+
+		synclinceneInfo.insert(make_pair(confrelcompid, syncinfo));
+
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+
+#ifdef LINUX
+		gettimeofday(&end, NULL); // μs level
+		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_RecoverConfincene into redis(0) ** (%s)---(%s) **time_use** is: %lf us \n", compuselincene_key, compsurplincene_key, time_use);
+
+#endif 
+
+	}
+
+	delete pParam;
+	pParam = NULL;
+}
+//回收录制授权
+void CDevMgr::RecoverRecordLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, char* time, time_t lltime)
+{
+	if (!m_pUpMsqThread)
+		return;
+
+	if (time == NULL)
+		return;
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, confid, userrelcompid, m_pUpMsqThread, lltime);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_RecoverRecordLincene, (void*)pParam));
+	return;
+}
+void CDevMgr::Handle_RecoverRecordLincene(void* pArg)
+{
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+
+	typedef CBufferT<unsigned int, unsigned long long,  unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	char* ptime = (char*)pParam->m_pData1;
+
+	unsigned int deviceid = pParam->m_Arg1;
+	unsigned long long confid = pParam->m_Arg2;
+	unsigned int userrelcompid = pParam->m_Arg3;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg4);
+	time_t add_time = (time_t)(pParam->m_Arg5);
+
+	if (userrelcompid == 0
+		|| confid == 0
+		|| deviceid == 0
+		|| pUpMsgThread == NULL
+		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverRecordLincene pUpMsgThread and m_pRedisConnList is NULL.\n");
+
+		return;
+	}
+
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pUpMsgThread);
+
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
+	if (pCompLincene == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverRecordLincene pCompLincene is NULL.\n");
+
+		return;
+	}
+
+	{
+#ifdef LINUX
+		float time_use = 0;
+		struct timeval start;
+		struct timeval end;
+		gettimeofday(&start, NULL); // μs level
+#endif 
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+
+		char cReccntFieldName[128] = { 0 };
+		char reccnt_value[128] = { 0 };
+
+		char cConfRelCompidValue[128] = { 0 };
+
+#ifdef WIN32
+		sprintf(cConfRelCompidValue, "%I64d", userrelcompid);
+
+#elif defined LINUX
+
+		sprintf(cConfRelCompidValue, "%lld", userrelcompid);
+
+#endif
+
+		sprintf(cReccntFieldName, "%s", "reccnt");
+
+		sprintf(compuselincene_key, "company_uselic_%s", cConfRelCompidValue);
+		sprintf(compsurplincene_key, "company_surplic_%s", cConfRelCompidValue);
+
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+		bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		if (bExistUse && bExistSurp)
+		{
+			//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			//PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+			REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			REDISKEY strReccntFieldName = cReccntFieldName;
+
+			vGetFileds.push_back(strReccntFieldName);
+
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+			if (bhashHMGet_ok
+				&& vRedisReplyArray.size() == vGetFileds.size())
+			{
+				//
+				int useReccnt = 0;
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useReccnt);
+				useReccnt--;
+				//回写
+				REDISVDATA vCompLinceneData;
+				vCompLinceneData.clear();
+				sprintf(reccnt_value, "%d", useReccnt);
+
+				REDISVALUE strreccntvalue = reccnt_value;
+				vCompLinceneData.push_back(strReccntFieldName);
+				vCompLinceneData.push_back(strreccntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+				////
+				vRedisReplyArray.clear();
+
+				bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size())
+				{
+					int surpReccnt = 0;
+
+					sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpReccnt);
+					surpReccnt++;
+
+					//回写
+					vCompLinceneData.clear();
+					sprintf(reccnt_value, "%d", surpReccnt);
+
+
+					strreccntvalue = reccnt_value;
+					vCompLinceneData.push_back(strReccntFieldName);
+					vCompLinceneData.push_back(strreccntvalue);
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+
+				}
+
+			}
+
+		}
+
+		SetMcCompanyUseLincene(deviceid, userrelcompid, e_CompanyLincene_Record, 1, false);
+
+		SetConfCompLinceneInfoToRedis(confid, deviceid, userrelcompid, e_CompanyLincene_Record, -1);
+
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+		std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(e_CompanyLincene_Record);
+		if (iter_comp_type != m_MapCompCapTables.end())
+		{
+			sLinceneInfo tempinfo;
+			tempinfo.starttime = "";
+			tempinfo.expiretime = "";
+			tempinfo.amount = 1;
+			syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+
+		}
+
+		synclinceneInfo.insert(make_pair(userrelcompid, syncinfo));
+
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+
+#ifdef LINUX
+		gettimeofday(&end, NULL); // μs level
+		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_RecoverRecordLincene into redis(0) ** (%s)---(%s) **time_use** is: %lf us \n", compuselincene_key, compsurplincene_key, time_use);
+#endif 
+
+	}
+
+	delete pParam;
+	pParam = NULL;
+}
+//回收直播授权
+void CDevMgr::RecoverLiveLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, char* time, time_t lltime)
+{
+	if (!m_pUpMsqThread)
+		return;
+
+	if (time == NULL)
+		return;
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam;
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, deviceid, confid, userrelcompid, m_pUpMsqThread, lltime);
+
+	typedef void (CDevMgr::* ACTION)(void*);
+	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+		*this, &CDevMgr::Handle_RecoverLiveLincene, (void*)pParam));
+	return;
+}
+void CDevMgr::Handle_RecoverLiveLincene(void* pArg)
+{
+
+	if (pArg == NULL)
+	{
+		assert(0);
+		return;
+	}
+
+	typedef CBufferT<unsigned int, unsigned long long, unsigned int, CAsyncThread*, time_t, void*, void*, void*> CParam;
+	CParam* pParam = (CParam*)pArg;
+
+	char* ptime = (char*)pParam->m_pData1;
+
+	unsigned int deviceid = pParam->m_Arg1;
+	unsigned long long confid = pParam->m_Arg2;
+	unsigned int userrelcompid = pParam->m_Arg3;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg4);
+	time_t add_time = (time_t)(pParam->m_Arg5);
+
+	if (userrelcompid == 0
+		|| confid == 0
+		|| deviceid == 0
+		|| pUpMsgThread == NULL
+		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverLiveLincene pUpMsgThread and m_pRedisConnList is NULL.\n");
+
+		return;
+	}
+
+	CCompCapLincene* pCompLincene = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pUpMsgThread);
+
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLincene = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
+	if (pCompLincene == NULL)
+	{
+		delete pParam;
+		pParam = NULL;
+
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_RecoverLiveLincene pCompLincene is NULL.\n");
+
+		return;
+	}
+
+	{
+#ifdef LINUX
+		float time_use = 0;
+		struct timeval start;
+		struct timeval end;
+		gettimeofday(&start, NULL); // μs level
+#endif 
+		char compuselincene_key[128] = { 0 };
+		char compsurplincene_key[128] = { 0 };
+
+		char cLivecntFieldName[128] = { 0 };
+		char livecnt_value[128] = { 0 };
+
+		char cConfRelCompidValue[128] = { 0 };
+
+#ifdef WIN32
+		sprintf(cConfRelCompidValue, "%I64d", userrelcompid);
+
+#elif defined LINUX
+
+		sprintf(cConfRelCompidValue, "%lld", userrelcompid);
+
+#endif
+
+		sprintf(cLivecntFieldName, "%s", "livecnt");
+
+		sprintf(compuselincene_key, "company_uselic_%s", cConfRelCompidValue);
+		sprintf(compsurplincene_key, "company_surplic_%s", cConfRelCompidValue);
+
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(0);
+
+		bool bExistUse = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		bool bExistSurp = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(compsurplincene_key);
+		if (bExistUse && bExistSurp)
+		{
+			//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			//PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			REDISKEY strCompanyUseLinceneKey = compuselincene_key;
+			REDISKEY strCompanySurpLinceneKey = compsurplincene_key;
+
+			REDISFILEDS vGetFileds;
+			vGetFileds.clear();
+
+			RedisReplyArray vRedisReplyArray;
+			vRedisReplyArray.clear();
+
+			REDISKEY strLivecntFieldName = cLivecntFieldName;
+
+			vGetFileds.push_back(strLivecntFieldName);
+
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanyUseLinceneKey, vGetFileds, vRedisReplyArray);
+
+			if (bhashHMGet_ok
+				&& vRedisReplyArray.size() == vGetFileds.size())
+			{
+				//
+				int useLivecnt = 0;
+				sscanf(vRedisReplyArray[0].str.c_str(), "%d", &useLivecnt);
+				useLivecnt--;
+				//回写
+				REDISVDATA vCompLinceneData;
+				vCompLinceneData.clear();
+				sprintf(livecnt_value, "%d", useLivecnt);
+
+				REDISVALUE strlivecntvalue = livecnt_value;
+				vCompLinceneData.push_back(strLivecntFieldName);
+				vCompLinceneData.push_back(strlivecntvalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanyUseLinceneKey, vCompLinceneData);
+				////
+				vRedisReplyArray.clear();
+
+				bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strCompanySurpLinceneKey, vGetFileds, vRedisReplyArray);
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size())
+				{
+					int surpLivecnt = 0;
+
+					sscanf(vRedisReplyArray[0].str.c_str(), "%d", &surpLivecnt);
+					surpLivecnt++;
+
+					//回写
+					vCompLinceneData.clear();
+					sprintf(livecnt_value, "%d", surpLivecnt);
+
+
+					strlivecntvalue = livecnt_value;
+					vCompLinceneData.push_back(strLivecntFieldName);
+					vCompLinceneData.push_back(strlivecntvalue);
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strCompanySurpLinceneKey, vCompLinceneData);
+
+				}
+
+			}
+
+		}
+
+		SetMcCompanyUseLincene(deviceid, userrelcompid, e_CompanyLincene_Live, 1, false);
+
+		SetConfCompLinceneInfoToRedis(confid, deviceid, userrelcompid, e_CompanyLincene_Live, -1);
+
+		std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+		synclinceneInfo.clear();
+		map<std::string, sLinceneInfo> syncinfo;
+		syncinfo.clear();
+		std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(e_CompanyLincene_Live);
+		if (iter_comp_type != m_MapCompCapTables.end())
+		{
+			sLinceneInfo tempinfo;
+			tempinfo.starttime = "";
+			tempinfo.expiretime = "";
+			tempinfo.amount = 1;
+			syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+
+		}
+
+		synclinceneInfo.insert(make_pair(userrelcompid, syncinfo));
+
+		CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+
+#ifdef LINUX
+		gettimeofday(&end, NULL); // μs level
+		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_RecoverLiveLincene into redis(0) ** (%s)---(%s) **time_use** is: %lf us \n", compuselincene_key, compsurplincene_key, time_use);
+#endif 
+
+	}
+
+	delete pParam;
+	pParam = NULL;
+}
+
+void CDevMgr::SyncSubCompCapInfo(const SRMsgs::IndSubCompCapInfoToDevmgr* ind, time_t timeNow)
+{
+	// 下级->上级的企业授权信息 同步
+	std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapCompLinceneInfo;
+	mapCompLinceneInfo.clear();
+	map<unsigned int, sLinceneInfo> mapLinceneInfo;
+	mapLinceneInfo.clear();
+	unsigned int compid = 0;
+
+	// 将更新信息发送给上级以及下级devmgr
+	if (ind->compinfos_size() > 0)
+	{
+		
+		//// 向上级devmgr同步
+		if (m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr)
+		{
+			SRMsgs::IndSubCompCapInfoToDevmgr	indSubCompCapinfo;
+			indSubCompCapinfo.set_deviceid(m_uiMyDeviceid);
+			indSubCompCapinfo.set_token(m_szMyToken);
+
+			for (int i = 0; i < ind->compinfos_size(); i++)
+			{
+				const SRMsgs::IndSubCompCapInfoToDevmgr_CompanyInfo& compinfo = ind->compinfos(i);
+
+
+				SRMsgs::IndSubCompCapInfoToDevmgr_CompanyInfo* psubcompinfo = 0;
+				psubcompinfo = indSubCompCapinfo.add_compinfos();
+
+				psubcompinfo->set_companyid(compinfo.companyid());
+				psubcompinfo->set_companyname(compinfo.companyname());
+
+				if (compinfo.companyid() > 0 ) // 
+				{
+
+					for (int j = 0; j < compinfo.totallicinfos_size(); j++)
+					{
+						const SRMsgs::IndSubCompCapInfoToDevmgr_LicenceInfo& sublinceneinfo = compinfo.totallicinfos(j);
+
+						SRMsgs::IndSubCompCapInfoToDevmgr_LicenceInfo* psublinceneinfo = 0;
+						psublinceneinfo = psubcompinfo->add_totallicinfos();
+						psublinceneinfo->set_licencetype(sublinceneinfo.licencetype());
+						psublinceneinfo->set_licencenum(sublinceneinfo.licencenum());
+						psublinceneinfo->set_starttime(sublinceneinfo.starttime());
+						psublinceneinfo->set_exptime(sublinceneinfo.exptime());
+
+					}
+				}
+				else
+				{
+					sr_printf(SR_LOGLEVEL_ERROR, "SyncSubCompCapInfo IndSubCompCapInfoToDevmgr msg compinfo error!!!\n");
+				}
+			}
+
+			SerialAndSendDevmgr((AcitiveConnect*)(m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr), getMsgIdByClassName(IndSubCompCapInfoToDevmgr), &indSubCompCapinfo);
+		}
+
+		//// 向下级devmgr同步
+		SRMsgs::IndUpCompCapInfoToDevmgr  indUpCompCapInfo;
+
+		for (int i = 0; i < ind->compinfos_size(); i++)
+		{
+			const SRMsgs::IndSubCompCapInfoToDevmgr_CompanyInfo& compinfo = ind->compinfos(i);
+			
+			SRMsgs::IndUpCompCapInfoToDevmgr_CompanyInfo* pupcompinfo = 0;
+			pupcompinfo = indUpCompCapInfo.add_compinfos();
+
+			pupcompinfo->set_companyid(compinfo.companyid());
+			pupcompinfo->set_companyname(compinfo.companyname());
+			compid = compinfo.companyid();
+
+			if (compinfo.companyid() > 0) // 
+			{
+
+				for (int j = 0; j < compinfo.totallicinfos_size(); j++)
+				{
+					const SRMsgs::IndSubCompCapInfoToDevmgr_LicenceInfo& uplinceneinfo = compinfo.totallicinfos(j);
+
+					SRMsgs::IndUpCompCapInfoToDevmgr_LicenceInfo* puplinceneinfo = 0;
+					puplinceneinfo = pupcompinfo->add_totallicinfos();
+					puplinceneinfo->set_licencetype(uplinceneinfo.licencetype());
+					puplinceneinfo->set_licencenum(uplinceneinfo.licencenum());
+					puplinceneinfo->set_starttime(uplinceneinfo.starttime());
+					puplinceneinfo->set_exptime(uplinceneinfo.exptime());
+					//
+					unsigned int type = uplinceneinfo.licencetype();
+					sLinceneInfo info;
+					info.amount = uplinceneinfo.licencenum();
+					info.starttime = uplinceneinfo.starttime();
+					info.expiretime = uplinceneinfo.exptime();
+					mapLinceneInfo.insert(make_pair(type, info));
+				}
+
+				mapCompLinceneInfo.insert(make_pair(compid, mapLinceneInfo));
+
+				SyncCompIdToRedis(ind->deviceid(), compinfo.companyid());
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SyncSubCompCapInfo IndUpCompCapInfoToDevmgr msg compinfo error!!!\n");
+			}
+		}
+
+		for (iter_mapDeviceHeartbeatTime dev_itor = m_MapDeviceHeartbeatTime.begin();
+			dev_itor != m_MapDeviceHeartbeatTime.end(); dev_itor++)
+		{
+			if (dev_itor->second.devicetype == DEVICE_SERVER::DEVICE_DEV)
+			{
+				
+				if (dev_itor->second.pClient && dev_itor->first != ind->deviceid())
+				{
+					indUpCompCapInfo.set_deviceid(m_iSelfDeviceid);// 下级devmgr的id
+					indUpCompCapInfo.set_token(m_szMyToken);// 下级devmgr的token
+
+					SerialProtoMsgAndSend(dev_itor->second.pClient, getMsgIdByClassName(IndUpCompCapInfoToDevmgr), &indUpCompCapInfo);
+				}
+			}
+		}
+		
+	}
+	else
+	{
+		sr_printf(SR_LOGLEVEL_ERROR, "SyncSubCompCapInfo IndSubCompCapInfoToDevmgr msg compinfos_size=%d error!!!\n", ind->compinfos_size());
+	}
+
+	// 把更新信息更新到本地redis
+
+	UpdateCompanyInfoRedis(mapCompLinceneInfo,ind->operationtype());
+
+}
+
+void CDevMgr::SyncUpCompCapInfo(const SRMsgs::IndUpCompCapInfoToDevmgr* ind, time_t timeNow)
+{
+	// 上级->下级的企业授权信息	同步
+	std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapCompLinceneInfo;
+	mapCompLinceneInfo.clear();
+	map<unsigned int, sLinceneInfo> mapLinceneInfo;
+	mapLinceneInfo.clear();
+	unsigned int compid = 0;
+	// 将更新信息发送给下级devmgr
+
+	//// 向下级devmgr同步
+	SRMsgs::IndUpCompCapInfoToDevmgr  indUpCompCapInfo;
+
+	for (int i = 0; i < ind->compinfos_size(); i++)
+	{
+		const SRMsgs::IndUpCompCapInfoToDevmgr_CompanyInfo& compinfo = ind->compinfos(i);
+
+
+		SRMsgs::IndUpCompCapInfoToDevmgr_CompanyInfo* pupcompinfo = 0;
+		pupcompinfo = indUpCompCapInfo.add_compinfos();
+
+		pupcompinfo->set_companyid(compinfo.companyid());
+		pupcompinfo->set_companyname(compinfo.companyname());
+		compid = compinfo.companyid();
+
+		if (compinfo.companyid() > 0) // 
+		{
+
+			for (int j = 0; j < compinfo.totallicinfos_size(); j++)
+			{
+				const SRMsgs::IndUpCompCapInfoToDevmgr_LicenceInfo& uplinceneinfo = compinfo.totallicinfos(j);
+
+				SRMsgs::IndUpCompCapInfoToDevmgr_LicenceInfo* puplinceneinfo = 0;
+				puplinceneinfo = pupcompinfo->add_totallicinfos();
+				puplinceneinfo->set_licencetype(uplinceneinfo.licencetype());
+				puplinceneinfo->set_licencenum(uplinceneinfo.licencenum());
+				puplinceneinfo->set_starttime(uplinceneinfo.starttime());
+				puplinceneinfo->set_exptime(uplinceneinfo.exptime());
+				////
+				unsigned int type = uplinceneinfo.licencetype();
+				sLinceneInfo info;
+				info.amount = uplinceneinfo.licencenum();
+				info.starttime = uplinceneinfo.starttime();
+				info.expiretime = uplinceneinfo.exptime();
+				mapLinceneInfo.insert(make_pair(type, info));
+
+			}
+			mapCompLinceneInfo.insert(make_pair(compid, mapLinceneInfo));
+
+			SyncCompIdToRedis(ind->deviceid(), compinfo.companyid());
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SyncUpCompCapInfo IndUpCompCapInfoToDevmgr msg compinfo error!!!\n");
+		}
+	}
+
+	for (iter_mapDeviceHeartbeatTime dev_itor = m_MapDeviceHeartbeatTime.begin();
+		dev_itor != m_MapDeviceHeartbeatTime.end(); dev_itor++)
+	{
+		if (dev_itor->second.devicetype == DEVICE_SERVER::DEVICE_DEV)
+		{
+
+			if (dev_itor->second.pClient && dev_itor->first != ind->deviceid())
+			{
+				indUpCompCapInfo.set_deviceid(m_iSelfDeviceid);
+				indUpCompCapInfo.set_token(m_szMyToken);
+				SerialProtoMsgAndSend(dev_itor->second.pClient, getMsgIdByClassName(IndUpCompCapInfoToDevmgr), &indUpCompCapInfo);
+			}
+		}
+	}
+
+	// 把更新信息更新到本地redis
+	UpdateCompanyInfoRedis(mapCompLinceneInfo, ind->operationtype());
+}
+
+void CDevMgr::CompLinceneUpdateToAllDevmgr(std::map<unsigned int, map<std::string, sLinceneInfo> > linceneInfo, int opertype)
+{
+
+	// 将企业授权变化通知相关的所有devmgr
+	if (linceneInfo.size() > 0)
+	{
+		//// 向上级devmgr同步
+		SRMsgs::IndSubCompCapInfoToDevmgr	indSubCompCapinfo;
+		indSubCompCapinfo.set_deviceid(m_uiMyDeviceid);
+		indSubCompCapinfo.set_token(m_szMyToken);
+		indSubCompCapinfo.set_operationtype(opertype);
+		//// 向下级devmgr同步
+		SRMsgs::IndUpCompCapInfoToDevmgr  indUpCompCapInfo;
+		indUpCompCapInfo.set_deviceid(m_iSelfDeviceid);// 下级devmgr的id
+		indUpCompCapInfo.set_token(m_szMyToken);// 下级devmgr的token
+		indUpCompCapInfo.set_operationtype(opertype);
+		for (std::map<unsigned int, map<std::string, sLinceneInfo> >::iterator iter_linc = linceneInfo.begin(); iter_linc != linceneInfo.end();iter_linc++)
+		{
+			SRMsgs::IndSubCompCapInfoToDevmgr_CompanyInfo* psubcompinfo = 0;
+			SRMsgs::IndUpCompCapInfoToDevmgr_CompanyInfo* pupcompinfo = 0;
+			psubcompinfo = indSubCompCapinfo.add_compinfos();
+			pupcompinfo = indUpCompCapInfo.add_compinfos();
+
+			psubcompinfo->set_companyid(iter_linc->first);
+			pupcompinfo->set_companyid(iter_linc->first);
+
+			for (map<std::string, sLinceneInfo>::iterator iter_compcap = iter_linc->second.begin(); iter_compcap != iter_linc->second.end(); iter_compcap++)
+			{
+				SRMsgs::IndSubCompCapInfoToDevmgr_LicenceInfo* paddliceneinfo = psubcompinfo->add_totallicinfos();
+				SRMsgs::IndUpCompCapInfoToDevmgr_LicenceInfo* pupliceneinfo = pupcompinfo->add_totallicinfos();
+
+				std::map<std::string, int>::iterator iter_tables = m_MapCompCapReverTables.find(iter_compcap->first);
+				if (iter_tables != m_MapCompCapReverTables.end())
+				{
+					paddliceneinfo->set_licencetype(iter_tables->second);
+
+					paddliceneinfo->set_licencenum(iter_compcap->second.amount);
+
+					paddliceneinfo->set_starttime(iter_compcap->second.starttime);
+
+					paddliceneinfo->set_exptime(iter_compcap->second.expiretime);
+
+					pupliceneinfo->set_licencetype(iter_tables->second);
+
+					pupliceneinfo->set_licencenum(iter_compcap->second.amount);
+
+					pupliceneinfo->set_starttime(iter_compcap->second.starttime);
+
+					pupliceneinfo->set_exptime(iter_compcap->second.expiretime);
+
+				}
+			}
+		}
+
+		//up
+		if (m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr)
+		{
+
+			SerialAndSendDevmgr((AcitiveConnect*)(m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr), getMsgIdByClassName(IndSubCompCapInfoToDevmgr), &indSubCompCapinfo);
+
+		}
+
+		//down
+		for (iter_mapDeviceHeartbeatTime dev_itor = m_MapDeviceHeartbeatTime.begin();
+			dev_itor != m_MapDeviceHeartbeatTime.end(); dev_itor++)
+		{
+			if (dev_itor->second.devicetype == DEVICE_SERVER::DEVICE_DEV)
+			{
+				if (dev_itor->second.pClient)
+				{
+					SerialProtoMsgAndSend(dev_itor->second.pClient, getMsgIdByClassName(IndUpCompCapInfoToDevmgr), &indUpCompCapInfo);
+				}
+			}
+		}
+
+	}
+	else
+	{
+		sr_printf(SR_LOGLEVEL_DEBUG, "CompLinceneUpdateToAllDevmgr  msg linceneInfo.size()=%d error!!!\n", linceneInfo.size());
+	}
+		
+}
+
+void CDevMgr::UpdateConfRealtime(unsigned long long confid, int realtimetype, char* time, time_t lltime, int permanentenable/*=-1*/)
 {
 	//sr_printf(SR_LOGLEVEL_INFO, "==into-->> UpdateConfRealtime realtimetype=%d.\n", realtimetype);
 
@@ -4246,13 +13376,15 @@ void CDevMgr::Handle_InsertConfReport(void* pArg)
 	time_t add_time = (time_t)(pParam->m_Arg4);
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg5);
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
 		pParam = NULL;
 
-		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_InsertConfReport pUpMsgThread and m_pRedisConnList is NULL.\n");
+		sr_printf(SR_LOGLEVEL_ERROR, "==error-->> Handle_InsertConfReport Param error.\n");
 
 		return;
 	}
@@ -4285,113 +13417,111 @@ void CDevMgr::Handle_InsertConfReport(void* pArg)
 #endif 
 
 			m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
-			char confstarttimerptid_confid_key[128] = { 0 };
+			//char confstarttimerptid_confid_key[128] = { 0 };
 
-			
+			char keeplivetime_s[128] = { 0 };
+			char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confreportinfo_confid_confrptid_key[256] = { 0 };
+			//若不插入mysql会导致其他表找不到conf_report_id
+			char InsertConfreportInfo_confid_rptid_key[256] = { 0 };
+
+			char cConfidFieldName[128] = { 0 };
+			char conf_id_value[128] = { 0 };
 			char cConfReportidFieldName[128] = { 0 };
 			char conf_report_id_value[128] = { 0 };
 			char cRealStarttimeFieldName[128] = { 0 };
 			char real_starttime_value[128] = { 0 };
-			
-			sprintf(cConfReportidFieldName, "%s", "conf_report_id");
-			sprintf(cRealStarttimeFieldName, "%s", "real_starttime");
-
-#ifdef WIN32
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%I64d", confid);
-			sprintf(conf_report_id_value, "%I64d", confreportid);
-#elif defined LINUX
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%lld", confid);
-			sprintf(conf_report_id_value, "%lld", confreportid);
-#endif
-
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISVALUE strconfreportidvalue = conf_report_id_value;
-
-			REDISKEY strRealStarttimeFieldName = cRealStarttimeFieldName;
-			REDISVALUE strrealstarttimevalue = ptime;
-
-
-			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confstarttimerptid_confid_key, conf_report_id_value, ptime);// 防止结束会议数据回写时该会议又被重新召开
-
-			//若不插入mysql会导致其他表找不到conf_report_id
-			char cConfidFieldName[128] = { 0 };
-			char conf_id_value[128] = { 0 };
-			sprintf(cConfidFieldName, "%s", "conf_id");
-			char InsertConfreportInfo_confid_rptid_key[128] = { 0 };
-#ifdef WIN32
-			sprintf(conf_id_value, "%I64d", confid);
-			sprintf(InsertConfreportInfo_confid_rptid_key, "insconfrptinfo_%I64d_%I64d", confid, confreportid);
-#elif defined LINUX
-			sprintf(conf_id_value, "%lld", confid);
-			sprintf(InsertConfreportInfo_confid_rptid_key, "insconfrptinfo_%lld_%lld", confid, confreportid);
-#endif
-			REDISKEY strInsertConfreportInfoConfidRptidkey = InsertConfreportInfo_confid_rptid_key;
-
-			REDISVDATA vConfreportConfidInfo;
-			vConfreportConfidInfo.clear();
-
-			REDISKEY strConfidFieldName = cConfidFieldName;
-			REDISVALUE strconfidvalue = conf_id_value;
-			vConfreportConfidInfo.push_back(strConfidFieldName);
-			vConfreportConfidInfo.push_back(strconfidvalue);
-
-			vConfreportConfidInfo.push_back(strConfReportidFieldName);
-			vConfreportConfidInfo.push_back(strconfreportidvalue);
-
-			vConfreportConfidInfo.push_back(strRealStarttimeFieldName);
-			vConfreportConfidInfo.push_back(strrealstarttimevalue);
-
 			char cRealEndtimeFieldName[128] = { 0 };
 			char real_endtime_value[128] = { 0 };
+			
+			sprintf(cConfidFieldName, "%s", "conf_id");
+			sprintf(cConfReportidFieldName, "%s", "conf_report_id");
+			sprintf(cRealStarttimeFieldName, "%s", "real_starttime");
 			sprintf(cRealEndtimeFieldName, "%s", "real_endtime");
 			sprintf(real_endtime_value, "%s", "19700101000000");
 
-			REDISKEY strRealEndtimeFieldName = cRealEndtimeFieldName;
-			REDISVALUE strrealendtimevalue = real_endtime_value;
-			vConfreportConfidInfo.push_back(strRealEndtimeFieldName);
-			vConfreportConfidInfo.push_back(strrealendtimevalue);
 
-			/*bhashHMSet_ok =*/ m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertConfreportInfoConfidRptidkey, vConfreportConfidInfo);
+			sprintf(confidktimeset_key, "%s", "confidktimeset");
 
-			bool bListLPushOK = false;
-			bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", InsertConfreportInfo_confid_rptid_key);
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfReport listLPush ** (%s) **bListLPushOK=%d\n", InsertConfreportInfo_confid_rptid_key, bListLPushOK);
+#ifdef WIN32
+			sprintf(keeplivetime_s, "%I64d", add_time);
+			sprintf(conf_id_value, "%I64d", confid);
+			sprintf(conf_report_id_value, "%I64d", confreportid);
+#elif defined LINUX
+			sprintf(keeplivetime_s, "%lld", add_time);
+			sprintf(conf_id_value, "%lld", confid);
+			sprintf(conf_report_id_value, "%lld", confreportid);
+#endif
 
-			if (pWriteDBThread)
-			{
-				typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-				CParam* pParam;
-				pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+			sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+			sprintf(confreportinfo_confid_confrptid_key, "confreportinfo_%s_%s", conf_id_value, conf_report_id_value);
+			sprintf(InsertConfreportInfo_confid_rptid_key, "insconfrptinfo_%s_%s", conf_id_value, conf_report_id_value);
 
-				typedef void (CDevMgr::* ACTION)(void*);
-				pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-					*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
-			}
-
-			//char real_endtime_value[128] = { 0 };
-			//sprintf(real_endtime_value, "%s", "19700101000000");
-
-			//pConfReport->SetConfID(confid);
-			//pConfReport->SetConfReportID(confreportid);
-			//pConfReport->SetStartTime(ptime);
-			//pConfReport->SetStopTime(real_endtime_value);
-
-			//bool bInsertOK = false;
-			//bInsertOK = pConfReport->InsertConfReportRecordToDB();
-
+			// 防止结束会议数据回写时该会议又被重新召开
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
 			
-			//time_t timeNow;
-			//struct tm *ptmNow;
-			//timeNow = time(NULL);
-			//ptmNow = localtime(&timeNow);
+			bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confreportinfo_confid_confrptid_key);
+			if (!bExist)
+			{
+				REDISKEY strInsertConfreportInfoConfidRptidkey = InsertConfreportInfo_confid_rptid_key;
 
-			//time_t push_time = timeNow - add_time;
+				REDISVDATA vConfreportConfidInfo;
+				vConfreportConfidInfo.clear();
 
+				REDISKEY strConfidFieldName = cConfidFieldName;
+				REDISVALUE strconfidvalue = conf_id_value;
+				vConfreportConfidInfo.push_back(strConfidFieldName);
+				vConfreportConfidInfo.push_back(strconfidvalue);
+
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISVALUE strconfreportidvalue = conf_report_id_value;
+				vConfreportConfidInfo.push_back(strConfReportidFieldName);
+				vConfreportConfidInfo.push_back(strconfreportidvalue);
+
+				REDISKEY strRealStarttimeFieldName = cRealStarttimeFieldName;
+				REDISVALUE strrealstarttimevalue = ptime;
+				vConfreportConfidInfo.push_back(strRealStarttimeFieldName);
+				vConfreportConfidInfo.push_back(strrealstarttimevalue);
+
+				REDISKEY strRealEndtimeFieldName = cRealEndtimeFieldName;
+				REDISVALUE strrealendtimevalue = real_endtime_value;
+				vConfreportConfidInfo.push_back(strRealEndtimeFieldName);
+				vConfreportConfidInfo.push_back(strrealendtimevalue);
+
+				/*bhashHMSet_ok =*/ m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertConfreportInfoConfidRptidkey, vConfreportConfidInfo);
+
+				bool bListLPushOK = false;
+				bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", InsertConfreportInfo_confid_rptid_key);
+				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfReport listLPush ** (%s) **bListLPushOK=%d\n", InsertConfreportInfo_confid_rptid_key, bListLPushOK);
+
+				if (pWriteDBThread)
+				{
+					typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+					CParam* pParam;
+					pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+
+					typedef void (CDevMgr::* ACTION)(void*);
+					pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+						*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
+				}
+
+				// 复制一份数据在redis,会议结束或者超时回写时删除
+				REDISKEY strConfreportinfoConfidConfrptidKey = confreportinfo_confid_confrptid_key;
+				//m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strConfreportinfoConfidConfrptidKey, vConfreportConfidInfo);
+				m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confreportinfo_confid_confrptid_key, ptime, cRealStarttimeFieldName);
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_WARNING, "==-->>Handle_InsertConfReport ** tab(%s) **already in db(4)** so do nothing.\n", confreportinfo_confid_confrptid_key);
+			}
+			
 #ifdef LINUX
 			gettimeofday(&end, NULL); // μs level
 			time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfReport into db(4) ** (%s) **time_use** is: %lf us \n", confstarttimerptid_confid_key, time_use);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfReport into db(4) ** (%s) **time_use** is: %lf us \n", InsertConfreportInfo_confid_rptid_key, time_use);
 #endif 
 
 		}
@@ -4440,7 +13570,9 @@ void CDevMgr::Handle_UpdateConfReport(void* pArg)
 	time_t add_time = (time_t)(pParam->m_Arg4);
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg5);
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -4485,96 +13617,95 @@ void CDevMgr::Handle_UpdateConfReport(void* pArg)
 			char cRealStarttimeFieldName[128] = { 0 };
 			char real_starttime_value[128] = { 0 };
 			char cRealEndtimeFieldName[128] = { 0 };
+			char real_endtime_value[128] = { 0 };
 
 			sprintf(cConfidFieldName, "%s", "conf_id");
 			sprintf(cConfReportidFieldName, "%s", "conf_report_id");
 			sprintf(cRealStarttimeFieldName, "%s", "real_starttime");
 			sprintf(cRealEndtimeFieldName, "%s", "real_endtime");
 
+
+			char confreportinfo_confid_confrptid_key[256] = { 0 };
+			char up_confreport_confid_reportid_key[256] = { 0 };
+
+
 #ifdef WIN32
+			//sprintf(addtime_s, "%I64d", add_time);
 			sprintf(conf_id_value, "%I64d", confid);
+			sprintf(conf_report_id_value, "%I64d", confreportid);
 #elif defined LINUX
+			//sprintf(addtime_s, "%lld", add_time);
 			sprintf(conf_id_value, "%lld", confid);
+			sprintf(conf_report_id_value, "%lld", confreportid);
 #endif
 
-			char up_confreport_confid_reportid_key[128] = { 0 };
+			sprintf(confreportinfo_confid_confrptid_key, "confreportinfo_%s_%s", conf_id_value, conf_report_id_value);
+			sprintf(up_confreport_confid_reportid_key, "upconfreport_%s_%s", conf_id_value, conf_report_id_value);
 
-			char confstarttimerptid_confid_key[128] = { 0 };
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
-
-			unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
-
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_UpdateConfReport]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
-
-			if (bhashHGetAll_ok
-				&& (uiConfstrptinfosize > 0)
-				&& (uiConfstrptinfosize % 2 == 0))
+			bool bExistUP = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(up_confreport_confid_reportid_key);
+			if (bExistUP)
 			{
-				bool bFindConfReportID = false;
-
-				for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
+				//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", up_confreport_confid_reportid_key);
+				PushMsgToWriteDBQueue(up_confreport_confid_reportid_key);
+			}
+			else
+			{
+				//bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confreportinfo_confid_confrptid_key);
+				//if (!bExist)
 				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_UpdateConfReport==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
+					char *ptrRet = NULL;
+					ptrRet = m_pRedisConnList[e_RC_TT_UpMsqThread]->gethashvalue(confreportinfo_confid_confrptid_key, cRealStarttimeFieldName);
+
+					if (ptrRet != NULL)
+					{
+						//sprintf(real_starttime_value, "%s", ptrRet);
+
+						REDISKEY strupconfreportidkey = up_confreport_confid_reportid_key;
+						REDISVDATA vConfreportdata;
+						vConfreportdata.clear();
+
+						REDISKEY strConfidFieldName = cConfidFieldName;
+						REDISVALUE strconfidvalue = conf_id_value;
+						vConfreportdata.push_back(strConfidFieldName);
+						vConfreportdata.push_back(strconfidvalue);
+
+						REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+						REDISVALUE strconfreportidvalue = conf_report_id_value;
+						vConfreportdata.push_back(strConfReportidFieldName);
+						vConfreportdata.push_back(strconfreportidvalue);
+
+						REDISKEY strRealStarttimeFieldName = cRealStarttimeFieldName;
+						//REDISVALUE strrealstarttimevalue = real_starttime_value;
+						REDISVALUE strrealstarttimevalue = ptrRet;
+						vConfreportdata.push_back(strRealStarttimeFieldName);
+						vConfreportdata.push_back(strrealstarttimevalue);
+
+						REDISKEY strRealEndtimeFieldName = cRealEndtimeFieldName;
+						REDISVALUE strrealendtimevalue = ptime;
+						vConfreportdata.push_back(strRealEndtimeFieldName);
+						vConfreportdata.push_back(strrealendtimevalue);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strupconfreportidkey, vConfreportdata);
+
+						//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==confreport_confid_reportid_key----->>>> %d\n", bhashHMSet_ok);
+						bool bListLPushOK = false;
+						bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", up_confreport_confid_reportid_key);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfReport listLPush ** (%s) **bListLPushOK=%d\n", up_confreport_confid_reportid_key, bListLPushOK);
+
+						delete ptrRet; // 不删除会导致内存泄漏
+					}
 				}
+			}
+			
+			if (pWriteDBThread)
+			{
+				typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+				CParam* pParam;
+				pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
 
-				sprintf(real_starttime_value, "%s", vRedisReplyArray[uiConfstrptinfosize - 2].str.c_str());
-				sprintf(conf_report_id_value, "%s", vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str());
-
-				//char up_confreport_confid_reportid_key[128] = { 0 };
-				sprintf(up_confreport_confid_reportid_key, "upconfreport_%s_%s", conf_id_value, conf_report_id_value);
-
-
-				REDISKEY strupconfreportidkey = up_confreport_confid_reportid_key;
-				REDISVDATA vConfreportdata;
-				vConfreportdata.clear();
-
-				REDISKEY strConfidFieldName = cConfidFieldName;
-				REDISVALUE strconfidvalue = conf_id_value;
-				vConfreportdata.push_back(strConfidFieldName);
-				vConfreportdata.push_back(strconfidvalue);
-
-				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-				REDISVALUE strconfreportidvalue = conf_report_id_value;
-				vConfreportdata.push_back(strConfReportidFieldName);
-				vConfreportdata.push_back(strconfreportidvalue);
-
-				REDISKEY strRealStarttimeFieldName = cRealStarttimeFieldName;
-				REDISVALUE strrealstarttimevalue = real_starttime_value;
-				vConfreportdata.push_back(strRealStarttimeFieldName);
-				vConfreportdata.push_back(strrealstarttimevalue);
-
-				REDISKEY strRealEndtimeFieldName = cRealEndtimeFieldName;
-				REDISVALUE strrealendtimevalue = ptime;
-				vConfreportdata.push_back(strRealEndtimeFieldName);
-				vConfreportdata.push_back(strrealendtimevalue);
-
-				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strupconfreportidkey, vConfreportdata);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==confreport_confid_reportid_key----->>>> %d\n", bhashHMSet_ok);
-				bool bListLPushOK = false;
-				bListLPushOK =  m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", up_confreport_confid_reportid_key);
-				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfReport listLPush ** (%s) **bListLPushOK=%d\n", up_confreport_confid_reportid_key, bListLPushOK);
-
-				if (pWriteDBThread)
-				{
-					typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-					CParam* pParam;
-					pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
-
-					typedef void (CDevMgr::* ACTION)(void*);
-					pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-						*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
-				}
-
-				//if (bFindConfReportID)
-				//{
-				//	m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(confstarttimerptid_confid_key, real_starttime_value);
-				//}
+				typedef void (CDevMgr::* ACTION)(void*);
+				pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+					*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
 			}
 
 #ifdef LINUX
@@ -4595,7 +13726,6 @@ void CDevMgr::Handle_UpdateConfReport(void* pArg)
 }
 
 void CDevMgr::InsertDeviceConfDetail(unsigned long long confid, int deviceid, unsigned long long confreportid, unsigned long long devicedetailid, char* time, time_t lltime, bool bfromnetmp/* = false*/)
-//void CDevMgr::InsertDeviceConfDetail(unsigned long long confid, int deviceid, char* time, time_t lltime, bool bfromnetmp/* = false*/)
 {
 	if (!m_pUpMsqThread)
 		return;
@@ -4607,9 +13737,6 @@ void CDevMgr::InsertDeviceConfDetail(unsigned long long confid, int deviceid, un
 	CParam* pParam;
 	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, deviceid, confreportid, devicedetailid, m_pUpMsqThread, lltime);
 
-	//typedef CBufferT<unsigned long long, int, CAsyncThread*, time_t, void*, void*> CParam;
-	//CParam* pParam;
-	//pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, deviceid, m_pUpMsqThread, lltime);
 
 	typedef void (CDevMgr::* ACTION)(void*);
 	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
@@ -4638,7 +13765,11 @@ void CDevMgr::Handle_InsertDeviceConfDetail(void* pArg)
 	time_t hand_add_time = (time_t)(pParam->m_Arg6);
 
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| deviceid == 0
+		|| devicedetailid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL) // test delet by csh at 2016.10.21
 	{
 		delete pParam;
@@ -4684,8 +13815,13 @@ void CDevMgr::Handle_InsertDeviceConfDetail(void* pArg)
 			char device_detail_id_value[128] = { 0 };
 			char cRealuseStarttimeFieldName[128] = { 0 };
 			char realuse_starttime_value[128] = { 0 };
-
-			char devconfdetail_confid_deviceid_key[128] = { 0 };
+						
+			char keeplivetime_s[128] = { 0 };
+			char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confdeviceidktimeset_confid_confrptid_key[256] = { 0 };// 存放<deviceid, keeplivetime>
+			char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+			char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
 
 			sprintf(cConfidFieldName, "%s", "conf_id");
 			sprintf(cDeviceidFieldName, "%s", "device_id");
@@ -4693,141 +13829,80 @@ void CDevMgr::Handle_InsertDeviceConfDetail(void* pArg)
 			sprintf(cDeviceDetailidFieldName, "%s", "device_detail_id");
 			sprintf(cRealuseStarttimeFieldName, "%s", "realuse_starttime");
 
+			
 #ifdef WIN32
+			sprintf(keeplivetime_s, "%I64d", hand_add_time);
 			sprintf(conf_id_value, "%I64d", confid);
-			sprintf(devconfdetail_confid_deviceid_key, "devconfdtl_%I64d_%d", confid, deviceid);
-#elif defined LINUX
-			sprintf(conf_id_value, "%lld", confid);
-			sprintf(devconfdetail_confid_deviceid_key, "devconfdtl_%lld_%d", confid, deviceid);
-#endif
-
-			m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
-
-			if (confreportid == 0)// 此种情况是netmp，需要从redis中找
-			{
-				bool bFindConfReportID = false;
-
-				char confstarttimerptid_confid_key[128] = { 0 };
-				sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-				RedisReplyArray vRedisReplyArray;
-				vRedisReplyArray.clear();
-
-				bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
-
-				unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
-
-				sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_InsertDeviceConfDetail]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
-
-				if (bhashHGetAll_ok
-					&& (uiConfstrptinfosize > 0)
-					&& (uiConfstrptinfosize % 2 == 0)) 
-				{
-					for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-					{
-						sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_InsertDeviceConfDetail==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-						ii += 2;
-					}
-
-					// 找到最近召开会议的confreportid
-
-#ifdef WIN32
-					sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
-#elif defined LINUX
-					sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
-#endif
-
-					bFindConfReportID = true;
-				}
-
-				if (bFindConfReportID == false) // 在内存中未找到查找数据库
-				{
-					pConfReport->SetConfID(confid);
-					if (pConfReport->SelectDB())// 
-					{
-						confreportid = pConfReport->GetConfReportID();
-
-#ifdef WIN32
-						sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertDeviceConfDetail == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-						sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertDeviceConfDetail == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-					}
-					else
-					{
-#ifdef WIN32
-						sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertDeviceConfDetail == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-						sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertDeviceConfDetail == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-					}
-
-				}
-
-				if (confreportid == 0)
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertDeviceConfDetail == Not find confreportid of Netmp === confid=%I64d\n", confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertDeviceConfDetail == Not find confreportid of Netmp === confid=%lld\n", confid);
-#endif
-
-					delete pParam;
-					pParam = NULL;
-
-					return;
-				}
-			}			
-
-			sprintf(device_id_value, "%d", deviceid);			
-			sprintf(realuse_starttime_value, "%s", ptime);
-
-#ifdef WIN32
 			sprintf(conf_report_id_value, "%I64d", confreportid);
 			sprintf(device_detail_id_value, "%I64d", devicedetailid);
 #elif defined LINUX
+			sprintf(keeplivetime_s, "%lld", hand_add_time);
+			sprintf(conf_id_value, "%lld", confid);
 			sprintf(conf_report_id_value, "%lld", confreportid);
 			sprintf(device_detail_id_value, "%lld", devicedetailid);
 #endif
 
+			sprintf(device_id_value, "%d", deviceid);
+			sprintf(realuse_starttime_value, "%s", ptime);
 
-			REDISKEY strdevconfdetailconfiddeviceidkey = devconfdetail_confid_deviceid_key;
-			REDISVDATA vDevconfdtlConfidDevidData;
-			vDevconfdtlConfidDevidData.clear();
+			sprintf(confidktimeset_key, "%s", "confidktimeset");
+			sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+			sprintf(confdeviceidktimeset_confid_confrptid_key, "confdeviceidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+			sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value);
+			sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value, device_detail_id_value);
 
-			REDISKEY strConfidFieldName = cConfidFieldName;
-			REDISVALUE strconfidvalue = conf_id_value;
-			vDevconfdtlConfidDevidData.push_back(strConfidFieldName);
-			vDevconfdtlConfidDevidData.push_back(strconfidvalue);
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISVALUE strconfreportidvalue = conf_report_id_value;
-			vDevconfdtlConfidDevidData.push_back(strConfReportidFieldName);
-			vDevconfdtlConfidDevidData.push_back(strconfreportidvalue);
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
 
-			REDISKEY strDeviceidFieldName = cDeviceidFieldName;
-			REDISVALUE strdeviceidvalue = device_id_value;
-			vDevconfdtlConfidDevidData.push_back(strDeviceidFieldName);
-			vDevconfdtlConfidDevidData.push_back(strdeviceidvalue);
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confdeviceidktimeset_confid_confrptid_key, keeplivetime_s, device_id_value);// <deviceid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confdevdtlidktimeset_confid_confrptid_deviceid_key, keeplivetime_s, device_detail_id_value);// <devdtlid, keeplivetime>,keeplivetime会在会议状态上报时更新
 
-			REDISKEY strDeviceDetailidFieldName = cDeviceDetailidFieldName;
-			REDISVALUE strdevicedetailidvalue = device_detail_id_value;
-			vDevconfdtlConfidDevidData.push_back(strDeviceDetailidFieldName);
-			vDevconfdtlConfidDevidData.push_back(strdevicedetailidvalue);
+			bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+			if (!bExist)
+			{
+				REDISKEY strdevconfdetailconfidconfrptiddeviceiddevdtlid_key = devconfdetail_confid_confrptid_deviceid_devdtlid_key;
+				REDISVDATA vDevconfdtlConfidDevidData;
+				vDevconfdtlConfidDevidData.clear();
 
-			REDISKEY strRealuseStarttimeFieldName = cRealuseStarttimeFieldName;
-			REDISVALUE strrealusestarttimevalue = realuse_starttime_value;
-			vDevconfdtlConfidDevidData.push_back(strRealuseStarttimeFieldName);
-			vDevconfdtlConfidDevidData.push_back(strrealusestarttimevalue);
+				REDISKEY strConfidFieldName = cConfidFieldName;
+				REDISVALUE strconfidvalue = conf_id_value;
+				vDevconfdtlConfidDevidData.push_back(strConfidFieldName);
+				vDevconfdtlConfidDevidData.push_back(strconfidvalue);
 
-			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strdevconfdetailconfiddeviceidkey, vDevconfdtlConfidDevidData);
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISVALUE strconfreportidvalue = conf_report_id_value;
+				vDevconfdtlConfidDevidData.push_back(strConfReportidFieldName);
+				vDevconfdtlConfidDevidData.push_back(strconfreportidvalue);
 
-			//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==devconfdetail_confid_deviceid_key---->>>> %d\n", bhashHMSet_ok);
+				REDISKEY strDeviceidFieldName = cDeviceidFieldName;
+				REDISVALUE strdeviceidvalue = device_id_value;
+				vDevconfdtlConfidDevidData.push_back(strDeviceidFieldName);
+				vDevconfdtlConfidDevidData.push_back(strdeviceidvalue);
 
+				REDISKEY strDeviceDetailidFieldName = cDeviceDetailidFieldName;
+				REDISVALUE strdevicedetailidvalue = device_detail_id_value;
+				vDevconfdtlConfidDevidData.push_back(strDeviceDetailidFieldName);
+				vDevconfdtlConfidDevidData.push_back(strdevicedetailidvalue);
+
+				REDISKEY strRealuseStarttimeFieldName = cRealuseStarttimeFieldName;
+				REDISVALUE strrealusestarttimevalue = realuse_starttime_value;
+				vDevconfdtlConfidDevidData.push_back(strRealuseStarttimeFieldName);
+				vDevconfdtlConfidDevidData.push_back(strrealusestarttimevalue);
+
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strdevconfdetailconfidconfrptiddeviceiddevdtlid_key, vDevconfdtlConfidDevidData);
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_WARNING, "==-->>Handle_InsertDeviceConfDetail ** tab(%s) **already in db(4)** so do nothing.\n", devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+			}			
+			
 #ifdef LINUX
 			gettimeofday(&end, NULL); // μs level
 			time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertDeviceConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", devconfdetail_confid_deviceid_key, time_use);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertDeviceConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", devconfdetail_confid_confrptid_deviceid_devdtlid_key, time_use);
 #endif 
 
 		}
@@ -4839,7 +13914,7 @@ void CDevMgr::Handle_InsertDeviceConfDetail(void* pArg)
 	pParam = NULL;
 }
 
-void CDevMgr::UpdateDeviceConfDetail(unsigned long long confid, int deviceid, char* time, time_t lltime)
+void CDevMgr::UpdateDeviceConfDetail(unsigned long long confid, int deviceid, unsigned long long confreportid, unsigned long long devicedetailid, char* time, time_t lltime)
 {
 	if (!m_pUpMsqThread)
 		return;
@@ -4847,9 +13922,9 @@ void CDevMgr::UpdateDeviceConfDetail(unsigned long long confid, int deviceid, ch
 	if (time == NULL)
 		return;
 
-	typedef CBufferT<unsigned long long, int, CAsyncThread*, time_t, CAsyncThread*, void*, void*, void*> CParam;
+	typedef CBufferT<unsigned long long, int, unsigned long long, unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*> CParam;
 	CParam* pParam;
-	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, deviceid, m_pUpMsqThread, lltime, m_pWriteDBThread);
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, deviceid, confreportid, devicedetailid, m_pUpMsqThread, lltime, m_pWriteDBThread);
 
 	typedef void (CDevMgr::* ACTION)(void*);
 	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
@@ -4864,19 +13939,25 @@ void CDevMgr::Handle_UpdateDeviceConfDetail(void* pArg)
 		assert(0);
 		return;
 	}
-
-	typedef CBufferT<unsigned long long, int, CAsyncThread*, time_t, CAsyncThread*, void*, void*, void*> CParam;
+	
+	typedef CBufferT<unsigned long long, int, unsigned long long, unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*> CParam;
 	CParam* pParam = (CParam*)pArg;
 
 	char* ptime = (char*)pParam->m_pData1;
 
 	unsigned long long confid = pParam->m_Arg1;
 	int deviceid = pParam->m_Arg2;
-	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg3);
-	time_t hand_add_time = (time_t)(pParam->m_Arg4);
-	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg5);
+	unsigned long long confreportid = pParam->m_Arg3;
+	unsigned long long devicedetailid = pParam->m_Arg4;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg5);
+	time_t hand_add_time = (time_t)(pParam->m_Arg6);
+	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg7);
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| deviceid == 0
+		|| devicedetailid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL) // test delet by csh at 2016.10.21
 	{
 		delete pParam;
@@ -4913,120 +13994,108 @@ void CDevMgr::Handle_UpdateDeviceConfDetail(void* pArg)
 			char cRealuseStoptimeFieldName[128] = { 0 };
 			//char realuse_stoptime_value[128] = { 0 };
 
-			char devconfdetail_confid_deviceid_key[128] = { 0 };
+			//char devconfdetail_confid_deviceid_key[128] = { 0 };
+			char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+			char updevconfdtl_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
 
 			sprintf(cConfidFieldName, "%s", "conf_id");
 			sprintf(cDeviceidFieldName, "%s", "device_id");
 			sprintf(cConfReportidFieldName, "%s", "conf_report_id");
 			sprintf(cDeviceDetailidFieldName, "%s", "device_detail_id");
 			sprintf(cRealuseStarttimeFieldName, "%s", "realuse_starttime");
-			
-
-			sprintf(cConfidFieldName, "%s", "conf_id");
+			sprintf(cRealuseStoptimeFieldName, "%s", "realuse_stoptime");
 
 #ifdef WIN32
 			sprintf(conf_id_value, "%I64d", confid);
-			sprintf(devconfdetail_confid_deviceid_key, "devconfdtl_%I64d_%d", confid, deviceid);
+			sprintf(conf_report_id_value, "%I64d", confreportid);
+			sprintf(device_detail_id_value, "%I64d", devicedetailid);
 #elif defined LINUX
 			sprintf(conf_id_value, "%lld", confid);
-			sprintf(devconfdetail_confid_deviceid_key, "devconfdtl_%lld_%d", confid, deviceid);
+			sprintf(conf_report_id_value, "%lld", confreportid);
+			sprintf(device_detail_id_value, "%lld", devicedetailid);
 #endif
 
-			//////////////////////////////////////////////////////////////////////////
+			sprintf(device_id_value, "%d", deviceid);
+			sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value, device_detail_id_value);
+			sprintf(updevconfdtl_confid_confrptid_deviceid_devdtlid_key, "updevconfdtl_%s_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value, device_detail_id_value);
 
-			REDISKEY strdevconfdetailconfiddevidkey = devconfdetail_confid_deviceid_key;
-			REDISFILEDS vGetFileds;
-			vGetFileds.clear();
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISKEY strDeviceDetailidFieldName = cDeviceDetailidFieldName;
-			REDISKEY strRealuseStarttimeFieldName = cRealuseStarttimeFieldName;
-			vGetFileds.push_back(strConfReportidFieldName);
-			vGetFileds.push_back(strDeviceDetailidFieldName);
-			vGetFileds.push_back(strRealuseStarttimeFieldName);
-
-			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strdevconfdetailconfiddevidkey, vGetFileds, vRedisReplyArray);
-
-			//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet==devconfdetail_confid_deviceid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-			char devconfdetail_confid_devid_rptid_key[128] = { 0 };
-
-			if (bhashHMGet_ok
-				&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+			bool bExistUP = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+			if (bExistUP)
 			{
-				sprintf(conf_report_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-				sprintf(device_detail_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-				sprintf(realuse_starttime_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-
-				//char devconfdetail_confid_devid_rptid_key[128] = { 0 };
-				sprintf(devconfdetail_confid_devid_rptid_key, "devconfdtl_%s_%d_%s", conf_id_value, deviceid, conf_report_id_value);
-
-				sprintf(device_id_value, "%d", deviceid);
-				sprintf(cRealuseStoptimeFieldName, "%s", "realuse_stoptime");
-
-				REDISKEY strdevconfdetailconfiddevidrptidkey = devconfdetail_confid_devid_rptid_key;
-				REDISVDATA vDevconfdtlConfidDevidRptidData;
-				vDevconfdtlConfidDevidRptidData.clear();
-
-				REDISKEY strConfidFieldName = cConfidFieldName;
-				REDISVALUE strconfidvalue = conf_id_value;
-				vDevconfdtlConfidDevidRptidData.push_back(strConfidFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strconfidvalue);
-
-				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-				REDISVALUE strconfreportidvalue = conf_report_id_value;
-				vDevconfdtlConfidDevidRptidData.push_back(strConfReportidFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strconfreportidvalue);
-
-				REDISKEY strDeviceidFieldName = cDeviceidFieldName;
-				REDISVALUE strdeviceidvalue = device_id_value;
-				vDevconfdtlConfidDevidRptidData.push_back(strDeviceidFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strdeviceidvalue);
-
-				REDISKEY strDeviceDetailidFieldName = cDeviceDetailidFieldName;
-				REDISVALUE strdevicedetailidvalue = device_detail_id_value;
-				vDevconfdtlConfidDevidRptidData.push_back(strDeviceDetailidFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strdevicedetailidvalue);
-
-				REDISKEY strRealuseStarttimeFieldName = cRealuseStarttimeFieldName;
-				REDISVALUE strrealusestarttimevalue = realuse_starttime_value;
-				vDevconfdtlConfidDevidRptidData.push_back(strRealuseStarttimeFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strrealusestarttimevalue);
-
-				REDISKEY strRealuseStoptimeFieldName = cRealuseStoptimeFieldName;
-				REDISVALUE strrealusestoptimevalue = ptime;
-				vDevconfdtlConfidDevidRptidData.push_back(strRealuseStoptimeFieldName);
-				vDevconfdtlConfidDevidRptidData.push_back(strrealusestoptimevalue);
-
-				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strdevconfdetailconfiddevidrptidkey, vDevconfdtlConfidDevidRptidData);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==devconfdetail_confid_devid_rptid_key---->>>> %d\n", bhashHMSet_ok);
-				bool bListLPushOK = false;
-				bListLPushOK =  m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", devconfdetail_confid_devid_rptid_key);
-				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateDeviceConfDetail listLPush ** (%s) **bListLPushOK=%d\n", devconfdetail_confid_devid_rptid_key, bListLPushOK);
-
-				m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(devconfdetail_confid_deviceid_key);
-
-				if (pWriteDBThread)
+				//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+				PushMsgToWriteDBQueue(updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+			}
+			else
+			{
+				//bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+				//if (bExist)
 				{
-					typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-					CParam* pParam;
-					pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+					char *ptrRet = NULL;
+					ptrRet = m_pRedisConnList[e_RC_TT_UpMsqThread]->gethashvalue(devconfdetail_confid_confrptid_deviceid_devdtlid_key, cRealuseStarttimeFieldName);
 
-					typedef void (CDevMgr::* ACTION)(void*);
-					pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-						*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
+					if (ptrRet != NULL)
+					{
+						REDISKEY strupdevconfdtlconfidconfrptiddeviceiddevdtlidkey = updevconfdtl_confid_confrptid_deviceid_devdtlid_key;
+						REDISVDATA vDevconfdtlConfidDevidRptidData;
+						vDevconfdtlConfidDevidRptidData.clear();
+
+						REDISKEY strConfidFieldName = cConfidFieldName;
+						REDISVALUE strconfidvalue = conf_id_value;
+						vDevconfdtlConfidDevidRptidData.push_back(strConfidFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strconfidvalue);
+
+						REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+						REDISVALUE strconfreportidvalue = conf_report_id_value;
+						vDevconfdtlConfidDevidRptidData.push_back(strConfReportidFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strconfreportidvalue);
+
+						REDISKEY strDeviceidFieldName = cDeviceidFieldName;
+						REDISVALUE strdeviceidvalue = device_id_value;
+						vDevconfdtlConfidDevidRptidData.push_back(strDeviceidFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strdeviceidvalue);
+
+						REDISKEY strDeviceDetailidFieldName = cDeviceDetailidFieldName;
+						REDISVALUE strdevicedetailidvalue = device_detail_id_value;
+						vDevconfdtlConfidDevidRptidData.push_back(strDeviceDetailidFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strdevicedetailidvalue);
+
+						REDISKEY strRealuseStarttimeFieldName = cRealuseStarttimeFieldName;
+						REDISVALUE strrealusestarttimevalue = ptrRet;
+						vDevconfdtlConfidDevidRptidData.push_back(strRealuseStarttimeFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strrealusestarttimevalue);
+
+						REDISKEY strRealuseStoptimeFieldName = cRealuseStoptimeFieldName;
+						REDISVALUE strrealusestoptimevalue = ptime;
+						vDevconfdtlConfidDevidRptidData.push_back(strRealuseStoptimeFieldName);
+						vDevconfdtlConfidDevidRptidData.push_back(strrealusestoptimevalue);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strupdevconfdtlconfidconfrptiddeviceiddevdtlidkey, vDevconfdtlConfidDevidRptidData);
+
+						bool bListLPushOK = false;
+						bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", updevconfdtl_confid_confrptid_deviceid_devdtlid_key);
+						sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateDeviceConfDetail listLPush ** (%s) **bListLPushOK=%d\n", updevconfdtl_confid_confrptid_deviceid_devdtlid_key, bListLPushOK);
+
+						delete ptrRet; // 不删除会导致内存泄漏
+					}
 				}
+			}
+
+			if (pWriteDBThread)
+			{
+				typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+				CParam* pParam;
+				pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+
+				typedef void (CDevMgr::* ACTION)(void*);
+				pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+					*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
 			}
 
 #ifdef LINUX
 			gettimeofday(&end, NULL); // μs level
 			time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateDeviceConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", devconfdetail_confid_devid_rptid_key, time_use);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateDeviceConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", updevconfdtl_confid_confrptid_deviceid_devdtlid_key, time_use);
 #endif
 		}
 	} while (0);
@@ -5082,7 +14151,10 @@ void CDevMgr::Handle_InsertConfRecord(void* pArg)
 	time_t add_time = (time_t)(pParam->m_Arg5);
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg6);
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| confrecordid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -5134,188 +14206,124 @@ void CDevMgr::Handle_InsertConfRecord(void* pArg)
 		char conf_record_id_value[128] = { 0 };
 		char cCRSRecStarttimeFieldName[128] = { 0 };
 		char crsrec_starttime_value[128] = { 0 };
+		char cCRSRecEndtimeFieldName[128] = { 0 };
+		char crsrec_endtime_value[128] = { 0 };
+		char cConfnameFieldName[256] = { 0 };
+		char conf_name_value[256] = { 0 };
+
+
+		char keeplivetime_s[128] = { 0 };
+		char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+		char confrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+		char insrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
 		
 		sprintf(cConfidFieldName, "%s", "conf_id");
 		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
 		sprintf(cConfRecordidFieldName, "%s", "conf_record_id");
 		sprintf(cCRSRecStarttimeFieldName, "%s", "starttime");
-
-		char cCRSRecEndtimeFieldName[128] = { 0 };
-		char crsrec_endtime_value[128] = { 0 };
 		sprintf(cCRSRecEndtimeFieldName, "%s", "endtime");
-		sprintf(crsrec_endtime_value, "%s", "19700101000000");
-
-		char cConfnameFieldName[256] = { 0 };
-		char conf_name_value[256] = { 0 };
 		sprintf(cConfnameFieldName, "%s", "confname");
-		sprintf(conf_name_value, "%s", strconfname.c_str());
-
-		char crsconfrecordidset_confid_key[128] = { 0 };
-		char Insertcrsrecinfo_confid_confrecid_key[128] = { 0 };
-		//char Insertcrsrecinfo_confid_confrptid_confrecid_key[128] = { 0 };
+				
 #ifdef WIN32
+		sprintf(keeplivetime_s, "%I64d", add_time);
 		sprintf(conf_id_value, "%I64d", confid);
-		sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%I64d", confid);
-		sprintf(Insertcrsrecinfo_confid_confrecid_key, "inscrsrecordid_%I64d_%I64d", confid, confrecordid);
-		//sprintf(Insertcrsrecinfo_confid_confrptid_confrecid_key, "inscrsrecordid_%I64d_%I64d_%I64d", confid, confreportid, confrecordid);
-#elif defined LINUX
-		sprintf(conf_id_value, "%lld", confid);
-		sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%lld", confid);
-		sprintf(Insertcrsrecinfo_confid_confrecid_key, "inscrsrecordid_%lld_%lld", confid, confrecordid);
-		//sprintf(Insertcrsrecinfo_confid_confrptid_confrecid_key, "inscrsrecordid_%lld_%lld_%lld", confid, confreportid, confrecordid);
-#endif
-
-		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
-
-		if (confreportid == 0)// 
-		{
-			bool bFindConfReportID = false;
-
-			char confstarttimerptid_confid_key[128] = { 0 };
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
-
-			unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
-
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_InsertConfRecord]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
-
-			if (bhashHGetAll_ok
-				&& (uiConfstrptinfosize > 0)
-				&& (uiConfstrptinfosize % 2 == 0))
-			{
-				for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_InsertConfRecord==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
-				}
-
-				// 找到最近召开会议的confreportid
-
-#ifdef WIN32
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
-#elif defined LINUX
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
-#endif
-
-				bFindConfReportID = true;
-			}
-
-			if (bFindConfReportID == false) // 在内存中未找到查找数据库
-			{
-				pConfReport->SetConfID(confid);
-				if (pConfReport->SelectDB())// 
-				{
-					confreportid = pConfReport->GetConfReportID();
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertConfRecord == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertConfRecord == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-				}
-				else
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertConfRecord == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertConfRecord == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-				}
-
-			}
-
-			if (confreportid == 0)
-			{
-#ifdef WIN32
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfRecord == Not find confreportid of Netmp === confid=%I64d\n", confid);
-#elif defined LINUX
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfRecord == Not find confreportid of Netmp === confid=%lld\n", confid);
-#endif
-
-				delete pParam;
-				pParam = NULL;
-
-				return;
-			}
-		}
-
-		sprintf(crsrec_starttime_value, "%s", ptime);
-
-#ifdef WIN32
 		sprintf(conf_report_id_value, "%I64d", confreportid);
 		sprintf(conf_record_id_value, "%I64d", confrecordid);
 #elif defined LINUX
+		sprintf(keeplivetime_s, "%lld", add_time);
+		sprintf(conf_id_value, "%lld", confid);
 		sprintf(conf_report_id_value, "%lld", confreportid);
 		sprintf(conf_record_id_value, "%lld", confrecordid);
 #endif
 
+		sprintf(crsrec_starttime_value, "%s", ptime);
+		sprintf(crsrec_endtime_value, "%s", "19700101000000");
+		sprintf(conf_name_value, "%s", strconfname.c_str());
 
-		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(crsconfrecordidset_confid_key, conf_record_id_value, ptime);// 防止结束会议数据回写时该会议又被重新召开
-
-		REDISKEY strInsertCRSRecinfoConfidConfrecidkey = Insertcrsrecinfo_confid_confrecid_key;
-		//REDISKEY strInsertCRSRecinfoConfidConfrptidConfrecidkey = Insertcrsrecinfo_confid_confrptid_confrecid_key;
-		REDISVDATA vConfRecordData;
-		vConfRecordData.clear();
-
-		REDISKEY strConfidFieldName = cConfidFieldName;
-		REDISVALUE strconfidvalue = conf_id_value;
-		vConfRecordData.push_back(strConfidFieldName);
-		vConfRecordData.push_back(strconfidvalue);
-
-		REDISKEY strConfRecordidName = cConfRecordidFieldName;
-		REDISVALUE strconfrecordidvalue = conf_record_id_value;
-		vConfRecordData.push_back(strConfRecordidName);
-		vConfRecordData.push_back(strconfrecordidvalue);
-
-		REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-		REDISVALUE strconfreportidvalue = conf_report_id_value;
-		vConfRecordData.push_back(strConfReportidFieldName);
-		vConfRecordData.push_back(strconfreportidvalue);
+		sprintf(confidktimeset_key, "%s", "confidktimeset");
+		sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+		sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+		sprintf(confrecordinfo_confid_confrptid_recordid_key, "confrecordinfo_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
+		sprintf(insrecordinfo_confid_confrptid_recordid_key, "insrecordinfo_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
 		
-		REDISKEY strCRSRecStarttimeFieldName = cCRSRecStarttimeFieldName;
-		REDISVALUE strcrsrecstarttimevalue = crsrec_starttime_value;
-		vConfRecordData.push_back(strCRSRecStarttimeFieldName);
-		vConfRecordData.push_back(strcrsrecstarttimevalue);
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
+		
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
 
-		REDISKEY strCRSRecEndtimeFieldName = cCRSRecEndtimeFieldName;
-		REDISVALUE strcrsrecendtimevalue = crsrec_endtime_value;
-		vConfRecordData.push_back(strCRSRecEndtimeFieldName);
-		vConfRecordData.push_back(strcrsrecendtimevalue);
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrecordidktimeset_confid_confrptid_key, keeplivetime_s, conf_record_id_value);// <recordid, keeplivetime>,keeplivetime会在会议状态上报时更新
 
-		REDISKEY strConfnameFieldName = cConfnameFieldName;
-		REDISVALUE strconfnamevalue = conf_name_value;
-		vConfRecordData.push_back(strConfnameFieldName);
-		vConfRecordData.push_back(strconfnamevalue);
-
-		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertCRSRecinfoConfidConfrecidkey, vConfRecordData);
-		bool bListLPushOK = false;
-		bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", Insertcrsrecinfo_confid_confrecid_key);
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfRecord listLPush ** (%s) **bListLPushOK=%d\n", Insertcrsrecinfo_confid_confrecid_key, bListLPushOK);
-
-		//bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertCRSRecinfoConfidConfrptidConfrecidkey, vConfRecordData);
-		//bool bListLPushOK = false;
-		//bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", Insertcrsrecinfo_confid_confrptid_confrecid_key);
-		//sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfRecord listLPush ** (%s) **bListLPushOK=%d\n", Insertcrsrecinfo_confid_confrptid_confrecid_key, bListLPushOK);
-
-		if (pWriteDBThread)
+		bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confrecordinfo_confid_confrptid_recordid_key);
+		if (!bExist)
 		{
-			typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-			CParam* pParam;
-			pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+			REDISKEY strinsrecordinfoconfidconfrptidrecordidkey = insrecordinfo_confid_confrptid_recordid_key;
+			REDISVDATA vConfRecordData;
+			vConfRecordData.clear();
 
-			typedef void (CDevMgr::* ACTION)(void*);
-			pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-				*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
+			REDISKEY strConfidFieldName = cConfidFieldName;
+			REDISVALUE strconfidvalue = conf_id_value;
+			vConfRecordData.push_back(strConfidFieldName);
+			vConfRecordData.push_back(strconfidvalue);
+
+			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+			REDISVALUE strconfreportidvalue = conf_report_id_value;
+			vConfRecordData.push_back(strConfReportidFieldName);
+			vConfRecordData.push_back(strconfreportidvalue);
+
+			REDISKEY strConfRecordidName = cConfRecordidFieldName;
+			REDISVALUE strconfrecordidvalue = conf_record_id_value;
+			vConfRecordData.push_back(strConfRecordidName);
+			vConfRecordData.push_back(strconfrecordidvalue);
+
+			REDISKEY strCRSRecStarttimeFieldName = cCRSRecStarttimeFieldName;
+			REDISVALUE strcrsrecstarttimevalue = crsrec_starttime_value;
+			vConfRecordData.push_back(strCRSRecStarttimeFieldName);
+			vConfRecordData.push_back(strcrsrecstarttimevalue);
+
+			REDISKEY strCRSRecEndtimeFieldName = cCRSRecEndtimeFieldName;
+			REDISVALUE strcrsrecendtimevalue = crsrec_endtime_value;
+			vConfRecordData.push_back(strCRSRecEndtimeFieldName);
+			vConfRecordData.push_back(strcrsrecendtimevalue);
+
+			REDISKEY strConfnameFieldName = cConfnameFieldName;
+			REDISVALUE strconfnamevalue = conf_name_value;
+			vConfRecordData.push_back(strConfnameFieldName);
+			vConfRecordData.push_back(strconfnamevalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strinsrecordinfoconfidconfrptidrecordidkey, vConfRecordData);
+			bool bListLPushOK = false;
+			bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordinfo_confid_confrptid_recordid_key);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfRecord listLPush ** (%s) **bListLPushOK=%d\n", insrecordinfo_confid_confrptid_recordid_key, bListLPushOK);
+
+			if (pWriteDBThread)
+			{
+				typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+				CParam* pParam;
+				pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+
+				typedef void (CDevMgr::* ACTION)(void*);
+				pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+					*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
+			}
+
+			// 复制一份数据在redis,结束录制或者超时回写时删除
+			REDISKEY strconfrecordinfoconfidconfrptidrecordidkey = confrecordinfo_confid_confrptid_recordid_key;
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strconfrecordinfoconfidconfrptidrecordidkey, vConfRecordData);
+			//m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrecordinfo_confid_confrptid_recordid_key, ptime, cCRSRecStarttimeFieldName);
 		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_WARNING, "==-->>Handle_InsertConfRecord ** tab(%s) **already in db(4)** so do nothing.\n", confrecordinfo_confid_confrptid_recordid_key);
+		}
+
 
 #ifdef LINUX
 		gettimeofday(&end, NULL); // μs level
 		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfRecord into db(4) ** (%s) **time_use** is: %lf us \n", crsconfrecordidset_confid_key, time_use);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfRecord into db(4) ** (%s) **time_use** is: %lf us \n", insrecordinfo_confid_confrptid_recordid_key, time_use);
 #endif 
 
 	}
@@ -5356,11 +14364,11 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 
 	char filestorsvrip[128];
 	memset(filestorsvrip, 0, sizeof(filestorsvrip));
-	char filerootpath[300];
+	char filerootpath[512];
 	memset(filerootpath, 0, sizeof(filerootpath));
-	char filepath[300];
+	char filepath[512];
 	memset(filepath, 0, sizeof(filepath));
-	char sdefilepath[300];
+	char sdefilepath[512];
 	memset(sdefilepath, 0, sizeof(sdefilepath));
 
 	sr_printf(SR_LOGLEVEL_NORMAL, "==waring-->> Handle_InsertRecordFile filestorsvrip len=%d, filerootpath len=%d, filestorpath len=%d, sdefilepath len=%d.\n", pParam->m_nLen1, pParam->m_nLen2, pParam->m_nLen3, pParam->m_nLen4);
@@ -5385,15 +14393,19 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 	//char* sdefilepath = (char*)pParam->m_pData3; // 有可能为空
 
 	unsigned long long confid = pParam->m_Arg1;
-	unsigned long long confreportid = pParam->m_Arg2; // 有可能为0,为0时需要从redis存储的数据中获取,再获取不到从mysql获取
-	unsigned long long confrecordid = pParam->m_Arg3; // 有可能为0,为0时需要从redis存储的数据中获取
+	unsigned long long confreportid = pParam->m_Arg2;
+	unsigned long long confrecordid = pParam->m_Arg3;
 	unsigned long long recordfileid = pParam->m_Arg4;
 	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg5);
 	time_t add_time = (time_t)(pParam->m_Arg6);
 	unsigned long long filesize = pParam->m_Arg7;
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg8);
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| confrecordid == 0
+		|| recordfileid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -5445,24 +14457,27 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 
 		char cConfidFieldName[128] = { 0 };
 		char conf_id_value[128] = { 0 };
-		char cRecordFileidFieldName[128] = { 0 };
-		char record_file_id_value[128] = { 0 };
+		char cConfReportidFieldName[128] = { 0 };
+		char conf_report_id_value[128] = { 0 };
 		char cConfRecordidFieldName[128] = { 0 };
 		char conf_record_id_value[128] = { 0 };
+		char cRecordFileidFieldName[128] = { 0 };
+		char record_file_id_value[128] = { 0 };
 		char cCRSRecFilepathFieldName[128] = { 0 };
-		char crsrec_filepath_value[300] = { 0 };
+		char crsrec_filepath_value[512] = { 0 };
 		char cCRSRecSdepathFieldName[128] = { 0 };
-		char crsrec_sdepath_value[300] = { 0 };
+		char crsrec_sdepath_value[512] = { 0 };
 		char cCRSRecFileStorSvrIPFieldName[128] = { 0 };
 		char crsrec_filestorsvrip_value[128] = { 0 };
 		char cCRSRecFilerootpathFieldName[128] = { 0 };
-		char crsrec_filerootpath_value[300] = { 0 };
+		char crsrec_filerootpath_value[512] = { 0 };
 		char cRecordFileSizeFieldName[128] = { 0 };
 		char record_file_size_value[128] = { 0 };
 
 		sprintf(cConfidFieldName, "%s", "conf_id");
-		sprintf(cRecordFileidFieldName, "%s", "record_file_id");
+		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
 		sprintf(cConfRecordidFieldName, "%s", "conf_record_id");
+		sprintf(cRecordFileidFieldName, "%s", "record_file_id");
 		sprintf(cCRSRecFilepathFieldName, "%s", "filepath");
 		sprintf(cCRSRecSdepathFieldName, "%s", "sdepath");
 		sprintf(cCRSRecFileStorSvrIPFieldName, "%s", "serverip");
@@ -5493,183 +14508,34 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 			memcpy(crsrec_sdepath_value, pParam->m_pData4, pParam->m_nLen4);
 		}
 
+		char keeplivetime_s[128] = { 0 };
+
 #ifdef WIN32
+		sprintf(keeplivetime_s, "%I64d", add_time);
 		sprintf(conf_id_value, "%I64d", confid);
+		sprintf(conf_report_id_value, "%I64d", confreportid);
+		sprintf(conf_record_id_value, "%I64d", confrecordid);
+		sprintf(record_file_id_value, "%I64d", recordfileid);
 		sprintf(record_file_size_value, "%I64d", filesize);
 #elif defined LINUX
+		sprintf(keeplivetime_s, "%lld", add_time);
 		sprintf(conf_id_value, "%lld", confid);
+		sprintf(conf_report_id_value, "%lld", confreportid);
+		sprintf(conf_record_id_value, "%lld", confrecordid);
+		sprintf(record_file_id_value, "%lld", recordfileid);
 		sprintf(record_file_size_value, "%lld", filesize);
 #endif
 
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 
-		if (confreportid == 0)// 
-		{
-			bool bFindConfReportID = false;
-
-			char confstarttimerptid_confid_key[128] = { 0 };
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
-
-			unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
-
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_InsertRecordFile]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
-
-			if (bhashHGetAll_ok
-				&& (uiConfstrptinfosize > 0)
-				&& (uiConfstrptinfosize % 2 == 0))
-			{
-				for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_InsertRecordFile==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
-				}
-
-				// 找到最近召开会议的confreportid
-
-#ifdef WIN32
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
-#elif defined LINUX
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
-#endif
-
-				bFindConfReportID = true;
-			}
-
-			if (bFindConfReportID == false) // 在内存中未找到查找数据库
-			{
-				pConfReport->SetConfID(confid);
-				if (pConfReport->SelectDB())// 
-				{
-					confreportid = pConfReport->GetConfReportID();
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertRecordFile == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertRecordFile == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-				}
-				else
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertRecordFile == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertRecordFile == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-				}
-
-			}
-
-			if (confreportid == 0)
-			{
-#ifdef WIN32
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfRecord == Not find confreportid === confid=%I64d\n", confid);
-#elif defined LINUX
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfRecord == Not find confreportid === confid=%lld\n", confid);
-#endif
-
-				delete pParam;
-				pParam = NULL;
-
-				return;
-			}
-		}
+		char confrecfileidktimeset_confid_confrptid_recordid_key[256] = { 0 };// 存放<recfileid, keeplivetime>
+		char insrecordfileinfo_confid_confrptid_recordid_recfileid_key[256] = { 0 };
+		sprintf(confrecfileidktimeset_confid_confrptid_recordid_key, "confrecfileidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
+		sprintf(insrecordfileinfo_confid_confrptid_recordid_recfileid_key, "insrecordfileinfo_%s_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value, record_file_id_value);
 		
-		if (confrecordid == 0)// 
-		{
-			bool bFindConfRecordID = false;
-
-			char crsconfrecordidset_confid_key[128] = { 0 };
-			sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(crsconfrecordidset_confid_key, vRedisReplyArray);
-
-			unsigned int uiConfRecordidsize = vRedisReplyArray.size();
-
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_InsertRecordFile]->hashHGetAll==%s-->> %d, size = %d\n", crsconfrecordidset_confid_key, bhashHGetAll_ok, uiConfRecordidsize);
-
-			if (bhashHGetAll_ok
-				&& (uiConfRecordidsize > 0)
-				&& (uiConfRecordidsize % 2 == 0))
-			{
-				for (unsigned int ii = 0; ii < uiConfRecordidsize;)
-				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_InsertRecordFile==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", crsconfrecordidset_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
-				}
-
-				// 找到最近召开会议的confreportid
-
-#ifdef WIN32
-				sscanf(vRedisReplyArray[uiConfRecordidsize - 1].str.c_str(), "%I64d", &confrecordid);
-#elif defined LINUX
-				sscanf(vRedisReplyArray[uiConfRecordidsize - 1].str.c_str(), "%lld", &confrecordid);
-#endif
-
-				bFindConfRecordID = true;
-			}
-
-			if (bFindConfRecordID == false) // 在内存中未找到查找数据库
-			{
-				pConfRecord->SetConfReportID(confreportid);
-				if (pConfRecord->SelectConfRecordidFromDB())// 
-				{
-					confrecordid = pConfRecord->GetConfRecordID();
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertRecordFile == find confrecordid from pConfRecord table=== confid=%I64d, confreportid=%I64d, confrecordid=%I64d\n", confid, confreportid, confrecordid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertRecordFile == find confrecordid from pConfRecord table=== confid=%lld, confreportid=%lld, confrecordid=%lld\n", confid, confreportid, confrecordid);
-#endif
-				}
-				else
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertRecordFile == Not find confrecordid from pConfRecord table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertRecordFile == Not find confrecordid from pConfRecord table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-				}
-
-			}
-
-			if (confrecordid == 0)
-			{
-#ifdef WIN32
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertRecordFile == Not find confrecordid === confid=%I64d\n", confid);
-#elif defined LINUX
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertRecordFile == Not find confrecordid === confid=%lld\n", confid);
-#endif
-
-				delete pParam;
-				pParam = NULL;
-
-				return;
-			}
-		}
-
-
-		//char Insertcrsrecfile_confid_recfileid_key[128] = { 0 };
-		char Insertcrsrecfile_confid_confrecid_recfileid_key[128] = { 0 };
-#ifdef WIN32
-		sprintf(conf_record_id_value, "%I64d", confrecordid);
-		sprintf(record_file_id_value, "%I64d", recordfileid);
-		//sprintf(Insertcrsrecfile_confid_recfileid_key, "inscrsrecfile_%I64d_%I64d", confid, recordfileid);
-		sprintf(Insertcrsrecfile_confid_confrecid_recfileid_key, "inscrsrecfile_%I64d_%I64d_%I64d", confid, confrecordid, recordfileid);
-#elif defined LINUX
-		sprintf(conf_record_id_value, "%lld", confrecordid);
-		sprintf(record_file_id_value, "%lld", recordfileid);
-		//sprintf(Insertcrsrecfile_confid_recfileid_key, "inscrsrecfile_%lld_%lld", confid, recordfileid);
-		sprintf(Insertcrsrecfile_confid_confrecid_recfileid_key, "inscrsrecfile_%lld_%lld_%lld", confid, confrecordid, recordfileid);
-#endif
-
-		//REDISKEY strInsertCRSRecfileConfidRecfileidkey = Insertcrsrecfile_confid_recfileid_key;
-		REDISKEY strInsertCRSRecfileConfidConfrecidRecfileidkey = Insertcrsrecfile_confid_confrecid_recfileid_key;
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrecfileidktimeset_confid_confrptid_recordid_key, keeplivetime_s, record_file_id_value);// <recfileid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		
+		REDISKEY strinsrecordfileinfoconfidconfrptidrecordidrecfileid_key = insrecordfileinfo_confid_confrptid_recordid_recfileid_key;
 		REDISVDATA vRecordFileData;
 		vRecordFileData.clear();
 
@@ -5678,15 +14544,20 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 		vRecordFileData.push_back(strConfidFieldName);
 		vRecordFileData.push_back(strconfidvalue);
 
-		REDISKEY strRecordFileidName = cRecordFileidFieldName;
-		REDISVALUE strrecordfileidvalue = record_file_id_value;
-		vRecordFileData.push_back(strRecordFileidName);
-		vRecordFileData.push_back(strrecordfileidvalue);
+		REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+		REDISVALUE strconfreportidvalue = conf_report_id_value;
+		vRecordFileData.push_back(strConfReportidFieldName);
+		vRecordFileData.push_back(strconfreportidvalue);
 
 		REDISKEY strConfRecordidName = cConfRecordidFieldName;
 		REDISVALUE strconfrecordidvalue = conf_record_id_value;
 		vRecordFileData.push_back(strConfRecordidName);
 		vRecordFileData.push_back(strconfrecordidvalue);
+
+		REDISKEY strRecordFileidName = cRecordFileidFieldName;
+		REDISVALUE strrecordfileidvalue = record_file_id_value;
+		vRecordFileData.push_back(strRecordFileidName);
+		vRecordFileData.push_back(strrecordfileidvalue);
 		
 		REDISKEY strCRSRecFilepathFieldName = cCRSRecFilepathFieldName;
 		REDISVALUE strcrsrecfilepathvalue = crsrec_filepath_value;
@@ -5715,11 +14586,11 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 
 		//bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertCRSRecfileConfidRecfileidkey, vRecordFileData);
 
-		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strInsertCRSRecfileConfidConfrecidRecfileidkey, vRecordFileData);
+		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strinsrecordfileinfoconfidconfrptidrecordidrecfileid_key, vRecordFileData);
 
 		bool bListLPushOK = false;
-		bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", Insertcrsrecfile_confid_confrecid_recfileid_key);
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertRecordFile listLPush ** (%s) **bListLPushOK=%d\n", Insertcrsrecfile_confid_confrecid_recfileid_key, bListLPushOK);
+		bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insrecordfileinfo_confid_confrptid_recordid_recfileid_key);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertRecordFile listLPush ** (%s) **bListLPushOK=%d\n", insrecordfileinfo_confid_confrptid_recordid_recfileid_key, bListLPushOK);
 		
 		if (pWriteDBThread)
 		{
@@ -5736,7 +14607,7 @@ void CDevMgr::Handle_InsertRecordFile(void* pArg)
 		gettimeofday(&end, NULL); // μs level
 		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertRecordFile into db(4) ** (%s) **time_use** is: %lf us \n", Insertcrsrecfile_confid_confrecid_recfileid_key, time_use);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertRecordFile into db(4) ** (%s) **time_use** is: %lf us \n", insrecordfileinfo_confid_confrptid_recordid_recfileid_key, time_use);
 #endif 
 
 	}
@@ -5766,7 +14637,7 @@ void CDevMgr::Handle_UpdateRecordFile(void* pArg)
 }
 */
 
-void CDevMgr::UpdateConfRecord(unsigned long long confid, unsigned long long confreportid, char* time, time_t lltime, char* confname)
+void CDevMgr::UpdateConfRecord(unsigned long long confid, unsigned long long confreportid, unsigned long long confrecordid, char* time, time_t lltime, char* confname)
 {
 	if (!m_pUpMsqThread)
 		return;
@@ -5774,9 +14645,9 @@ void CDevMgr::UpdateConfRecord(unsigned long long confid, unsigned long long con
 	if (time == NULL)
 		return;
 
-	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, unsigned long long, CAsyncThread*, void*, void*, void*> CParam;
+	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, unsigned long long, CAsyncThread*, unsigned long long, void*, void*> CParam;
 	CParam* pParam;
-	pParam = new CParam(time, strlen(time), confname, strlen(confname), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, m_pUpMsqThread, lltime, confreportid, m_pWriteDBThread);
+	pParam = new CParam(time, strlen(time), confname, strlen(confname), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, confid, m_pUpMsqThread, lltime, confreportid, m_pWriteDBThread, confrecordid);
 
 	typedef void (CDevMgr::* ACTION)(void*);
 	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
@@ -5792,7 +14663,7 @@ void CDevMgr::Handle_UpdateConfRecord(void* pArg)
 		return;
 	}
 
-	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, unsigned long long, CAsyncThread*, void*, void*, void*> CParam;
+	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, unsigned long long, CAsyncThread*, unsigned long long, void*, void*> CParam;
 	CParam* pParam = (CParam*)pArg;
 
 	char* ptime = (char*)pParam->m_pData1;
@@ -5807,13 +14678,14 @@ void CDevMgr::Handle_UpdateConfRecord(void* pArg)
 	unsigned long long confid = pParam->m_Arg1;
 	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg2);
 	time_t add_time = (time_t)(pParam->m_Arg3);
-
-	unsigned long long confreportid = 0;
-	confreportid = pParam->m_Arg4;
-
+	unsigned long long confreportid = pParam->m_Arg4;
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg5);
+	unsigned long long confrecordid = pParam->m_Arg6;
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| confrecordid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -5855,202 +14727,157 @@ void CDevMgr::Handle_UpdateConfRecord(void* pArg)
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 		char cConfidFieldName[128] = { 0 };
 		char conf_id_value[128] = { 0 };
-		char cConfRecordidFieldName[128] = { 0 };
-		char conf_recordid_value[128] = { 0 };
 		char cConfReportidFieldName[128] = { 0 };
 		char conf_report_id_value[128] = { 0 };
-		char cRecStarttimeFieldName[128] = { 0 };
-		char rec_starttime_value[128] = { 0 };
-		char cRecEndtimeFieldName[128] = { 0 };
-
-		sprintf(cConfidFieldName, "%s", "conf_id");
-		sprintf(cConfRecordidFieldName, "%s", "conf_record_id");
-		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
-		sprintf(cRecStarttimeFieldName, "%s", "starttime");
-		sprintf(cRecEndtimeFieldName, "%s", "endtime");
-
+		char cConfRecordidFieldName[128] = { 0 };
+		char conf_record_id_value[128] = { 0 };
+		char cCRSRecStarttimeFieldName[128] = { 0 };
+		char crsrec_starttime_value[128] = { 0 };
+		char cCRSRecEndtimeFieldName[128] = { 0 };
+		char crsrec_endtime_value[128] = { 0 };
 		char cConfnameFieldName[256] = { 0 };
 		char conf_name_value[256] = { 0 };
+
+
+		char keeplivetime_s[128] = { 0 };
+		char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+		char confrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+		char uprecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+
+		sprintf(cConfidFieldName, "%s", "conf_id");
+		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
+		sprintf(cConfRecordidFieldName, "%s", "conf_record_id");
+		sprintf(cCRSRecStarttimeFieldName, "%s", "starttime");
+		sprintf(cCRSRecEndtimeFieldName, "%s", "endtime");
 		sprintf(cConfnameFieldName, "%s", "confname");
-		sprintf(conf_name_value, "%s", strconfname.c_str());
 
 #ifdef WIN32
+		sprintf(keeplivetime_s, "%I64d", add_time);
 		sprintf(conf_id_value, "%I64d", confid);
-#elif defined LINUX
-		sprintf(conf_id_value, "%lld", confid);
-#endif
-		//unsigned long long confreportid = 0;
-
-		if (confreportid == 0)// 
-		{
-			bool bFindConfReportID = false;
-
-			char confstarttimerptid_confid_key[128] = { 0 };
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
-
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
-
-			unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
-
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_UpdateConfRecord]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
-
-			if (bhashHGetAll_ok
-				&& (uiConfstrptinfosize > 0)
-				&& (uiConfstrptinfosize % 2 == 0))
-			{
-				for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_UpdateConfRecord==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
-				}
-
-				// 找到最近召开会议的confreportid
-
-#ifdef WIN32
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
-#elif defined LINUX
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
-#endif
-
-				bFindConfReportID = true;
-			}
-
-			if (bFindConfReportID == false) // 在内存中未找到查找数据库
-			{
-				pConfReport->SetConfID(confid);
-				if (pConfReport->SelectDB())// 
-				{
-					confreportid = pConfReport->GetConfReportID();
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_UpdateConfRecord == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_UpdateConfRecord == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-				}
-				else
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_UpdateConfRecord == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_UpdateConfRecord == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-				}
-
-			}
-
-			if (confreportid == 0)
-			{
-#ifdef WIN32
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_UpdateConfRecord == Not find confreportid === confid=%I64d\n", confid);
-#elif defined LINUX
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_UpdateConfRecord == Not find confreportid === confid=%lld\n", confid);
-#endif
-
-				delete pParam;
-				pParam = NULL;
-
-				return;
-			}
-		}
-
-
-#ifdef WIN32
 		sprintf(conf_report_id_value, "%I64d", confreportid);
+		sprintf(conf_record_id_value, "%I64d", confrecordid);
 #elif defined LINUX
+		sprintf(keeplivetime_s, "%lld", add_time);
+		sprintf(conf_id_value, "%lld", confid);
 		sprintf(conf_report_id_value, "%lld", confreportid);
+		sprintf(conf_record_id_value, "%lld", confrecordid);
 #endif
 
-		char up_confrecordid_confid_recordid_key[128] = { 0 };
+		//sprintf(crsrec_starttime_value, "%s", ptime);
+		//sprintf(crsrec_endtime_value, "%s", "19700101000000");
+		//sprintf(conf_name_value, "%s", strconfname.c_str());
 
-		char crsconfrecordidset_confid_key[128] = { 0 };
-		sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%s", conf_id_value);
-		RedisReplyArray vRedisReplyRecordidArray;
-		vRedisReplyRecordidArray.clear();
+		//sprintf(confidktimeset_key, "%s", "confidktimeset");
+		//sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+		//sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+		sprintf(confrecordinfo_confid_confrptid_recordid_key, "confrecordinfo_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
+		sprintf(uprecordinfo_confid_confrptid_recordid_key, "uprecordinfo_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
 
-		bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(crsconfrecordidset_confid_key, vRedisReplyRecordidArray);
-
-		unsigned int uiConfrecidinfosize = vRedisReplyRecordidArray.size();
-
-		sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_UpdateConfRecord]->hashHGetAll==%s-->> %d, size = %d\n", crsconfrecordidset_confid_key, bhashHGetAll_ok, uiConfrecidinfosize);
-
-		if (bhashHGetAll_ok
-			&& (uiConfrecidinfosize > 0)
-			&& (uiConfrecidinfosize % 2 == 0))
+		bool bExistUP = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(uprecordinfo_confid_confrptid_recordid_key);
+		if (bExistUP)
 		{
-			bool bFindConfRecordID = false;
-
-			for (unsigned int ii = 0; ii < uiConfrecidinfosize;)
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", uprecordinfo_confid_confrptid_recordid_key);
+			//PushMsgToWriteDBQueue(uprecordinfo_confid_confrptid_recordid_key);
+		}
+		else
+		{
+			bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confrecordinfo_confid_confrptid_recordid_key);
+			if (bExist)
 			{
-				sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_UpdateConfRecord==In redis db(4) key:%s ==>>> find starttime=%s, recordid=%s\n", crsconfrecordidset_confid_key, vRedisReplyRecordidArray[ii].str.c_str(), vRedisReplyRecordidArray[ii + 1].str.c_str());
-				ii += 2;
+				REDISKEY strconfrecordinfoconfidconfrptidrecordidkey = confrecordinfo_confid_confrptid_recordid_key;
+				REDISFILEDS vGetFileds;
+				vGetFileds.clear();
+				RedisReplyArray vRedisReplyArray;
+				vRedisReplyArray.clear();
+
+				// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
+				REDISKEY strConfidFieldName = cConfidFieldName;
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISKEY strConfRecordidName = cConfRecordidFieldName;
+				REDISKEY strCRSRecStarttimeFieldName = cCRSRecStarttimeFieldName;
+				REDISKEY strCRSRecEndtimeFieldName = cCRSRecEndtimeFieldName;
+				REDISKEY strConfnameFieldName = cConfnameFieldName;
+
+				vGetFileds.push_back(strConfidFieldName);
+				vGetFileds.push_back(strConfReportidFieldName);
+				vGetFileds.push_back(strConfRecordidName);
+				vGetFileds.push_back(strCRSRecStarttimeFieldName);
+				vGetFileds.push_back(strCRSRecEndtimeFieldName);
+				vGetFileds.push_back(strConfnameFieldName);
+
+				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strconfrecordinfoconfidconfrptidrecordidkey, vGetFileds, vRedisReplyArray);
+
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				{
+					//sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+					//sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+					//sprintf(conf_record_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(crsrec_starttime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(crsrec_endtime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(conf_name_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+
+					REDISKEY struprecordinfoconfidconfrptidrecordid_key = uprecordinfo_confid_confrptid_recordid_key;
+					REDISVDATA vConfrecorddata;
+					vConfrecorddata.clear();
+
+					//REDISKEY strConfidFieldName = cConfidFieldName;
+					REDISVALUE strconfidvalue = conf_id_value;
+					vConfrecorddata.push_back(strConfidFieldName);
+					vConfrecorddata.push_back(strconfidvalue);
+
+					//REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+					REDISVALUE strconfreportidvalue = conf_report_id_value;
+					vConfrecorddata.push_back(strConfReportidFieldName);
+					vConfrecorddata.push_back(strconfreportidvalue);
+
+					//REDISKEY strConfRecordidName = cConfRecordidFieldName;
+					REDISVALUE strconfrecordidvalue = conf_record_id_value;
+					vConfrecorddata.push_back(strConfRecordidName);
+					vConfrecorddata.push_back(strconfrecordidvalue);
+
+					//REDISKEY strCRSRecStarttimeFieldName = cCRSRecStarttimeFieldName;
+					REDISVALUE strrecstarttimevalue = crsrec_starttime_value;
+					vConfrecorddata.push_back(strCRSRecStarttimeFieldName);
+					vConfrecorddata.push_back(strrecstarttimevalue);
+
+					//REDISKEY strCRSRecEndtimeFieldName = cCRSRecEndtimeFieldName;
+					REDISVALUE strrecendtimevalue = ptime;
+					vConfrecorddata.push_back(strCRSRecEndtimeFieldName);
+					vConfrecorddata.push_back(strrecendtimevalue);
+
+					//REDISKEY strConfnameFieldName = cConfnameFieldName;
+					REDISVALUE strconfnamevalue = conf_name_value;
+					vConfrecorddata.push_back(strConfnameFieldName);
+					vConfrecorddata.push_back(strconfnamevalue);
+
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struprecordinfoconfidconfrptidrecordid_key, vConfrecorddata);
+
+					bool bListLPushOK = false;
+					bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", uprecordinfo_confid_confrptid_recordid_key);
+					sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfRecord listLPush ** (%s) **bListLPushOK=%d\n", uprecordinfo_confid_confrptid_recordid_key, bListLPushOK);
+				}
 			}
+		}		
+		
+		if (pWriteDBThread)
+		{
+			typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+			CParam* pParam;
+			pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
 
-			sprintf(rec_starttime_value, "%s", vRedisReplyRecordidArray[uiConfrecidinfosize - 2].str.c_str());
-			sprintf(conf_recordid_value, "%s", vRedisReplyRecordidArray[uiConfrecidinfosize - 1].str.c_str());
-
-			// 停止录制，更新录制结束时间
-			sprintf(up_confrecordid_confid_recordid_key, "upconfrecordid_%s_%s", conf_id_value, conf_recordid_value);
-			REDISKEY strupconfrecordidkey = up_confrecordid_confid_recordid_key;
-			REDISVDATA vConfrecorddata;
-			vConfrecorddata.clear();
-
-			REDISKEY strConfidFieldName = cConfidFieldName;
-			REDISVALUE strconfidvalue = conf_id_value;
-			vConfrecorddata.push_back(strConfidFieldName);
-			vConfrecorddata.push_back(strconfidvalue);
-
-			REDISKEY strConfRecordidName = cConfRecordidFieldName;
-			REDISVALUE strconfrecordidvalue = conf_recordid_value;
-			vConfrecorddata.push_back(strConfRecordidName);
-			vConfrecorddata.push_back(strconfrecordidvalue);
-
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISVALUE strconfreportidvalue = conf_report_id_value;
-			vConfrecorddata.push_back(strConfReportidFieldName);
-			vConfrecorddata.push_back(strconfreportidvalue);
-
-			REDISKEY strRecStarttimeFieldName = cRecStarttimeFieldName;
-			REDISVALUE strrecstarttimevalue = rec_starttime_value;
-			vConfrecorddata.push_back(strRecStarttimeFieldName);
-			vConfrecorddata.push_back(strrecstarttimevalue);
-
-			REDISKEY strRecEndtimeFieldName = cRecEndtimeFieldName;
-			REDISVALUE strrecendtimevalue = ptime;
-			vConfrecorddata.push_back(strRecEndtimeFieldName);
-			vConfrecorddata.push_back(strrecendtimevalue);
-
-			REDISKEY strConfnameFieldName = cConfnameFieldName;
-			REDISVALUE strconfnamevalue = conf_name_value;
-			vConfrecorddata.push_back(strConfnameFieldName);
-			vConfrecorddata.push_back(strconfnamevalue);
-
-			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strupconfrecordidkey, vConfrecorddata);
-
-			bool bListLPushOK = false;
-			bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", up_confrecordid_confid_recordid_key);
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfRecord listLPush ** (%s) **bListLPushOK=%d\n", up_confrecordid_confid_recordid_key, bListLPushOK);
-
-			if (pWriteDBThread)
-			{
-				typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-				CParam* pParam;
-				pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
-
-				typedef void (CDevMgr::* ACTION)(void*);
-				pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-					*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
-			}
-
+			typedef void (CDevMgr::* ACTION)(void*);
+			pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+				*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
 		}
 
 #ifdef LINUX
 		gettimeofday(&end, NULL); // μs level
 		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfRecord into db(4) ** (%s) **time_use** is: %lf us \n", up_confrecordid_confid_recordid_key, time_use);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfRecord into db(4) ** (%s) **time_use** is: %lf us \n", uprecordinfo_confid_confrptid_recordid_key, time_use);
 #endif 
 
 	}
@@ -6059,7 +14886,6 @@ void CDevMgr::Handle_UpdateConfRecord(void* pArg)
 	pParam = NULL;
 }
 
-
 void CDevMgr::InsertConfLiveInfo(unsigned long long liveinfoid, const SRMsgs::IndCRSStartLive* ind, char* time, time_t lltime)
 {
 	if (!m_pUpMsqThread)
@@ -6067,33 +14893,41 @@ void CDevMgr::InsertConfLiveInfo(unsigned long long liveinfoid, const SRMsgs::In
 
 	// LiveSetting信息是来自mc的ind消息，还是直接读取redis？？？(如果devmgr与redis断开或者会控/主持人通知mc更新设置但更新redis失败)
 	const SRMsgs::IndCRSStartLive_LiveSetting& liveset = ind->livesetinfo();
-	char strlivechairman[255] = { 0 };
-	char strlivesubject[255] = { 0 };
-	char strliveabstract[255] = { 0 };
-	char strlivepwd[40] = { 0 };
+	char strlivechairman[1024] = { 0 };
+	char strlivesubject[2048] = { 0 };
+	char strliveabstract[2048] = { 0 };
+	char strlivepwd[128] = { 0 };
 	unsigned int uiispublic = 0;
 	unsigned int uiisuserec = 1;
 	unsigned long long confreportid = 0;
 
 	//char strlivepushurl[1024] = { 0 };
 	char strlivepullurl[1024] = { 0 };
-	char strliveplayurl[255] = { 0 };
+	char strliveplayurl[1024] = { 0 };
 
-	sprintf(strlivechairman, "%s", liveset.chairman().c_str());
-	sprintf(strlivesubject, "%s", liveset.subject().c_str());
-	sprintf(strliveabstract, "%s", liveset.abstract().c_str());
-	sprintf(strlivepwd, "%s", liveset.livepwd().c_str());
+	snprintf(strlivechairman, sizeof(strlivechairman), "%s", liveset.chairman().c_str());// src < dst,不够补0,返回值是欲写入的串长度;src >= dst,超出截断,返回值是欲写入的串长度(此时不是实际写入值)
+	snprintf(strlivesubject, sizeof(strlivesubject), "%s", liveset.subject().c_str());
+	snprintf(strliveabstract, sizeof(strliveabstract), "%s", liveset.abstract().c_str());
+	snprintf(strlivepwd, sizeof(strlivepwd), "%s", liveset.livepwd().c_str());
+
+	snprintf(strlivepullurl, sizeof(strlivepullurl), "%s", ind->livepullurl().c_str());
+	snprintf(strliveplayurl, sizeof(strliveplayurl), "%s", ind->liveplayurl().c_str());
+
+	//sprintf(strlivechairman, "%s", liveset.chairman().c_str());
+	//sprintf(strlivesubject, "%s", liveset.subject().c_str());
+	//sprintf(strliveabstract, "%s", liveset.abstract().c_str());
+	//sprintf(strlivepwd, "%s", liveset.livepwd().c_str());
 	uiispublic = liveset.ispublic();
 	uiisuserec = liveset.isuserec();
 
-	//sprintf(strlivepushurl, "%s", ind->livepushurl().c_str());
-	sprintf(strlivepullurl, "%s", ind->livepullurl().c_str());
-	sprintf(strliveplayurl, "%s", ind->liveplayurl().c_str());
+	////sprintf(strlivepushurl, "%s", ind->livepushurl().c_str());
+	//sprintf(strlivepullurl, "%s", ind->livepullurl().c_str());
+	//sprintf(strliveplayurl, "%s", ind->liveplayurl().c_str());
 
 	confreportid = ind->confreportid();
 	unsigned int uilivesvrtype = 0;
 	uilivesvrtype = ind->livesvrtype();
-	char strliveaddrs[2048] = { 0 };
+	char strliveaddrs[3072] = { 0 };
 	int strliveaddrslen = 0;
 	char *sep1 = { "MySRLv1" };
 	char *sep2 = { "MySRLv2" };
@@ -6147,7 +14981,10 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 	confreportid = pParam->m_Arg7;
 	unsigned int uilivesvrtype = pParam->m_Arg8;
 	
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| liveinfoid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -6190,16 +15027,16 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 		struct timeval end;
 		gettimeofday(&start, NULL); // μs level
 #endif 
-
-		char cLiveinfoidFieldName[128] = { 0 };
-		char liveinfo_id_value[128] = { 0 };
+		
 		char cConfidFieldName[128] = { 0 };
 		char conf_id_value[128] = { 0 };
 		char cConfReportidFieldName[128] = { 0 };
 		char conf_report_id_value[128] = { 0 };
+		char cLiveinfoidFieldName[128] = { 0 };
+		char liveinfo_id_value[128] = { 0 };
 		
 		char cLiveSubjectFieldName[128] = { 0 };
-		char live_subject_value[255] = { 0 };
+		char live_subject_value[2048] = { 0 };
 
 		char cLiveStarttimeFieldName[128] = { 0 };
 		char live_starttime_value[128] = { 0 };
@@ -6207,9 +15044,9 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 		char live_endtime_value[128] = { 0 };
 
 		char cLiveChairmanFieldName[128] = { 0 };
-		char live_chairman_value[255] = { 0 };
+		char live_chairman_value[1024] = { 0 };
 		char cLiveAbstractFieldName[128] = { 0 };
-		char live_abstract_value[255] = { 0 };
+		char live_abstract_value[2048] = { 0 };
 		char cLiveisPublicFieldName[128] = { 0 };
 		char live_ispublic_value[128] = { 0 };
 		char cLivePWDFieldName[128] = { 0 };
@@ -6224,7 +15061,7 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 		char cLiveLikestimesFieldName[128] = { 0 };
 		char live_likes_times_value[128] = { 0 };
 		char cLiveWatchaddrFieldName[128] = { 0 };
-		char live_watch_addr_value[255] = { 0 };
+		char live_watch_addr_value[1024] = { 0 };
 		char cLiveAndroidtimesFieldName[128] = { 0 };
 		char live_android_times_value[128] = { 0 };
 		char cLiveIOStimesFieldName[128] = { 0 };
@@ -6248,9 +15085,9 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 		char cHLSUrlFieldName[128] = { 0 };
 		char hls_url_value[1024] = { 0 };
 		
-		sprintf(cLiveinfoidFieldName, "%s", "li_id");
 		sprintf(cConfidFieldName, "%s", "conf_id");
 		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
+		sprintf(cLiveinfoidFieldName, "%s", "li_id");
 
 		sprintf(cLiveSubjectFieldName, "%s", "li_subject");
 
@@ -6280,19 +15117,22 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 		sprintf(cFLVUrlFieldName, "%s", "flv_url");
 		sprintf(cHLSUrlFieldName, "%s", "hls_url");
 		
+		char keeplivetime_s[128] = { 0 };
+		char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+		char confliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
 
-		char confliveinfoidset_confid_key[128] = { 0 };
-		char liveinfo_confid_liveinfoid_key[128] = { 0 };
 #ifdef WIN32
-		sprintf(liveinfo_id_value, "%I64d", liveinfoid);
+		sprintf(keeplivetime_s, "%I64d", add_time);
 		sprintf(conf_id_value, "%I64d", confid);
-		sprintf(confliveinfoidset_confid_key, "confliveinfoidset_%I64d", confid);
-		sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%I64d_%I64d", confid, liveinfoid);
+		sprintf(conf_report_id_value, "%I64d", confreportid);
+		sprintf(liveinfo_id_value, "%I64d", liveinfoid);
 #elif defined LINUX
-		sprintf(liveinfo_id_value, "%lld", liveinfoid);
+		sprintf(keeplivetime_s, "%lld", add_time);
 		sprintf(conf_id_value, "%lld", confid);
-		sprintf(confliveinfoidset_confid_key, "confliveinfoidset_%lld", confid);
-		sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%lld_%lld", confid, liveinfoid);
+		sprintf(conf_report_id_value, "%lld", confreportid);
+		sprintf(liveinfo_id_value, "%lld", liveinfoid);
 #endif
 
 		if (pParam->m_nLen1 > 0)
@@ -6406,234 +15246,184 @@ void CDevMgr::Handle_InsertConfLiveInfo(void* pArg)
 				sprintf(hls_url_value, "%s", ms_itor->second.c_str());
 			}
 		}
+		
+		sprintf(confidktimeset_key, "%s", "confidktimeset");
+		sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+		sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+		sprintf(confliveinfo_confid_confrptid_liveinfoid_key, "confliveinfo_%s_%s_%s", conf_id_value, conf_report_id_value, liveinfo_id_value);
 
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 
-		if (confreportid == 0)// 
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confliveinfoidktimeset_confid_confrptid_key, keeplivetime_s, liveinfo_id_value);// <liveinfoid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+		bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confliveinfo_confid_confrptid_liveinfoid_key);
+		if (!bExist)
 		{
-			bool bFindConfReportID = false;
+			REDISKEY strconfliveinfoconfidconfrptidliveinfoidkey = confliveinfo_confid_confrptid_liveinfoid_key;
+			REDISVDATA vLiveinfoData;
+			vLiveinfoData.clear();
 
-			char confstarttimerptid_confid_key[128] = { 0 };
-			sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-			RedisReplyArray vRedisReplyArray;
-			vRedisReplyArray.clear();
+			REDISKEY strConfidFieldName = cConfidFieldName;
+			REDISVALUE strconfidvalue = conf_id_value;
+			vLiveinfoData.push_back(strConfidFieldName);
+			vLiveinfoData.push_back(strconfidvalue);
 
-			bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
+			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+			REDISVALUE strconfreportidvalue = conf_report_id_value;
+			vLiveinfoData.push_back(strConfReportidFieldName);
+			vLiveinfoData.push_back(strconfreportidvalue);
 
-			unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
+			REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
+			REDISVALUE strliveinfoidvalue = liveinfo_id_value;
+			vLiveinfoData.push_back(strLiveinfoidFieldName);
+			vLiveinfoData.push_back(strliveinfoidvalue);
 
-			sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_InsertConfLiveInfo]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
+			REDISKEY strLiveSubjectFieldName = cLiveSubjectFieldName;
+			REDISVALUE strlivesubjectvalue = live_subject_value;
+			vLiveinfoData.push_back(strLiveSubjectFieldName);
+			vLiveinfoData.push_back(strlivesubjectvalue);
 
-			if (bhashHGetAll_ok
-				&& (uiConfstrptinfosize > 0)
-				&& (uiConfstrptinfosize % 2 == 0))
+			REDISKEY strLiveStarttimeFieldName = cLiveStarttimeFieldName;
+			REDISVALUE strlivestarttimevalue = live_starttime_value;
+			vLiveinfoData.push_back(strLiveStarttimeFieldName);
+			vLiveinfoData.push_back(strlivestarttimevalue);
+
+			REDISKEY strLiveEndtimeFieldName = cLiveEndtimeFieldName;
+			REDISVALUE strliveendtimevalue = live_endtime_value;
+			vLiveinfoData.push_back(strLiveEndtimeFieldName);
+			vLiveinfoData.push_back(strliveendtimevalue);
+
+			REDISKEY strLiveChairmanFieldName = cLiveChairmanFieldName;
+			REDISVALUE strlivechairmanvalue = live_chairman_value;
+			vLiveinfoData.push_back(strLiveChairmanFieldName);
+			vLiveinfoData.push_back(strlivechairmanvalue);
+
+			REDISKEY strLiveAbstractFieldName = cLiveAbstractFieldName;
+			REDISVALUE strliveabstractvalue = live_abstract_value;
+			vLiveinfoData.push_back(strLiveAbstractFieldName);
+			vLiveinfoData.push_back(strliveabstractvalue);
+
+			REDISKEY strLiveisPublicFieldName = cLiveisPublicFieldName;
+			REDISVALUE strliveispublicvalue = live_ispublic_value;
+			vLiveinfoData.push_back(strLiveisPublicFieldName);
+			vLiveinfoData.push_back(strliveispublicvalue);
+
+			REDISKEY strLivePWDFieldName = cLivePWDFieldName;
+			REDISVALUE strlivepwdvalue = live_pwd_value;
+			vLiveinfoData.push_back(strLivePWDFieldName);
+			vLiveinfoData.push_back(strlivepwdvalue);
+
+			REDISKEY strLiveisUseRecFieldName = cLiveisUseRecFieldName;
+			REDISVALUE strliveisuserecvalue = live_isuserec_value;
+			vLiveinfoData.push_back(strLiveisUseRecFieldName);
+			vLiveinfoData.push_back(strliveisuserecvalue);
+
+			REDISKEY strLiveAddrFieldName = cLiveAddrFieldName;
+			REDISVALUE strliveaddrvalue = live_addr_value;
+			vLiveinfoData.push_back(strLiveAddrFieldName);
+			vLiveinfoData.push_back(strliveaddrvalue);
+
+			REDISKEY strLiveWatchtimesFieldName = cLiveWatchtimesFieldName;
+			REDISVALUE strlivewatchtimesvalue = live_watch_times_value;
+			vLiveinfoData.push_back(strLiveWatchtimesFieldName);
+			vLiveinfoData.push_back(strlivewatchtimesvalue);
+
+			REDISKEY strLiveLikestimesFieldName = cLiveLikestimesFieldName;
+			REDISVALUE strlivelikestimesvalue = live_likes_times_value;
+			vLiveinfoData.push_back(strLiveLikestimesFieldName);
+			vLiveinfoData.push_back(strlivelikestimesvalue);
+
+			REDISKEY strLiveWatchaddrFieldName = cLiveWatchaddrFieldName;
+			REDISVALUE strlivewatchaddrvalue = live_watch_addr_value;
+			vLiveinfoData.push_back(strLiveWatchaddrFieldName);
+			vLiveinfoData.push_back(strlivewatchaddrvalue);
+
+			REDISKEY strLiveAndroidtimesFieldName = cLiveAndroidtimesFieldName;
+			REDISVALUE strliveandroidtimesvalue = live_android_times_value;
+			vLiveinfoData.push_back(strLiveAndroidtimesFieldName);
+			vLiveinfoData.push_back(strliveandroidtimesvalue);
+
+			REDISKEY strLiveIOStimesFieldName = cLiveIOStimesFieldName;
+			REDISVALUE strliveiostimesvalue = live_ios_times_value;
+			vLiveinfoData.push_back(strLiveIOStimesFieldName);
+			vLiveinfoData.push_back(strliveiostimesvalue);
+
+			REDISKEY strLivePCtimesFieldName = cLivePCtimesFieldName;
+			REDISVALUE strlivepctimesvalue = live_pc_times_value;
+			vLiveinfoData.push_back(strLivePCtimesFieldName);
+			vLiveinfoData.push_back(strlivepctimesvalue);
+
+			REDISKEY strLiveMobiletimesFieldName = cLiveMobiletimesFieldName;
+			REDISVALUE strlivemobiletimesvalue = live_mobile_times_value;
+			vLiveinfoData.push_back(strLiveMobiletimesFieldName);
+			vLiveinfoData.push_back(strlivemobiletimesvalue);
+
+			REDISKEY strLiveConvertStatusFieldName = cLiveConvertStatusFieldName;
+			REDISVALUE strliveconvertstatusvalue = live_convert_status_value;
+			vLiveinfoData.push_back(strLiveConvertStatusFieldName);
+			vLiveinfoData.push_back(strliveconvertstatusvalue);
+
+			REDISKEY strLiveTaskIdFieldName = cLiveTaskIdFieldName;
+			REDISVALUE strlivetaskidvalue = live_task_id_value;
+			vLiveinfoData.push_back(strLiveTaskIdFieldName);
+			vLiveinfoData.push_back(strlivetaskidvalue);
+
+			REDISKEY strLiveSvrtypeFieldName = cLiveSvrtypeFieldName;
+			REDISVALUE strlivesvrtypevalue = live_svrtype_value;
+			vLiveinfoData.push_back(strLiveSvrtypeFieldName);
+			vLiveinfoData.push_back(strlivesvrtypevalue);
+
+			REDISKEY strRTMPUrlFieldName = cRTMPUrlFieldName;
+			REDISVALUE strrtmpurlvalue = rtmp_url_value;
+			vLiveinfoData.push_back(strRTMPUrlFieldName);
+			vLiveinfoData.push_back(strrtmpurlvalue);
+
+			REDISKEY strFLVUrlFieldName = cFLVUrlFieldName;
+			REDISVALUE strflvurlvalue = flv_url_value;
+			vLiveinfoData.push_back(strFLVUrlFieldName);
+			vLiveinfoData.push_back(strflvurlvalue);
+
+			REDISKEY strHLSUrlFieldName = cHLSUrlFieldName;
+			REDISVALUE strhlsurlvalue = hls_url_value;
+			vLiveinfoData.push_back(strHLSUrlFieldName);
+			vLiveinfoData.push_back(strhlsurlvalue);
+
+			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strconfliveinfoconfidconfrptidliveinfoidkey, vLiveinfoData);
+			if (bhashHMSet_ok)
 			{
-				for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-				{
-					sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_InsertConfLiveInfo==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-					ii += 2;
-				}
+				char cStatusRefreshTime_Key[128] = { 0 };
+				//char cConferenceFieldName[128] = { 0 };
+				//char cConfrecordFieldName[128] = { 0 };
+				char cConfliveFieldName[128] = { 0 };
+				char refresh_time_value[128] = { 0 };
 
-				// 找到最近召开会议的confreportid
-
+				sprintf(cStatusRefreshTime_Key, "%s", "status_refresh_time");
+				//sprintf(cConferenceFieldName, "%s", "conference");
+				//sprintf(cConfrecordFieldName, "%s", "confrecord");
+				sprintf(cConfliveFieldName, "%s", "conflive");
+				time_t timeNow;
+				timeNow = time(NULL);
 #ifdef WIN32
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
+				sprintf(refresh_time_value, "%I64d", timeNow);
 #elif defined LINUX
-				sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
+				sprintf(refresh_time_value, "%lld", timeNow);
 #endif
-
-				bFindConfReportID = true;
-			}
-
-			if (bFindConfReportID == false) // 在内存中未找到查找数据库
-			{
-				pConfReport->SetConfID(confid);
-				if (pConfReport->SelectDB())// 
-				{
-					confreportid = pConfReport->GetConfReportID();
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertConfLiveInfo == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_WARNING, "====== Handle_InsertConfLiveInfo == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-				}
-				else
-				{
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertConfLiveInfo == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "====== Handle_InsertConfLiveInfo == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-				}
-
-			}
-
-			if (confreportid == 0)
-			{
-#ifdef WIN32
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfLiveInfo == Not find confreportid of Netmp === confid=%I64d\n", confid);
-#elif defined LINUX
-				sr_printf(SR_LOGLEVEL_ERROR, "===return=== Handle_InsertConfLiveInfo == Not find confreportid of Netmp === confid=%lld\n", confid);
-#endif
-
-				delete pParam;
-				pParam = NULL;
-
-				return;
+				m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConfliveFieldName);
 			}
 		}
-
-		// 获得confreportid
-#ifdef WIN32
-		sprintf(conf_report_id_value, "%I64d", confreportid);
-		//sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%I64d_%I64d", confid, liveinfoid);
-#elif defined LINUX
-		sprintf(conf_report_id_value, "%lld", confreportid);
-		//sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%lld_%lld", confid, liveinfoid);
-#endif
-
-		m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confliveinfoidset_confid_key, liveinfo_id_value, live_starttime_value);// 防止结束会议数据回写时该会议又被重新召开
-
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfLiveInfo into db(4) table(%s) [key:%s,value:%s] \n", confliveinfoidset_confid_key, live_starttime_value, liveinfo_id_value);
-
-		REDISKEY strliveinfo_confid_liveinfoid_key = liveinfo_confid_liveinfoid_key;
-		REDISVDATA vLiveinfoData;
-		vLiveinfoData.clear();
+		else
+		{
+			sr_printf(SR_LOGLEVEL_WARNING, "==-->>Handle_InsertConfLiveInfo ** tab(%s) **already in db(4)** so do nothing.\n", confliveinfo_confid_confrptid_liveinfoid_key);
+		}
 		
-		REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
-		REDISVALUE strliveinfoidvalue = liveinfo_id_value;
-		vLiveinfoData.push_back(strLiveinfoidFieldName);
-		vLiveinfoData.push_back(strliveinfoidvalue);
-
-		REDISKEY strConfidFieldName = cConfidFieldName;
-		REDISVALUE strconfidvalue = conf_id_value;
-		vLiveinfoData.push_back(strConfidFieldName);
-		vLiveinfoData.push_back(strconfidvalue);
-
-		REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-		REDISVALUE strconfreportidvalue = conf_report_id_value;
-		vLiveinfoData.push_back(strConfReportidFieldName);
-		vLiveinfoData.push_back(strconfreportidvalue);
-
-		REDISKEY strLiveSubjectFieldName = cLiveSubjectFieldName;
-		REDISVALUE strlivesubjectvalue = live_subject_value;
-		vLiveinfoData.push_back(strLiveSubjectFieldName);
-		vLiveinfoData.push_back(strlivesubjectvalue);
-
-		REDISKEY strLiveStarttimeFieldName = cLiveStarttimeFieldName;
-		REDISVALUE strlivestarttimevalue = live_starttime_value;
-		vLiveinfoData.push_back(strLiveStarttimeFieldName);
-		vLiveinfoData.push_back(strlivestarttimevalue);
-
-		REDISKEY strLiveEndtimeFieldName = cLiveEndtimeFieldName;
-		REDISVALUE strliveendtimevalue = live_endtime_value;
-		vLiveinfoData.push_back(strLiveEndtimeFieldName);
-		vLiveinfoData.push_back(strliveendtimevalue);
-
-		REDISKEY strLiveChairmanFieldName = cLiveChairmanFieldName;
-		REDISVALUE strlivechairmanvalue = live_chairman_value;
-		vLiveinfoData.push_back(strLiveChairmanFieldName);
-		vLiveinfoData.push_back(strlivechairmanvalue);
-
-		REDISKEY strLiveAbstractFieldName = cLiveAbstractFieldName;
-		REDISVALUE strliveabstractvalue = live_abstract_value;
-		vLiveinfoData.push_back(strLiveAbstractFieldName);
-		vLiveinfoData.push_back(strliveabstractvalue);
-
-		REDISKEY strLiveisPublicFieldName = cLiveisPublicFieldName;
-		REDISVALUE strliveispublicvalue = live_ispublic_value;
-		vLiveinfoData.push_back(strLiveisPublicFieldName);
-		vLiveinfoData.push_back(strliveispublicvalue);
-
-		REDISKEY strLivePWDFieldName = cLivePWDFieldName;
-		REDISVALUE strlivepwdvalue = live_pwd_value;
-		vLiveinfoData.push_back(strLivePWDFieldName);
-		vLiveinfoData.push_back(strlivepwdvalue);
-
-		REDISKEY strLiveisUseRecFieldName = cLiveisUseRecFieldName;
-		REDISVALUE strliveisuserecvalue = live_isuserec_value;
-		vLiveinfoData.push_back(strLiveisUseRecFieldName);
-		vLiveinfoData.push_back(strliveisuserecvalue);
-
-		REDISKEY strLiveAddrFieldName = cLiveAddrFieldName;
-		REDISVALUE strliveaddrvalue = live_addr_value;
-		vLiveinfoData.push_back(strLiveAddrFieldName);
-		vLiveinfoData.push_back(strliveaddrvalue);
-
-		REDISKEY strLiveWatchtimesFieldName = cLiveWatchtimesFieldName;
-		REDISVALUE strlivewatchtimesvalue = live_watch_times_value;
-		vLiveinfoData.push_back(strLiveWatchtimesFieldName);
-		vLiveinfoData.push_back(strlivewatchtimesvalue);
-
-		REDISKEY strLiveLikestimesFieldName = cLiveLikestimesFieldName;
-		REDISVALUE strlivelikestimesvalue = live_likes_times_value;
-		vLiveinfoData.push_back(strLiveLikestimesFieldName);
-		vLiveinfoData.push_back(strlivelikestimesvalue);
-		
-		REDISKEY strLiveWatchaddrFieldName = cLiveWatchaddrFieldName;
-		REDISVALUE strlivewatchaddrvalue = live_watch_addr_value;
-		vLiveinfoData.push_back(strLiveWatchaddrFieldName);
-		vLiveinfoData.push_back(strlivewatchaddrvalue);
-		
-		REDISKEY strLiveAndroidtimesFieldName = cLiveAndroidtimesFieldName;
-		REDISVALUE strliveandroidtimesvalue = live_android_times_value;
-		vLiveinfoData.push_back(strLiveAndroidtimesFieldName);
-		vLiveinfoData.push_back(strliveandroidtimesvalue);
-
-		REDISKEY strLiveIOStimesFieldName = cLiveIOStimesFieldName;
-		REDISVALUE strliveiostimesvalue = live_ios_times_value;
-		vLiveinfoData.push_back(strLiveIOStimesFieldName);
-		vLiveinfoData.push_back(strliveiostimesvalue);
-
-		REDISKEY strLivePCtimesFieldName = cLivePCtimesFieldName;
-		REDISVALUE strlivepctimesvalue = live_pc_times_value;
-		vLiveinfoData.push_back(strLivePCtimesFieldName);
-		vLiveinfoData.push_back(strlivepctimesvalue);
-
-		REDISKEY strLiveMobiletimesFieldName = cLiveMobiletimesFieldName;
-		REDISVALUE strlivemobiletimesvalue = live_mobile_times_value;
-		vLiveinfoData.push_back(strLiveMobiletimesFieldName);
-		vLiveinfoData.push_back(strlivemobiletimesvalue);
-
-		REDISKEY strLiveConvertStatusFieldName = cLiveConvertStatusFieldName;
-		REDISVALUE strliveconvertstatusvalue = live_convert_status_value;
-		vLiveinfoData.push_back(strLiveConvertStatusFieldName);
-		vLiveinfoData.push_back(strliveconvertstatusvalue);
-
-		REDISKEY strLiveTaskIdFieldName = cLiveTaskIdFieldName;
-		REDISVALUE strlivetaskidvalue = live_task_id_value;
-		vLiveinfoData.push_back(strLiveTaskIdFieldName);
-		vLiveinfoData.push_back(strlivetaskidvalue);
-
-		REDISKEY strLiveSvrtypeFieldName = cLiveSvrtypeFieldName;
-		REDISVALUE strlivesvrtypevalue = live_svrtype_value;
-		vLiveinfoData.push_back(strLiveSvrtypeFieldName);
-		vLiveinfoData.push_back(strlivesvrtypevalue);
-
-		REDISKEY strRTMPUrlFieldName = cRTMPUrlFieldName;
-		REDISVALUE strrtmpurlvalue = rtmp_url_value;
-		vLiveinfoData.push_back(strRTMPUrlFieldName);
-		vLiveinfoData.push_back(strrtmpurlvalue);
-
-		REDISKEY strFLVUrlFieldName = cFLVUrlFieldName;
-		REDISVALUE strflvurlvalue = flv_url_value;
-		vLiveinfoData.push_back(strFLVUrlFieldName);
-		vLiveinfoData.push_back(strflvurlvalue);
-		
-		REDISKEY strHLSUrlFieldName = cHLSUrlFieldName;
-		REDISVALUE strhlsurlvalue = hls_url_value;
-		vLiveinfoData.push_back(strHLSUrlFieldName);
-		vLiveinfoData.push_back(strhlsurlvalue);
-		
-		bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strliveinfo_confid_liveinfoid_key, vLiveinfoData);
-
-
 #ifdef LINUX
 		gettimeofday(&end, NULL); // μs level
 		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfLiveInfo into db(4) ** (%s) **time_use** is: %lf us \n", liveinfo_confid_liveinfoid_key, time_use);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_InsertConfLiveInfo into db(4) ** (%s) **time_use** is: %lf us \n", confliveinfo_confid_confrptid_liveinfoid_key, time_use);
 #endif 
 	}
 
@@ -6651,9 +15441,9 @@ void CDevMgr::UpdateConfLiveInfo(const SRMsgs::IndCRSStopLive* ind, char* time, 
 
 	sprintf(strliveurl, "%s", ind->liveurl().c_str());
 
-	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*, void*, void*, void*> CParam;
+	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, CAsyncThread*, unsigned long long, unsigned long long, void*, void*> CParam;
 	CParam* pParam;
-	pParam = new CParam(time, strlen(time), strliveurl, strlen(strliveurl), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, ind->confid(), m_pUpMsqThread, lltime, m_pWriteDBThread);
+	pParam = new CParam(time, strlen(time), strliveurl, strlen(strliveurl), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, ind->confid(), m_pUpMsqThread, lltime, m_pWriteDBThread, ind->confreportid(), ind->liveinfoid());
 
 	typedef void (CDevMgr::* ACTION)(void*);
 	m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
@@ -6669,19 +15459,21 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 		return;
 	}
 
-	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*, void*, void*, void*> CParam;
+	typedef CBufferT<unsigned long long, CAsyncThread*, time_t, CAsyncThread*, unsigned long long, unsigned long long, void*, void*> CParam;
 	CParam* pParam = (CParam*)pArg;
 
 	char* ptime = pParam->m_pData1;
 
 	//sr_printf(SR_LOGLEVEL_NORMAL, "==waring-->> Handle_UpdateLiveInfo filestorsvrip len=%d, filerootpath len=%d, filestorpath len=%d, sdefilepath len=%d.\n", pParam->m_nLen1, pParam->m_nLen2, pParam->m_nLen3, pParam->m_nLen4);
 
-	unsigned long long confreportid = 0;
+	//unsigned long long confreportid = 0;
 
 	unsigned long long confid = pParam->m_Arg1;
 	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg2);
 	time_t add_time = (time_t)(pParam->m_Arg3);
 	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg4);
+	unsigned long long confreportid = pParam->m_Arg5;
+	unsigned long long liveinfoid = pParam->m_Arg6;
 
 	//if (pParam->m_nLen1 > 0)
 	//{
@@ -6692,7 +15484,10 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 	//	memcpy(live_subject_value, pParam->m_pData2, pParam->m_nLen2);
 	//}
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| liveinfoid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL)
 	{
 		delete pParam;
@@ -6735,15 +15530,15 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 	gettimeofday(&start, NULL); // μs level
 #endif 
 
-	char cLiveinfoidFieldName[128] = { 0 };
-	char liveinfo_id_value[128] = { 0 };
 	char cConfidFieldName[128] = { 0 };
 	char conf_id_value[128] = { 0 };
 	char cConfReportidFieldName[128] = { 0 };
 	char conf_report_id_value[128] = { 0 };
+	char cLiveinfoidFieldName[128] = { 0 };
+	char liveinfo_id_value[128] = { 0 };
 
 	char cLiveSubjectFieldName[128] = { 0 };
-	char live_subject_value[255] = { 0 };
+	char live_subject_value[2048] = { 0 };
 
 	char cLiveStarttimeFieldName[128] = { 0 };
 	char live_starttime_value[128] = { 0 };
@@ -6751,9 +15546,9 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 	char live_endtime_value[128] = { 0 };
 
 	char cLiveChairmanFieldName[128] = { 0 };
-	char live_chairman_value[255] = { 0 };
+	char live_chairman_value[1024] = { 0 };
 	char cLiveAbstractFieldName[128] = { 0 };
-	char live_abstract_value[255] = { 0 };
+	char live_abstract_value[2048] = { 0 };
 	char cLiveisPublicFieldName[128] = { 0 };
 	char live_ispublic_value[128] = { 0 };
 	char cLivePWDFieldName[128] = { 0 };
@@ -6768,7 +15563,7 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 	char cLiveLikestimesFieldName[128] = { 0 };
 	char live_likes_times_value[128] = { 0 };
 	char cLiveWatchaddrFieldName[128] = { 0 };
-	char live_watch_addr_value[255] = { 0 };
+	char live_watch_addr_value[1024] = { 0 };
 	char cLiveAndroidtimesFieldName[128] = { 0 };
 	char live_android_times_value[128] = { 0 };
 	char cLiveIOStimesFieldName[128] = { 0 };
@@ -6784,9 +15579,9 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 	char live_task_id_value[128] = { 0 };
 
 
-	sprintf(cLiveinfoidFieldName, "%s", "li_id");
 	sprintf(cConfidFieldName, "%s", "conf_id");
 	sprintf(cConfReportidFieldName, "%s", "conf_report_id");
+	sprintf(cLiveinfoidFieldName, "%s", "li_id");
 
 	sprintf(cLiveSubjectFieldName, "%s", "li_subject");
 
@@ -6814,67 +15609,49 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 
 	m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 
-	char liveinfo_confid_liveinfoid_key[128] = { 0 };
+	//char keeplivetime_s[128] = { 0 };
+	//char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+	//char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+	//char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+	char confliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+	char insliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+
 #ifdef WIN32
 	sprintf(conf_id_value, "%I64d", confid);
+	sprintf(conf_report_id_value, "%I64d", confreportid);
+	sprintf(liveinfo_id_value, "%I64d", liveinfoid);
 #elif defined LINUX
 	sprintf(conf_id_value, "%lld", confid);
+	sprintf(conf_report_id_value, "%lld", confreportid);
+	sprintf(liveinfo_id_value, "%lld", liveinfoid);
 #endif
 
-	char confliveinfoidset_confid_key[128] = { 0 };
-	sprintf(confliveinfoidset_confid_key, "confliveinfoidset_%s", conf_id_value);
-	RedisReplyArray vRedisReplyArray;
-	vRedisReplyArray.clear();
+	//sprintf(confidktimeset_key, "%s", "confidktimeset");
+	//sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+	//sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+	sprintf(confliveinfo_confid_confrptid_liveinfoid_key, "confliveinfo_%s_%s_%s", conf_id_value, conf_report_id_value, liveinfo_id_value);
+	sprintf(insliveinfo_confid_confrptid_liveinfoid_key, "insliveinfo_%s_%s_%s", conf_id_value, conf_report_id_value, liveinfo_id_value);
 
-	bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confliveinfoidset_confid_key, vRedisReplyArray);
-
-	unsigned int uiConfliveinfoidsize = vRedisReplyArray.size();
-
-	sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_UpdateConfLiveInfo]->hashHGetAll==%s-->> %d, size = %d\n", confliveinfoidset_confid_key, bhashHGetAll_ok, uiConfliveinfoidsize);
-
-	if (bhashHGetAll_ok
-		&& (uiConfliveinfoidsize > 0)
-		&& (uiConfliveinfoidsize % 2 == 0))
+	bool bExistIns = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(insliveinfo_confid_confrptid_liveinfoid_key);
+	if (bExistIns)
 	{
-		unsigned long long liveinfoid = 0;
-		char livestrattime[128] = { 0 };
-
-		for (unsigned int ii = 0; ii < uiConfliveinfoidsize;)
+		m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insliveinfo_confid_confrptid_liveinfoid_key);
+		//PushMsgToWriteDBQueue(insliveinfo_confid_confrptid_liveinfoid_key);
+	}
+	else
+	{
+		bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(confliveinfo_confid_confrptid_liveinfoid_key);
+		if (bExist)
 		{
-			sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_UpdateConfLiveInfo==In redis db(4) key:%s ==>>> find starttime=%s, liveinfoid=%s\n", confliveinfoidset_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-			ii += 2;
-		}
-
-		//// 找到最近召开会议的liveinfoid
-		//sscanf(vRedisReplyArray[uiConfliveinfoidsize - 2].str.c_str(), "%s", livestrattime);
-		sprintf(livestrattime, "%s", vRedisReplyArray[uiConfliveinfoidsize - 2].str.c_str());
-#ifdef WIN32
-		sscanf(vRedisReplyArray[uiConfliveinfoidsize - 1].str.c_str(), "%I64d", &liveinfoid);
-#elif defined LINUX
-		sscanf(vRedisReplyArray[uiConfliveinfoidsize - 1].str.c_str(), "%lld", &liveinfoid);
-#endif
-
-		if (liveinfoid != 0)
-		{
-			char liveinfo_confid_liveinfoid_key[128] = { 0 };
-			char insert_liveinfo_confid_liveinfoid_key[128] = { 0 };
-#ifdef WIN32
-			sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%I64d_%I64d", confid, liveinfoid);
-			sprintf(insert_liveinfo_confid_liveinfoid_key, "insliveinfo_%I64d_%I64d", confid, liveinfoid);
-#elif defined LINUX
-			sprintf(liveinfo_confid_liveinfoid_key, "liveinfo_%lld_%lld", confid, liveinfoid);
-			sprintf(insert_liveinfo_confid_liveinfoid_key, "insliveinfo_%lld_%lld", confid, liveinfoid);
-#endif
-			
-			REDISKEY strliveinfoconfidliveinfoidkey = liveinfo_confid_liveinfoid_key;
+			REDISKEY strconfliveinfoconfidconfrptidliveinfoidkey = confliveinfo_confid_confrptid_liveinfoid_key;
 			REDISFILEDS vGetFileds;
 			vGetFileds.clear();
 			RedisReplyArray vRedisReplyArray_liveinfo;
 			vRedisReplyArray_liveinfo.clear();
 			// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
-			REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
 			REDISKEY strConfidFieldName = cConfidFieldName;
 			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+			REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
 			REDISKEY strLiveSubjectFieldName = cLiveSubjectFieldName;
 			REDISKEY strLiveStarttimeFieldName = cLiveStarttimeFieldName;
 			REDISKEY strLiveEndtimeFieldName = cLiveEndtimeFieldName;
@@ -6893,9 +15670,10 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 			REDISKEY strLiveMobiletimesFieldName = cLiveMobiletimesFieldName;
 			REDISKEY strLiveConvertStatusFieldName = cLiveConvertStatusFieldName;
 			REDISKEY strLiveTaskIdFieldName = cLiveTaskIdFieldName;
-			vGetFileds.push_back(strLiveinfoidFieldName);
+
 			vGetFileds.push_back(strConfidFieldName);
 			vGetFileds.push_back(strConfReportidFieldName);
+			vGetFileds.push_back(strLiveinfoidFieldName);
 			vGetFileds.push_back(strLiveSubjectFieldName);
 			vGetFileds.push_back(strLiveStarttimeFieldName);
 			vGetFileds.push_back(strLiveEndtimeFieldName);
@@ -6915,18 +15693,18 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 			vGetFileds.push_back(strLiveConvertStatusFieldName);
 			vGetFileds.push_back(strLiveTaskIdFieldName);
 
-			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strliveinfoconfidliveinfoidkey, vGetFileds, vRedisReplyArray_liveinfo);
+			bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(strconfliveinfoconfidconfrptidliveinfoidkey, vGetFileds, vRedisReplyArray_liveinfo);
 
 			if (bhashHMGet_ok
 				&& vRedisReplyArray_liveinfo.size() == vGetFileds.size()) // 与push_back的个数一致
 			{
-				REDISKEY strinsertliveinfoconfidliveinfoidkey = insert_liveinfo_confid_liveinfoid_key;
+				REDISKEY strinsertliveinfoconfidconfrptidliveinfoidkey = insliveinfo_confid_confrptid_liveinfoid_key;
 				REDISVDATA vLiveinfoData;
 				vLiveinfoData.clear();
 
-				sprintf(liveinfo_id_value, "%s", vRedisReplyArray_liveinfo[0].str.c_str()); // 需要与push_back插入顺序一致
-				sprintf(conf_id_value, "%s", vRedisReplyArray_liveinfo[1].str.c_str()); // 需要与push_back插入顺序一致
-				sprintf(conf_report_id_value, "%s", vRedisReplyArray_liveinfo[2].str.c_str()); // 需要与push_back插入顺序一致
+				//sprintf(conf_id_value, "%s", vRedisReplyArray_liveinfo[0].str.c_str()); // 需要与push_back插入顺序一致
+				//sprintf(conf_report_id_value, "%s", vRedisReplyArray_liveinfo[1].str.c_str()); // 需要与push_back插入顺序一致
+				//sprintf(liveinfo_id_value, "%s", vRedisReplyArray_liveinfo[2].str.c_str()); // 需要与push_back插入顺序一致
 				sprintf(live_subject_value, "%s", vRedisReplyArray_liveinfo[3].str.c_str()); // 需要与push_back插入顺序一致
 				sprintf(live_starttime_value, "%s", vRedisReplyArray_liveinfo[4].str.c_str()); // 需要与push_back插入顺序一致
 				//sprintf(live_endtime_value, "%s", vRedisReplyArray_liveinfo[5].str.c_str()); // 需要与push_back插入顺序一致
@@ -6946,11 +15724,6 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 				sprintf(live_convert_status_value, "%s", vRedisReplyArray_liveinfo[19].str.c_str()); // 需要与push_back插入顺序一致
 				sprintf(live_task_id_value, "%s", vRedisReplyArray_liveinfo[20].str.c_str()); // 需要与push_back插入顺序一致
 
-				//REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
-				REDISVALUE strliveinfoidvalue = liveinfo_id_value;
-				vLiveinfoData.push_back(strLiveinfoidFieldName);
-				vLiveinfoData.push_back(strliveinfoidvalue);
-
 				//REDISKEY strConfidFieldName = cConfidFieldName;
 				REDISVALUE strconfidvalue = conf_id_value;
 				vLiveinfoData.push_back(strConfidFieldName);
@@ -6960,6 +15733,11 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 				REDISVALUE strconfreportidvalue = conf_report_id_value;
 				vLiveinfoData.push_back(strConfReportidFieldName);
 				vLiveinfoData.push_back(strconfreportidvalue);
+
+				//REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
+				REDISVALUE strliveinfoidvalue = liveinfo_id_value;
+				vLiveinfoData.push_back(strLiveinfoidFieldName);
+				vLiveinfoData.push_back(strliveinfoidvalue);
 
 				//REDISKEY strLiveSubjectFieldName = cLiveSubjectFieldName;
 				REDISVALUE strlivesubjectvalue = live_subject_value;
@@ -6995,7 +15773,6 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 				REDISVALUE strlivepwdvalue = live_pwd_value;
 				vLiveinfoData.push_back(strLivePWDFieldName);
 				vLiveinfoData.push_back(strlivepwdvalue);
-
 
 				//REDISKEY strLiveisUseRecFieldName = cLiveisUseRecFieldName;
 				REDISVALUE strliveisuserecvalue = live_isuserec_value;
@@ -7052,64 +15829,35 @@ void CDevMgr::Handle_UpdateConfLiveInfo(void* pArg)
 				vLiveinfoData.push_back(strLiveTaskIdFieldName);
 				vLiveinfoData.push_back(strlivetaskidvalue);
 
-				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strinsertliveinfoconfidliveinfoidkey, vLiveinfoData);
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strinsertliveinfoconfidconfrptidliveinfoidkey, vLiveinfoData);
 
 				bool bListLPushOK = false;
-				bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insert_liveinfo_confid_liveinfoid_key);
-				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfLiveInfo listLPush ** (%s) **bListLPushOK=%d\n", insert_liveinfo_confid_liveinfoid_key, bListLPushOK);
-
-				// 
-				m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(liveinfo_confid_liveinfoid_key);
-				m_pRedisConnList[e_RC_TT_UpMsqThread]->deletehashvalue(confliveinfoidset_confid_key, livestrattime);
-
-				if (pWriteDBThread)
-				{
-					typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
-					CParam* pParam;
-					pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
-
-					typedef void (CDevMgr::* ACTION)(void*);
-					pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
-						*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
-				}
+				bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", insliveinfo_confid_confrptid_liveinfoid_key);
+				sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfLiveInfo listLPush ** (%s) **bListLPushOK=%d\n", insliveinfo_confid_confrptid_liveinfoid_key, bListLPushOK);
 			}
 			else
 			{
-				sr_printf(SR_LOGLEVEL_ERROR, "==Handle_UpdateConfLiveInfo-->> m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet %s: is error.\n", strliveinfoconfidliveinfoidkey.c_str());
+				sr_printf(SR_LOGLEVEL_ERROR, "==Handle_UpdateConfLiveInfo-->> m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet %s: is error.\n", strconfliveinfoconfidconfrptidliveinfoidkey.c_str());
 			}
 		}
-		else
-		{
-			sr_printf(SR_LOGLEVEL_ERROR, "==Handle_UpdateConfLiveInfo-->> liveinfoid is 0\n");
-		}
 	}
-	else
+
+	if (pWriteDBThread)
 	{
-		sr_printf(SR_LOGLEVEL_ERROR, "==Handle_UpdateConfLiveInfo-->> m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll %s: is error.\n", confliveinfoidset_confid_key);
+		typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+		CParam* pParam;
+		pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+
+		typedef void (CDevMgr::* ACTION)(void*);
+		pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+			*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
 	}
-
-
-	//pConfLiveInfo->SetLiveInfoID();
-	//pConfLiveInfo->SetConfID();
-	//pConfLiveInfo->SetConfReportID();
-	//pConfLiveInfo->SetLiveSubject();
-	//pConfLiveInfo->SetStartTime();
-	//pConfLiveInfo->SetEndTime();
-	//pConfLiveInfo->SetLiveChairman();
-	//pConfLiveInfo->SetLiveAbstract();
-	//pConfLiveInfo->SetIsPublic();
-	//pConfLiveInfo->SetLivePWD();
-	//pConfLiveInfo->SetLiveAddr();
-	//pConfLiveInfo->SetWatchtimes();
-	//pConfLiveInfo->SetLiketimes();
-	//pConfLiveInfo->SetWatchaddr();
-	//pConfLiveInfo->InsertConfLiveInfoToDB();
-
+	
 #ifdef LINUX
 	gettimeofday(&end, NULL); // μs level
 	time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-	sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfLiveInfo into db(4) ** (%s) **time_use** is: %lf us \n", liveinfo_confid_liveinfoid_key, time_use);
+	sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_UpdateConfLiveInfo into db(4) ** (%s) **time_use** is: %lf us \n", confliveinfo_confid_confrptid_liveinfoid_key, time_use);
 #endif 
 
 	delete pParam;
@@ -7264,6 +16012,8 @@ void CDevMgr::Handle_ModifyConfCallListInfo(void* pArg)
 	if (ptrPartInfo != NULL)
 	{
 		strPartinfoValue.assign(ptrPartInfo);
+
+		delete ptrPartInfo; // 不删除会导致内存泄漏
 	}
 
 	REDISKEY strmodifyrollcallinfoconfidrollcallidtimekey = modifyrollcallinfo_confid_rollcallid_time_key;
@@ -7585,7 +16335,11 @@ void CDevMgr::Handle_AddUserConfDetail(void* pArg)
 	int fromtype = pParam->m_Arg7;
 	int termtype = pParam->m_Arg8;
 
-	if (pUpMsgThread == NULL
+	if (confid == 0
+		|| confreportid == 0
+		|| suid == 0
+		|| userrptdetailid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL) // test delet by csh at 2016.10.21
 	{
 		delete pParam;
@@ -7651,18 +16405,12 @@ void CDevMgr::Handle_AddUserConfDetail(void* pArg)
 			char cTermtypeFieldName[32] = { 0 };
 			char termtype_value[32] = { 0 };
 
-			char userconfdetail_confid_suid_key[128] = { 0 };
-			char confterlist_confid_key[128] = { 0 };
-
-#ifdef WIN32
-			sprintf(conf_id_value, "%I64d", confid);
-			sprintf(use_rpt_detail_id_value, "%I64d", userrptdetailid);
-#elif defined LINUX
-			sprintf(conf_id_value, "%lld", confid);
-			sprintf(use_rpt_detail_id_value, "%lld", userrptdetailid);
-#endif
-			sprintf(userconfdetail_confid_suid_key, "userconfdtl_%s_%d", conf_id_value, suid);
-			sprintf(confterlist_confid_key, "confterlist_%s", conf_id_value);
+			char keeplivetime_s[128] = { 0 };
+			char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+			char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+			char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
 
 			sprintf(cConfidFieldName, "%s", "conf_id");
 			sprintf(cConfReportidFieldName, "%s", "conf_report_id");
@@ -7672,152 +16420,99 @@ void CDevMgr::Handle_AddUserConfDetail(void* pArg)
 			sprintf(cRealJointimeFieldName, "%s", "real_jointime");
 			sprintf(cFromtypeFieldName, "%s", "fromtype");
 			sprintf(cTermtypeFieldName, "%s", "termtype");
+			
+#ifdef WIN32
+			sprintf(keeplivetime_s, "%I64d", hand_add_time);
+			sprintf(conf_id_value, "%I64d", confid);
+			sprintf(conf_report_id_value, "%I64d", confreportid);
+			sprintf(use_rpt_detail_id_value, "%I64d", userrptdetailid);
+#elif defined LINUX
+			sprintf(keeplivetime_s, "%lld", hand_add_time);
+			sprintf(conf_id_value, "%lld", confid);
+			sprintf(conf_report_id_value, "%lld", confreportid);
+			sprintf(use_rpt_detail_id_value, "%lld", userrptdetailid);
+#endif
 
 			sprintf(user_id_ext_value, "%d", suid);
 			sprintf(user_alias_value, "%s", alias);
 			sprintf(real_jointime_value, "%s", ptime);
 			sprintf(fromtype_value, "%d", fromtype);
 			sprintf(termtype_value, "%d", termtype);
-
+			
+			sprintf(confidktimeset_key, "%s", "confidktimeset");
+			sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+			sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, conf_report_id_value);
+			sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value);
+			sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value, use_rpt_detail_id_value);
+			
 			m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
 
-			if (confreportid == 0)
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confuseridktimeset_confid_confrptid_key, keeplivetime_s, user_id_ext_value);// <userid, keeplivetime>,keeplivetime会在会议状态上报时更新
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->sethashvalue(confuserdtlidktimeset_confid_confrptid_userid_key, keeplivetime_s, use_rpt_detail_id_value);// <userdtlid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+			bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(userconfdetail_confid_confrptid_userid_userdtlid_key);
+			if (!bExist)
 			{
-				char confstarttimerptid_confid_key[128] = { 0 };
-				sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-				RedisReplyArray vRedisReplyArray;
-				vRedisReplyArray.clear();
+				REDISKEY struserconfdetailconfidconfrptiduseriduserdtlidkey = userconfdetail_confid_confrptid_userid_userdtlid_key;
+				REDISVDATA vUserConfdtlConfidSuidData;
+				vUserConfdtlConfidSuidData.clear();
 
-				bool bhashHGetAll_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHGetAll(confstarttimerptid_confid_key, vRedisReplyArray);
+				REDISKEY strConfidFieldName = cConfidFieldName;
+				REDISVALUE strconfidvalue = conf_id_value;
+				vUserConfdtlConfidSuidData.push_back(strConfidFieldName);
+				vUserConfdtlConfidSuidData.push_back(strconfidvalue);
 
-				unsigned int uiConfstrptinfosize = vRedisReplyArray.size();
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISVALUE strconfreportidvalue = conf_report_id_value;
+				vUserConfdtlConfidSuidData.push_back(strConfReportidFieldName);
+				vUserConfdtlConfidSuidData.push_back(strconfreportidvalue);
 
-				sr_printf(SR_LOGLEVEL_DEBUG, " m_pRedisConnList[Handle_AddUserConfDetail]->hashHGetAll==%s-->> %d, size = %d\n", confstarttimerptid_confid_key, bhashHGetAll_ok, uiConfstrptinfosize);
+				REDISKEY strUserRptDtlidFieldName = cUseRptDetailidFieldName;
+				REDISVALUE struserrptdtlidvalue = use_rpt_detail_id_value;
+				vUserConfdtlConfidSuidData.push_back(strUserRptDtlidFieldName);
+				vUserConfdtlConfidSuidData.push_back(struserrptdtlidvalue);
 
-				if (bhashHGetAll_ok
-					&& (uiConfstrptinfosize > 0)
-					&& (uiConfstrptinfosize % 2 == 0))
-				{
-					for (unsigned int ii = 0; ii < uiConfstrptinfosize;)
-					{
-						sr_printf(SR_LOGLEVEL_DEBUG, "==Handle_AddUserConfDetail==In redis db(4) key:%s ==>>> find starttime=%s, rptid=%s\n", confstarttimerptid_confid_key, vRedisReplyArray[ii].str.c_str(), vRedisReplyArray[ii + 1].str.c_str());
-						ii += 2;
-					}
+				REDISKEY strUseridextFieldName = cUseridextFieldName;
+				REDISVALUE struseridextvalue = user_id_ext_value;
+				vUserConfdtlConfidSuidData.push_back(strUseridextFieldName);
+				vUserConfdtlConfidSuidData.push_back(struseridextvalue);
 
-					// 找到最近召开会议的confreportid
+				REDISKEY strUserAliasFieldName = cUserAliasFieldName;
+				REDISVALUE struseraliasvalue = user_alias_value;
+				vUserConfdtlConfidSuidData.push_back(strUserAliasFieldName);
+				vUserConfdtlConfidSuidData.push_back(struseraliasvalue);
 
-#ifdef WIN32
-					sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%I64d", &confreportid);
-#elif defined LINUX
-					sscanf(vRedisReplyArray[uiConfstrptinfosize - 1].str.c_str(), "%lld", &confreportid);
-#endif
+				REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
+				REDISVALUE strrealjointimevalue = real_jointime_value;
+				vUserConfdtlConfidSuidData.push_back(strRealJointimeFieldName);
+				vUserConfdtlConfidSuidData.push_back(strrealjointimevalue);
 
-					bFindConfReportID = true;
-				}
+				REDISKEY strFromtypeFieldName = cFromtypeFieldName;
+				REDISVALUE strfromtypevalue = fromtype_value;
+				vUserConfdtlConfidSuidData.push_back(strFromtypeFieldName);
+				vUserConfdtlConfidSuidData.push_back(strfromtypevalue);
 
-				if (bFindConfReportID == false) // 在redis中未找到查找mysql数据库
-				{
-					pConfReport->SetConfID(confid);
-					if (pConfReport->SelectDB())// 
-					{
-						confreportid = pConfReport->GetConfReportID();
+				REDISKEY strTermtypeFieldName = cTermtypeFieldName;
+				REDISVALUE strtermtypevalue = termtype_value;
+				vUserConfdtlConfidSuidData.push_back(strTermtypeFieldName);
+				vUserConfdtlConfidSuidData.push_back(strtermtypevalue);
 
-#ifdef WIN32
-						sr_printf(SR_LOGLEVEL_WARNING, "==ok== Handle_AddUserConfDetail == find confreportid from ConfReport table=== confid=%I64d, confreportid=%I64d\n", confid, confreportid);
-#elif defined LINUX
-						sr_printf(SR_LOGLEVEL_WARNING, "==ok== Handle_AddUserConfDetail == find confreportid from ConfReport table=== confid=%lld, confreportid=%lld\n", confid, confreportid);
-#endif
-					}
-					else
-					{
-#ifdef WIN32
-						sr_printf(SR_LOGLEVEL_ERROR, "==error== Handle_AddUserConfDetail == Not find confreportid from ConfReport table=== confid=%I64d\n", confid);
-#elif defined LINUX
-						sr_printf(SR_LOGLEVEL_ERROR, "==error== Handle_AddUserConfDetail == Not find confreportid from ConfReport table=== confid=%lld\n", confid);
-#endif
-					}
-
-				}
-
-				if (confreportid == 0)
-				{
-
-#ifdef WIN32
-					sr_printf(SR_LOGLEVEL_ERROR, "==error== Handle_AddUserConfDetail == Not find confreportid in redisdb14(%s) and ConfReport table=== confid=%I64d\n", confstarttimerptid_confid_key, confid);
-#elif defined LINUX
-					sr_printf(SR_LOGLEVEL_ERROR, "==error== Handle_AddUserConfDetail == Not find confreportid in redisdb14(%s) and ConfReport table=== confid=%lld\n", confstarttimerptid_confid_key, confid);
-#endif
-
-					delete pParam;
-					pParam = NULL;
-					return;
-				}
+				bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struserconfdetailconfidconfrptiduseriduserdtlidkey, vUserConfdtlConfidSuidData);
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_WARNING, "==-->>Handle_AddUserConfDetail ** tab(%s) **already in db(4)** so do nothing.\n", userconfdetail_confid_confrptid_userid_userdtlid_key);
 			}
 
-
-#ifdef WIN32
-			sprintf(conf_report_id_value, "%I64d", confreportid);
-#elif defined LINUX
-			sprintf(conf_report_id_value, "%lld", confreportid);
-#endif
-
-
-			REDISKEY struserconfdetailconfidsuidkey = userconfdetail_confid_suid_key;
-			REDISVDATA vUserConfdtlConfidSuidData;
-			vUserConfdtlConfidSuidData.clear();
-
-			REDISKEY strConfidFieldName = cConfidFieldName;
-			REDISVALUE strconfidvalue = conf_id_value;
-			vUserConfdtlConfidSuidData.push_back(strConfidFieldName);
-			vUserConfdtlConfidSuidData.push_back(strconfidvalue);
-
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISVALUE strconfreportidvalue = conf_report_id_value;
-			vUserConfdtlConfidSuidData.push_back(strConfReportidFieldName);
-			vUserConfdtlConfidSuidData.push_back(strconfreportidvalue);
-
-			REDISKEY strUserRptDtlidFieldName = cUseRptDetailidFieldName;
-			REDISVALUE struserrptdtlidvalue = use_rpt_detail_id_value;
-			vUserConfdtlConfidSuidData.push_back(strUserRptDtlidFieldName);
-			vUserConfdtlConfidSuidData.push_back(struserrptdtlidvalue);
-
-			REDISKEY strUseridextFieldName = cUseridextFieldName;
-			REDISVALUE struseridextvalue = user_id_ext_value;
-			vUserConfdtlConfidSuidData.push_back(strUseridextFieldName);
-			vUserConfdtlConfidSuidData.push_back(struseridextvalue);
-
-			REDISKEY strUserAliasFieldName = cUserAliasFieldName;
-			REDISVALUE struseraliasvalue = user_alias_value;
-			vUserConfdtlConfidSuidData.push_back(strUserAliasFieldName);
-			vUserConfdtlConfidSuidData.push_back(struseraliasvalue);
-
-			REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
-			REDISVALUE strrealjointimevalue = real_jointime_value;
-			vUserConfdtlConfidSuidData.push_back(strRealJointimeFieldName);
-			vUserConfdtlConfidSuidData.push_back(strrealjointimevalue);
-
-			REDISKEY strFromtypeFieldName = cFromtypeFieldName;
-			REDISVALUE strfromtypevalue = fromtype_value;
-			vUserConfdtlConfidSuidData.push_back(strFromtypeFieldName);
-			vUserConfdtlConfidSuidData.push_back(strfromtypevalue);
-
-			REDISKEY strTermtypeFieldName = cTermtypeFieldName;
-			REDISVALUE strtermtypevalue = termtype_value;
-			vUserConfdtlConfidSuidData.push_back(strTermtypeFieldName);
-			vUserConfdtlConfidSuidData.push_back(strtermtypevalue);
-
-			//m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush(confterlist_confid_key, user_id_ext_value);
-			m_pRedisConnList[e_RC_TT_UpMsqThread]->setvalue(confterlist_confid_key, use_rpt_detail_id_value, user_id_ext_value);
-
-			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struserconfdetailconfidsuidkey, vUserConfdtlConfidSuidData);
-
-			//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==userconfdetail_confid_suid_key---->>>> %d\n", bhashHMSet_ok);
 
 #ifdef LINUX
 			gettimeofday(&end, NULL); // μs level
 			time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_AddUserConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", userconfdetail_confid_suid_key, time_use);
+			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_AddUserConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", userconfdetail_confid_confrptid_userid_userdtlid_key, time_use);
 #endif 
 		}
 	} while (0);
@@ -7947,7 +16642,25 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 #endif 
 
 	m_pRedisConnList[e_RC_TT_WriteDBThread]->selectdb(4);// hash
-	//m_pRedis->selectdb(15);// list
+
+	char cStatusRefreshTime_Key[128] = { 0 };
+	char cConferenceFieldName[128] = { 0 };
+	char cConfrecordFieldName[128] = { 0 };
+	char cConfliveFieldName[128] = { 0 };
+	char refresh_time_value[128] = { 0 };
+
+	sprintf(cStatusRefreshTime_Key, "%s", "status_refresh_time");
+	sprintf(cConferenceFieldName, "%s", "conference");
+	sprintf(cConfrecordFieldName, "%s", "confrecord");
+	sprintf(cConfliveFieldName, "%s", "conflive");
+
+	////获取当前时间串
+	//time_t timeNow;
+	//struct tm *ptmNow;
+	//char szTime[30];
+	//timeNow = time(NULL);
+	//ptmNow = localtime(&timeNow);
+	//sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
 
 	bool bBreak = false;
 	unsigned int uiOpRedisNum = 0;
@@ -8012,63 +16725,75 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strRealtimeFieldName);
 				vGetFileds.push_back(strPermanentEnableFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfrealtimekey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(real_time_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(permanent_enable_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfrealtimekey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfreportid = 0;
-					int iPermanentenable = 0;
+					//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
+
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(real_time_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(permanent_enable_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfreportid = 0;
+						int iPermanentenable = 0;
+						
+						time_t timeNow;
+						timeNow = time(NULL);
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sprintf(refresh_time_value, "%I64d", timeNow);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sprintf(refresh_time_value, "%lld", timeNow);
 #endif
+												
+						sscanf(permanent_enable_value, "%d", &iPermanentenable);
 
-					sscanf(permanent_enable_value, "%d", &iPermanentenable);
+						pConference->SetConfID(ullConfid);
+						//pConference->SetPermanentEnable(iPermanentenable);
 
-					pConference->SetConfID(ullConfid);
-					//pConference->SetPermanentEnable(iPermanentenable);
+						if (strncmp("upconfrealstarttime", ptrOPkey, 19) == 0)
+						{
+							pConference->SetConfRealStartTime(real_time_value);
+							pConference->SetConfStatus(2);// 0：未开始，1：已结束，2：会议中
+							bool bUpdateOK = false;
+							bUpdateOK = pConference->UpdateDB(0, iPermanentenable); // update conference set conf_realstarttime
+							if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
 
-					if (strncmp("upconfrealstarttime", ptrOPkey, 19) == 0)
-					{
-						pConference->SetConfRealStartTime(real_time_value);
-						pConference->SetConfStatus(2);// 0：未开始，1：已结束，2：会议中
-						bool bUpdateOK = false;
-						bUpdateOK = pConference->UpdateDB(0); // update conference set conf_realstarttime
-						if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
-						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConferenceFieldName);
+							}
 						}
-					}
-					else if (strncmp("upconfrealendtime", ptrOPkey, 17) == 0)
-					{
-						pConference->SetConfRealEndTime(real_time_value);
-						if (iPermanentenable == 0)// 一次性会议
+						else if (strncmp("upconfrealendtime", ptrOPkey, 17) == 0)
 						{
-							pConference->SetConfStatus(1);// 0：未开始，1：已结束，2：会议中
-						}
-						else // 永久性会议
-						{
-							pConference->SetConfStatus(0);// 0：未开始，1：已结束，2：会议中
-						}
-						bool bUpdateOK = false;
-						bUpdateOK = pConference->UpdateDB(1); // update conference set conf_realendtime
-						if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
-						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+							pConference->SetConfRealEndTime(real_time_value);
+							if (iPermanentenable == 0)// 一次性会议
+							{
+								pConference->SetConfStatus(1);// 0：未开始，1：已结束，2：会议中
+							}
+							else// 永久性会议
+							{
+								pConference->SetConfStatus(0);// 0：未开始，1：已结束，2：会议中
+							}
+							bool bUpdateOK = false;
+							bUpdateOK = pConference->UpdateDB(1, iPermanentenable); // update conference set conf_realendtime
+							if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConferenceFieldName);
+							}
 						}
 					}
 				}
-
 			}
 			else if (strncmp("insconfrptinfo", ptrOPkey, 14) == 0
 				|| strncmp("upconfreport", ptrOPkey, 12) == 0)// 延迟写入mysql，待有结束时间时一起写入
@@ -8105,61 +16830,102 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strRealStarttimeFieldName);
 				vGetFileds.push_back(strRealEndtimeFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfreportidkey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(real_starttime_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(real_endtime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfreportidkey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfreportid = 0;
+					//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
+
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(real_starttime_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(real_endtime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfreportid = 0;
+						time_t timeNow;
+						timeNow = time(NULL);
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sprintf(refresh_time_value, "%I64d", timeNow);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sprintf(refresh_time_value, "%lld", timeNow);
 #endif
 
-					pConfReport->SetConfID(ullConfid);
-					pConfReport->SetConfReportID(ullConfreportid);
-					pConfReport->SetStartTime(real_starttime_value);
-					pConfReport->SetStopTime(real_endtime_value);
+						pConfReport->SetConfID(ullConfid);
+						pConfReport->SetConfReportID(ullConfreportid);
+						pConfReport->SetStartTime(real_starttime_value);
+						pConfReport->SetStopTime(real_endtime_value);
 
-					if (strncmp("insconfrptinfo", ptrOPkey, 14) == 0)
-					{
-						bool bInsertOK = false;
-						bInsertOK = pConfReport->InsertConfReportRecordToDB();
-						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						if (strncmp("insconfrptinfo", ptrOPkey, 14) == 0)
 						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+							bool bInsertOK = false;
+							bInsertOK = pConfReport->InsertConfReportRecordToDB();
+							if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConferenceFieldName);
+							}
+						}
+						else if (strncmp("upconfreport", ptrOPkey, 12) == 0)
+						{
+							bool bUpdateOK = false;
+							//char confstarttimerptid_confid_key[128] = { 0 };
+							//sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
+							char confrptidktimeset_confid_key[128] = { 0 };
+							char confreportinfo_confid_confrptid_key[256] = { 0 };
+							sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+							sprintf(confreportinfo_confid_confrptid_key, "confreportinfo_%s_%s", conf_id_value, conf_report_id_value);
+							bUpdateOK = pConfReport->UpdateConfRealEndtimeForDB();
+							if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(confreportinfo_confid_confrptid_key);
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confrptidktimeset_confid_key, conf_report_id_value);
+
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConferenceFieldName);
+
+//								char confidktimeset_key[128] = { 0 };
+//								sprintf(confidktimeset_key, "%s", "confidktimeset");
+//
+//								char *ptrRet = NULL;
+//								ptrRet = m_pRedisConnList[e_RC_TT_WriteDBThread]->gethashvalue(confidktimeset_key, conf_id_value);
+//								if (ptrRet != NULL)
+//								{
+//
+//									time_t dbtime = 0;
+//#ifdef WIN32
+//									sscanf(ptrRet, "%I64d", &dbtime);
+//#elif defined LINUX
+//									sscanf(ptrRet, "%lld", &dbtime);
+//#endif
+//
+//									if (timeNow > dbtime + m_nConfdtlinfoTimeout) // 当前查询时间 > 数据库存入的时间 + 失效的容忍时间
+//									{
+//										sr_printf(SR_LOGLEVEL_DEBUG, "***** WARRING ***confidktimeset*** conf_id_value: %s gethashtime > inster db time + CONFERENCE_TIMEOUT *****\n", conf_id_value);
+//
+//										m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confidktimeset_key, conf_id_value);
+//									}
+//
+//									delete ptrRet; // 不删除会导致内存泄漏
+//								}
+							}
 						}
 					}
-					else if (strncmp("upconfreport", ptrOPkey, 12) == 0)
-					{
-						bool bUpdateOK = false;
-						char confstarttimerptid_confid_key[128] = { 0 };
-						sprintf(confstarttimerptid_confid_key, "confstimerptidset_%s", conf_id_value);
-						bUpdateOK = pConfReport->UpdateConfRealEndtimeForDB();
-						if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
-						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
 
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confstarttimerptid_confid_key, real_starttime_value);
-						}
-					}
 				}
-
 			}
-			else if (strncmp("inscrsrecordid", ptrOPkey, 14) == 0
-				|| strncmp("upconfrecordid", ptrOPkey, 14) == 0)// 延迟写入mysql，待有结束时间时一起写入
+			else if (strncmp("insrecordinfo", ptrOPkey, 13) == 0
+				|| strncmp("uprecordinfo", ptrOPkey, 12) == 0)// 延迟写入mysql，待有结束时间时一起写入
 			{
 				char cConfidFieldName[128] = { 0 };
 				char conf_id_value[128] = { 0 };
@@ -8203,75 +16969,91 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strCRSRecEndtimeFieldName);
 				vGetFileds.push_back(strConfnameFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfrecordidkey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_record_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_report_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(crsrec_starttime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(crsrec_endtime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_name_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strconfrecordidkey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfRecordid = 0;
-					unsigned long long ullConfreportid = 0;
+					//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==confreport_confid_reportid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
+
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_record_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(crsrec_starttime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(crsrec_endtime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_name_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfRecordid = 0;
+						unsigned long long ullConfreportid = 0;
+
+						time_t timeNow;
+						timeNow = time(NULL);
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(conf_record_id_value, "%I64d", &ullConfRecordid);
-					sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_record_id_value, "%I64d", &ullConfRecordid);
+						sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sprintf(refresh_time_value, "%I64d", timeNow);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(conf_record_id_value, "%lld", &ullConfRecordid);
-					sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_record_id_value, "%lld", &ullConfRecordid);
+						sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sprintf(refresh_time_value, "%lld", timeNow);
 #endif
 
-					pConfRecord->SetConfRecordID(ullConfRecordid);
-					pConfRecord->SetConfReportID(ullConfreportid);
-					pConfRecord->SetStartTime(crsrec_starttime_value);
-					pConfRecord->SetStopTime(crsrec_endtime_value);
-					pConfRecord->SetConfName(conf_name_value);
+						pConfRecord->SetConfRecordID(ullConfRecordid);
+						pConfRecord->SetConfReportID(ullConfreportid);
+						pConfRecord->SetStartTime(crsrec_starttime_value);
+						pConfRecord->SetStopTime(crsrec_endtime_value);
+						pConfRecord->SetConfName(conf_name_value);
 
-					if (strncmp("inscrsrecordid", ptrOPkey, 14) == 0)
-					{
-						bool bInsertOK = false;
-						bInsertOK = pConfRecord->InsertConfCRSRecordToDB();
-						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						if (strncmp("insrecordinfo", ptrOPkey, 13) == 0)
 						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+							bool bInsertOK = false;
+							bInsertOK = pConfRecord->InsertConfCRSRecordToDB();
+							if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
 
-							//bool bUpdateOK = false;
-							pConfReport->SetConfID(ullConfid);
-							pConfReport->SetConfReportID(ullConfreportid);
-							pConfReport->SetHasRecord(1);
-							pConfReport->UpdateConfHasRecordForDB();
-							//bUpdateOK = pConfReport->UpdateConfRealEndtimeForDB();
-							//if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
-							//{
-							//}
+								//bool bUpdateOK = false;
+								pConfReport->SetConfID(ullConfid);
+								pConfReport->SetConfReportID(ullConfreportid);
+								pConfReport->SetHasRecord(1);
+								pConfReport->UpdateConfHasRecordForDB();
+
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConfrecordFieldName);
+							}
 						}
-					}
-					else if (strncmp("upconfrecordid", ptrOPkey, 14) == 0)
-					{
-						bool bUpdateOK = false;
-						char crsconfrecordidset_confid_key[128] = { 0 };
-						sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%s", conf_id_value);
-						bUpdateOK = pConfRecord->UpdateConfCRSRealEndtimeForDB();
-						if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
+						else if (strncmp("uprecordinfo", ptrOPkey, 12) == 0)
 						{
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
-							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(crsconfrecordidset_confid_key, crsrec_starttime_value);
+							bool bUpdateOK = false;
+							//char crsconfrecordidset_confid_key[128] = { 0 };
+							//sprintf(crsconfrecordidset_confid_key, "crsconfrecordidset_%s", conf_id_value);
+							bUpdateOK = pConfRecord->UpdateConfCRSRealEndtimeForDB();
+							if (bUpdateOK)// 如果不删除可能会导致redis有脏数据
+							{
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+								//m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(crsconfrecordidset_confid_key, crsrec_starttime_value);
+
+								char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+								char confrecordinfo_confid_confrptid_recordid_key[256] = { 0 };
+
+								sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+								sprintf(confrecordinfo_confid_confrptid_recordid_key, "confrecordinfo_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(confrecordinfo_confid_confrptid_recordid_key);
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confrecordidktimeset_confid_confrptid_key, conf_record_id_value);
+
+								m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConfrecordFieldName);
+							}
 						}
 					}
 				}
-
 			}
-			else if (strncmp("devconfdtl", ptrOPkey, 10) == 0)
+			else if (strncmp("updevconfdtl", ptrOPkey, 12) == 0)
 			{
 				char cConfidFieldName[128] = { 0 };
 				char conf_id_value[128] = { 0 };
@@ -8295,8 +17077,7 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				sprintf(cRealuseStoptimeFieldName, "%s", "realuse_stoptime");
 
 				//////////////////////////////////////////////////////////////////////////
-				//REDISKEY strdevconfdetailconfiddevidrptidkey = devconfdetail_confid_devid_rptid_key;
-				REDISKEY strdevconfdetailconfiddevidrptidkey = ptrOPkey;
+				REDISKEY strupdevconfdtlconfidconfrptiddeviceiddevdtlidkey = ptrOPkey;
 				REDISFILEDS vGetFileds;
 				vGetFileds.clear();
 				RedisReplyArray vRedisReplyArray;
@@ -8316,54 +17097,67 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strRealuseStarttimeFieldName);
 				vGetFileds.push_back(strRealuseStoptimeFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strdevconfdetailconfiddevidrptidkey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==devconfdetail_confid_devid_rptid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(device_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(device_detail_id_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(realuse_starttime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(realuse_stoptime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strupdevconfdtlconfidconfrptiddeviceiddevdtlidkey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfreportid = 0;
-					int iDeviceid = 0;
-					unsigned long long ullDeviceDtlid = 0;
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(device_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(device_detail_id_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(realuse_starttime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(realuse_stoptime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfreportid = 0;
+						int iDeviceid = 0;
+						unsigned long long ullDeviceDtlid = 0;
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
-					sscanf(device_detail_id_value, "%I64d", &ullDeviceDtlid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sscanf(device_detail_id_value, "%I64d", &ullDeviceDtlid);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(conf_report_id_value, "%lld", &ullConfreportid);
-					sscanf(device_detail_id_value, "%lld", &ullDeviceDtlid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sscanf(device_detail_id_value, "%lld", &ullDeviceDtlid);
 #endif
 
-					sscanf(device_id_value, "%d", &iDeviceid);
+						sscanf(device_id_value, "%d", &iDeviceid);
 
-					pDeviceConfDetail->SetConfID(ullConfid);
-					pDeviceConfDetail->SetConfReportID(ullConfreportid);
-					pDeviceConfDetail->SetDeviceID(iDeviceid);
-					pDeviceConfDetail->SetDeviceDetailID(ullDeviceDtlid);
-					pDeviceConfDetail->SetRealuseStarttime(realuse_starttime_value);
-					pDeviceConfDetail->SetRealuseStoptime(realuse_stoptime_value);
+						pDeviceConfDetail->SetConfID(ullConfid);
+						pDeviceConfDetail->SetConfReportID(ullConfreportid);
+						pDeviceConfDetail->SetDeviceID(iDeviceid);
+						pDeviceConfDetail->SetDeviceDetailID(ullDeviceDtlid);
+						pDeviceConfDetail->SetRealuseStarttime(realuse_starttime_value);
+						pDeviceConfDetail->SetRealuseStoptime(realuse_stoptime_value);
 
-					bool bInsertOK = false;
-					bInsertOK = pDeviceConfDetail->InsertDeviceConfDetailToDB();
+						bool bInsertOK = false;
+						bInsertOK = pDeviceConfDetail->InsertDeviceConfDetailToDB();
 
-					if (bInsertOK)// 如果不删除可能会导致redis有脏数据
-					{
-						m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						{
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+							char confdeviceidktimeset_confid_confrptid_key[256] = { 0 };// 存放<deviceid, keeplivetime>
+							char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+							char devconfdetail_confid_confrptid_deviceid_devdtlid_key[256] = { 0 };
+							sprintf(confdeviceidktimeset_confid_confrptid_key, "confdeviceidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+							sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value);
+							sprintf(devconfdetail_confid_confrptid_deviceid_devdtlid_key, "devconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value, device_detail_id_value);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(devconfdetail_confid_confrptid_deviceid_devdtlid_key);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confdevdtlidktimeset_confid_confrptid_deviceid_key, device_detail_id_value);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confdeviceidktimeset_confid_confrptid_key, device_id_value);
+						}
 					}
 				}
+
 			}
-			else if (strncmp("userconfdtl", ptrOPkey, 11) == 0)
+			else if (strncmp("upuserconfdtl", ptrOPkey, 13) == 0)
 			{
 				char cConfidFieldName[128] = { 0 };
 				char conf_id_value[128] = { 0 };
@@ -8395,8 +17189,7 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				sprintf(cTermtypeFieldName, "%s", "termtype");
 
 				//////////////////////////////////////////////////////////////////////////
-				//REDISKEY struserconfdetailconfidsuidrptidkey = userconfdetail_confid_suid_rptid_key;
-				REDISKEY struserconfdetailconfidsuidrptidkey = ptrOPkey;
+				REDISKEY strupuserconfdtlconfidconfrptiduseriduserdtlidkey = ptrOPkey;
 				REDISFILEDS vGetFileds;
 				vGetFileds.clear();
 				RedisReplyArray vRedisReplyArray;
@@ -8422,72 +17215,88 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strRealLeavetimeFieldName);
 				vGetFileds.push_back(strFromtypeFieldName);
 				vGetFileds.push_back(strTermtypeFieldName);
-
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(struserconfdetailconfidsuidrptidkey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==userconfdetail_confid_suid_rptid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(use_rpt_detail_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(user_id_ext_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(user_alias_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(real_jointime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(real_leavetime_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(fromtype_value, "%s", vRedisReplyArray[7].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(termtype_value, "%s", vRedisReplyArray[8].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strupuserconfdtlconfidconfrptiduseriduserdtlidkey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfreportid = 0;
-					unsigned long long ullUserRptDetailid = 0;
-					int iUserid = 0;
-					int iFromtype = 0;
-					int iTermtype = 0;
+					//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==userconfdetail_confid_suid_rptid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
+
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(use_rpt_detail_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(user_id_ext_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(user_alias_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(real_jointime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(real_leavetime_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(fromtype_value, "%s", vRedisReplyArray[7].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(termtype_value, "%s", vRedisReplyArray[8].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfreportid = 0;
+						unsigned long long ullUserRptDetailid = 0;
+						int iUserid = 0;
+						int iFromtype = 0;
+						int iTermtype = 0;
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
-					sscanf(use_rpt_detail_id_value, "%I64d", &ullUserRptDetailid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_report_id_value, "%I64d", &ullConfreportid);
+						sscanf(use_rpt_detail_id_value, "%I64d", &ullUserRptDetailid);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(conf_report_id_value, "%lld", &ullConfreportid);
-					sscanf(use_rpt_detail_id_value, "%lld", &ullUserRptDetailid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_report_id_value, "%lld", &ullConfreportid);
+						sscanf(use_rpt_detail_id_value, "%lld", &ullUserRptDetailid);
 #endif
 
-					sscanf(user_id_ext_value, "%d", &iUserid);
-					sscanf(fromtype_value, "%d", &iFromtype);
-					sscanf(termtype_value, "%d", &iTermtype);
+						sscanf(user_id_ext_value, "%d", &iUserid);
+						sscanf(fromtype_value, "%d", &iFromtype);
+						sscanf(termtype_value, "%d", &iTermtype);
 
-					pUserConfDetail->SetConfID(ullConfid);
-					pUserConfDetail->SetConfReportID(ullConfreportid);
-					pUserConfDetail->SetUserRptDetailID(ullUserRptDetailid);
-					pUserConfDetail->SetUserID(iUserid);
-					pUserConfDetail->SetUserAlias(user_alias_value);
-					pUserConfDetail->SetRealjointime(real_jointime_value);
-					pUserConfDetail->SetRealleavetime(real_leavetime_value);
-					pUserConfDetail->SetFromtype(iFromtype);
-					pUserConfDetail->SetTermtype(iTermtype);
+						pUserConfDetail->SetConfID(ullConfid);
+						pUserConfDetail->SetConfReportID(ullConfreportid);
+						pUserConfDetail->SetUserRptDetailID(ullUserRptDetailid);
+						pUserConfDetail->SetUserID(iUserid);
+						pUserConfDetail->SetUserAlias(user_alias_value);
+						pUserConfDetail->SetRealjointime(real_jointime_value);
+						pUserConfDetail->SetRealleavetime(real_leavetime_value);
+						pUserConfDetail->SetFromtype(iFromtype);
+						pUserConfDetail->SetTermtype(iTermtype);
 
-					bool bInsertOK = false;
-					bInsertOK = pUserConfDetail->InsertUserConfDetailToDB();
+						bool bInsertOK = false;
+						bInsertOK = pUserConfDetail->InsertUserConfDetailToDB();
 
-					if (bInsertOK)// 如果不删除可能会导致redis有脏数据
-					{
-						m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						{
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+							char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+							char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+							char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+							sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, conf_report_id_value);
+							sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value);
+							sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value, use_rpt_detail_id_value);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(userconfdetail_confid_confrptid_userid_userdtlid_key);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confuserdtlidktimeset_confid_confrptid_userid_key, use_rpt_detail_id_value);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confuseridktimeset_confid_confrptid_key, user_id_ext_value);
+						}
 					}
 				}
 			}
-			else if (strncmp("inscrsrecfile", ptrOPkey, 13) == 0)
+			else if (strncmp("insrecordfileinfo", ptrOPkey, 17) == 0)
 			{
 				char cConfidFieldName[128] = { 0 };
 				char conf_id_value[128] = { 0 };
-				char cRecordFileidFieldName[128] = { 0 };
-				char record_file_id_value[128] = { 0 };
+				char cConfReportidFieldName[128] = { 0 };
+				char conf_report_id_value[128] = { 0 };
 				char cConfRecordidFieldName[128] = { 0 };
 				char conf_record_id_value[128] = { 0 };
+				char cRecordFileidFieldName[128] = { 0 };
+				char record_file_id_value[128] = { 0 };
 				char cCRSRecFilepathFieldName[128] = { 0 };
 				char crsrec_filepath_value[300] = { 0 };
 				char cCRSRecSdepathFieldName[128] = { 0 };
@@ -8500,8 +17309,9 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				char record_file_size_value[128] = { 0 };
 
 				sprintf(cConfidFieldName, "%s", "conf_id");
-				sprintf(cRecordFileidFieldName, "%s", "record_file_id");
+				sprintf(cConfReportidFieldName, "%s", "conf_report_id");
 				sprintf(cConfRecordidFieldName, "%s", "conf_record_id");
+				sprintf(cRecordFileidFieldName, "%s", "record_file_id");
 				sprintf(cCRSRecFilepathFieldName, "%s", "filepath");
 				sprintf(cCRSRecSdepathFieldName, "%s", "sdepath");
 				sprintf(cCRSRecFileStorSvrIPFieldName, "%s", "serverip");
@@ -8509,8 +17319,7 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				sprintf(cRecordFileSizeFieldName, "%s", "filesize");
 
 				//////////////////////////////////////////////////////////////////////////
-				//REDISKEY strInsertCRSRecfileConfidConfrecidRecfileidkey = Insertcrsrecfile_confid_confrecid_recfileid_key;
-				REDISKEY strInsertCRSRecfileConfidConfrecidRecfileidkey = ptrOPkey;
+				REDISKEY strinsrecordfileinfoconfidconfrptidrecordidrecfileid_key = ptrOPkey;
 				REDISFILEDS vGetFileds;
 				vGetFileds.clear();
 				RedisReplyArray vRedisReplyArray;
@@ -8518,88 +17327,98 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 
 				// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
 				REDISKEY strConfidFieldName = cConfidFieldName;
-				REDISKEY strRecordFileidFieldName = cRecordFileidFieldName;
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
 				REDISKEY strConfRecordidFieldName = cConfRecordidFieldName;
+				REDISKEY strRecordFileidFieldName = cRecordFileidFieldName;
 				REDISKEY strCRSRecFilepathFieldName = cCRSRecFilepathFieldName;
 				REDISKEY strCRSRecSdepathFieldName = cCRSRecSdepathFieldName;
 				REDISKEY strCRSRecFileStorSvrIPFieldName = cCRSRecFileStorSvrIPFieldName;
 				REDISKEY strCRSRecFilerootpathFieldName = cCRSRecFilerootpathFieldName;
 				REDISKEY strRecordFileSizeFieldName = cRecordFileSizeFieldName;
 				vGetFileds.push_back(strConfidFieldName);
-				vGetFileds.push_back(strRecordFileidFieldName);
+				vGetFileds.push_back(strConfReportidFieldName);
 				vGetFileds.push_back(strConfRecordidFieldName);
+				vGetFileds.push_back(strRecordFileidFieldName);
 				vGetFileds.push_back(strCRSRecFilepathFieldName);
 				vGetFileds.push_back(strCRSRecSdepathFieldName);
 				vGetFileds.push_back(strCRSRecFileStorSvrIPFieldName);
 				vGetFileds.push_back(strCRSRecFilerootpathFieldName);
 				vGetFileds.push_back(strRecordFileSizeFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strInsertCRSRecfileConfidConfrecidRecfileidkey, vGetFileds, vRedisReplyArray);
-
-				//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet==userconfdetail_confid_suid_rptid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(record_file_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_record_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strinsrecordfileinfoconfidconfrptidrecordidrecfileid_key, vGetFileds, vRedisReplyArray);
 
-					//sprintf(crsrec_filepath_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					//sprintf(crsrec_sdepath_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-					//sprintf(crsrec_filestorsvrip_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_record_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(record_file_id_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
 
-					// url路径不能格式化,
-					memcpy(crsrec_filepath_value, vRedisReplyArray[3].str.c_str(), vRedisReplyArray[3].str.length()); // 需要与push_back插入顺序一致
-					memcpy(crsrec_sdepath_value, vRedisReplyArray[4].str.c_str(), vRedisReplyArray[4].str.length()); // 需要与push_back插入顺序一致
-					memcpy(crsrec_filestorsvrip_value, vRedisReplyArray[5].str.c_str(), vRedisReplyArray[5].str.length()); // 需要与push_back插入顺序一致
-					memcpy(crsrec_filerootpath_value, vRedisReplyArray[6].str.c_str(), vRedisReplyArray[6].str.length()); // 需要与push_back插入顺序一致
-					memcpy(record_file_size_value, vRedisReplyArray[7].str.c_str(), vRedisReplyArray[7].str.length()); // 需要与push_back插入顺序一致
+						//sprintf(crsrec_filepath_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+						//sprintf(crsrec_sdepath_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+						//sprintf(crsrec_filestorsvrip_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullRecordFileid = 0;
-					unsigned long long ullConfRecordid = 0;
-					int iUserid = 0;
-					unsigned long long ullRecordFileSize = 0;
+						// url路径不能格式化,
+						memcpy(crsrec_filepath_value, vRedisReplyArray[4].str.c_str(), vRedisReplyArray[4].str.length()); // 需要与push_back插入顺序一致
+						memcpy(crsrec_sdepath_value, vRedisReplyArray[5].str.c_str(), vRedisReplyArray[5].str.length()); // 需要与push_back插入顺序一致
+						memcpy(crsrec_filestorsvrip_value, vRedisReplyArray[6].str.c_str(), vRedisReplyArray[6].str.length()); // 需要与push_back插入顺序一致
+						memcpy(crsrec_filerootpath_value, vRedisReplyArray[7].str.c_str(), vRedisReplyArray[7].str.length()); // 需要与push_back插入顺序一致
+						memcpy(record_file_size_value, vRedisReplyArray[8].str.c_str(), vRedisReplyArray[8].str.length()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullRecordFileid = 0;
+						unsigned long long ullConfRecordid = 0;
+						int iUserid = 0;
+						unsigned long long ullRecordFileSize = 0;
 
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(record_file_id_value, "%I64d", &ullRecordFileid);
-					sscanf(conf_record_id_value, "%I64d", &ullConfRecordid);
-					sscanf(record_file_size_value, "%I64d", &ullRecordFileSize);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(record_file_id_value, "%I64d", &ullRecordFileid);
+						sscanf(conf_record_id_value, "%I64d", &ullConfRecordid);
+						sscanf(record_file_size_value, "%I64d", &ullRecordFileSize);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(record_file_id_value, "%lld", &ullRecordFileid);
-					sscanf(conf_record_id_value, "%lld", &ullConfRecordid);
-					sscanf(record_file_size_value, "%lld", &ullRecordFileSize);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(record_file_id_value, "%lld", &ullRecordFileid);
+						sscanf(conf_record_id_value, "%lld", &ullConfRecordid);
+						sscanf(record_file_size_value, "%lld", &ullRecordFileSize);
 #endif
-					
-					//pRecordFile->SetConfID(ullConfid);
-					pRecordFile->SetRecordFileID(ullRecordFileid);
-					pRecordFile->SetConfRecordID(ullConfRecordid);
-					pRecordFile->SetFilePath(crsrec_filepath_value, vRedisReplyArray[3].str.length());
-					pRecordFile->SetSdeFilePath(crsrec_sdepath_value, vRedisReplyArray[4].str.length());
-					pRecordFile->SetFileStorSvrIP(crsrec_filestorsvrip_value, vRedisReplyArray[5].str.length());
-					pRecordFile->SetFileRootPath(crsrec_filerootpath_value, vRedisReplyArray[6].str.length());
-					pRecordFile->SetRecordFileSize(ullRecordFileSize);
 
-					bool bInsertOK = false;
-					bInsertOK = pRecordFile->InsertRecordFileInfoToDB();
+						//pRecordFile->SetConfID(ullConfid);
+						pRecordFile->SetRecordFileID(ullRecordFileid);
+						pRecordFile->SetConfRecordID(ullConfRecordid);
+						pRecordFile->SetFilePath(crsrec_filepath_value, vRedisReplyArray[4].str.length());
+						pRecordFile->SetSdeFilePath(crsrec_sdepath_value, vRedisReplyArray[5].str.length());
+						pRecordFile->SetFileStorSvrIP(crsrec_filestorsvrip_value, vRedisReplyArray[6].str.length());
+						pRecordFile->SetFileRootPath(crsrec_filerootpath_value, vRedisReplyArray[7].str.length());
+						pRecordFile->SetRecordFileSize(ullRecordFileSize);
 
-					if (bInsertOK)// 如果不删除可能会导致redis有脏数据
-					{
-						m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+						bool bInsertOK = false;
+						bInsertOK = pRecordFile->InsertRecordFileInfoToDB();
+
+						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						{
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+							char confrecfileidktimeset_confid_confrptid_recordid_key[256] = { 0 };// 存放<recfileid, keeplivetime>
+							sprintf(confrecfileidktimeset_confid_confrptid_recordid_key, "confrecfileidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, conf_record_id_value);
+
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confrecfileidktimeset_confid_confrptid_recordid_key, record_file_id_value);
+						}
 					}
 				}
 			}
 			else if (strncmp("insliveinfo", ptrOPkey, 11) == 0)
 			{
-				char cLiveinfoidFieldName[128] = { 0 };
-				char liveinfo_id_value[128] = { 0 };
 				char cConfidFieldName[128] = { 0 };
 				char conf_id_value[128] = { 0 };
 				char cConfReportidFieldName[128] = { 0 };
 				char conf_report_id_value[128] = { 0 };
+				char cLiveinfoidFieldName[128] = { 0 };
+				char liveinfo_id_value[128] = { 0 };
 
 				char cLiveSubjectFieldName[128] = { 0 };
 				char live_subject_value[255] = { 0 };
@@ -8641,11 +17460,10 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				char live_convert_status_value[128] = { 0 };
 				char cLiveTaskIdFieldName[128] = { 0 };
 				char live_task_id_value[128] = { 0 };
-
-
-				sprintf(cLiveinfoidFieldName, "%s", "li_id");
+				
 				sprintf(cConfidFieldName, "%s", "conf_id");
 				sprintf(cConfReportidFieldName, "%s", "conf_report_id");
+				sprintf(cLiveinfoidFieldName, "%s", "li_id");
 
 				sprintf(cLiveSubjectFieldName, "%s", "li_subject");
 
@@ -8670,15 +17488,15 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				sprintf(cLiveConvertStatusFieldName, "%s", "convert_status");
 				sprintf(cLiveTaskIdFieldName, "%s", "task_id");
 
-				REDISKEY strinsertliveinfoconfidliveinfoidkey = ptrOPkey;
+				REDISKEY strinsertliveinfoconfidconfrptidliveinfoidkey = ptrOPkey;
 				REDISFILEDS vGetFileds;
 				vGetFileds.clear();
 				RedisReplyArray vRedisReplyArray;
 				vRedisReplyArray.clear();
-				// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
-				REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
+				// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序				
 				REDISKEY strConfidFieldName = cConfidFieldName;
 				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISKEY strLiveinfoidFieldName = cLiveinfoidFieldName;
 				REDISKEY strLiveSubjectFieldName = cLiveSubjectFieldName;
 				REDISKEY strLiveStarttimeFieldName = cLiveStarttimeFieldName;
 				REDISKEY strLiveEndtimeFieldName = cLiveEndtimeFieldName;
@@ -8697,9 +17515,10 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				REDISKEY strLiveMobiletimesFieldName = cLiveMobiletimesFieldName;
 				REDISKEY strLiveConvertStatusFieldName = cLiveConvertStatusFieldName;
 				REDISKEY strLiveTaskIdFieldName = cLiveTaskIdFieldName;
-				vGetFileds.push_back(strLiveinfoidFieldName);
+				
 				vGetFileds.push_back(strConfidFieldName);
 				vGetFileds.push_back(strConfReportidFieldName);
+				vGetFileds.push_back(strLiveinfoidFieldName);
 				vGetFileds.push_back(strLiveSubjectFieldName);
 				vGetFileds.push_back(strLiveStarttimeFieldName);
 				vGetFileds.push_back(strLiveEndtimeFieldName);
@@ -8719,103 +17538,121 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strLiveConvertStatusFieldName);
 				vGetFileds.push_back(strLiveTaskIdFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strinsertliveinfoconfidliveinfoidkey, vGetFileds, vRedisReplyArray);
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(liveinfo_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(conf_report_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_subject_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_starttime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_endtime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_chairman_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_abstract_value, "%s", vRedisReplyArray[7].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_ispublic_value, "%s", vRedisReplyArray[8].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_pwd_value, "%s", vRedisReplyArray[9].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_isuserec_value, "%s", vRedisReplyArray[10].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_addr_value, "%s", vRedisReplyArray[11].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_watch_times_value, "%s", vRedisReplyArray[12].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_likes_times_value, "%s", vRedisReplyArray[13].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_watch_addr_value, "%s", vRedisReplyArray[14].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_android_times_value, "%s", vRedisReplyArray[15].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_ios_times_value, "%s", vRedisReplyArray[16].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_pc_times_value, "%s", vRedisReplyArray[17].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_mobile_times_value, "%s", vRedisReplyArray[18].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_convert_status_value, "%s", vRedisReplyArray[19].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(live_task_id_value, "%s", vRedisReplyArray[20].str.c_str()); // 需要与push_back插入顺序一致
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strinsertliveinfoconfidconfrptidliveinfoidkey, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullLiveinfoid = 0;
-					unsigned long long ullConfid = 0;
-					unsigned long long ullConfRecordid = 0;
-					int ispublic = 0;
-					int isuserec = 1;
-					int iWatchtimes = 0;
-					int iLiketimes = 0;
-					int iAndroidtimes = 0;
-					int iIOStimes = 0;
-					int iPCtimes = 0;
-					int iMobiletimes = 0;
-					int iConvertstatus = 0;
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(liveinfo_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_subject_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_starttime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_endtime_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_chairman_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_abstract_value, "%s", vRedisReplyArray[7].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_ispublic_value, "%s", vRedisReplyArray[8].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_pwd_value, "%s", vRedisReplyArray[9].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_isuserec_value, "%s", vRedisReplyArray[10].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_addr_value, "%s", vRedisReplyArray[11].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_watch_times_value, "%s", vRedisReplyArray[12].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_likes_times_value, "%s", vRedisReplyArray[13].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_watch_addr_value, "%s", vRedisReplyArray[14].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_android_times_value, "%s", vRedisReplyArray[15].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_ios_times_value, "%s", vRedisReplyArray[16].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_pc_times_value, "%s", vRedisReplyArray[17].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_mobile_times_value, "%s", vRedisReplyArray[18].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_convert_status_value, "%s", vRedisReplyArray[19].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(live_task_id_value, "%s", vRedisReplyArray[20].str.c_str()); // 需要与push_back插入顺序一致
+
+						unsigned long long ullLiveinfoid = 0;
+						unsigned long long ullConfid = 0;
+						unsigned long long ullConfReportid = 0;
+						int ispublic = 0;
+						int isuserec = 1;
+						int iWatchtimes = 0;
+						int iLiketimes = 0;
+						int iAndroidtimes = 0;
+						int iIOStimes = 0;
+						int iPCtimes = 0;
+						int iMobiletimes = 0;
+						int iConvertstatus = 0;
+						
+						time_t timeNow;
+						timeNow = time(NULL);
 
 #ifdef WIN32
-					sscanf(liveinfo_id_value, "%I64d", &ullLiveinfoid);
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(conf_report_id_value, "%I64d", &ullConfRecordid);
+						sscanf(liveinfo_id_value, "%I64d", &ullLiveinfoid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(conf_report_id_value, "%I64d", &ullConfReportid);
+						sprintf(refresh_time_value, "%I64d", timeNow);
 #elif defined LINUX
-					sscanf(liveinfo_id_value, "%lld", &ullLiveinfoid);
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(conf_report_id_value, "%lld", &ullConfRecordid);
+						sscanf(liveinfo_id_value, "%lld", &ullLiveinfoid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(conf_report_id_value, "%lld", &ullConfReportid);
+						sprintf(refresh_time_value, "%lld", timeNow);
 #endif
 
-					sscanf(live_ispublic_value, "%d", &ispublic);
-					sscanf(live_isuserec_value, "%d", &isuserec);
-					sscanf(live_watch_times_value, "%d", &iWatchtimes);
-					sscanf(live_likes_times_value, "%d", &iLiketimes);
-					sscanf(live_android_times_value, "%d", &iAndroidtimes);
-					sscanf(live_ios_times_value, "%d", &iIOStimes);
-					sscanf(live_pc_times_value, "%d", &iPCtimes);
-					sscanf(live_mobile_times_value, "%d", &iMobiletimes);
-					sscanf(live_convert_status_value, "%d", &iConvertstatus);
+						sscanf(live_ispublic_value, "%d", &ispublic);
+						sscanf(live_isuserec_value, "%d", &isuserec);
+						sscanf(live_watch_times_value, "%d", &iWatchtimes);
+						sscanf(live_likes_times_value, "%d", &iLiketimes);
+						sscanf(live_android_times_value, "%d", &iAndroidtimes);
+						sscanf(live_ios_times_value, "%d", &iIOStimes);
+						sscanf(live_pc_times_value, "%d", &iPCtimes);
+						sscanf(live_mobile_times_value, "%d", &iMobiletimes);
+						sscanf(live_convert_status_value, "%d", &iConvertstatus);
 
-					pConfLiveInfo->SetLiveInfoID(ullLiveinfoid);
-					pConfLiveInfo->SetConfID(ullConfid);
-					pConfLiveInfo->SetConfReportID(ullConfRecordid);
-					pConfLiveInfo->SetLiveSubject(vRedisReplyArray[3].str);
-					pConfLiveInfo->SetStartTime(vRedisReplyArray[4].str);
-					pConfLiveInfo->SetEndTime(vRedisReplyArray[5].str);
-					pConfLiveInfo->SetLiveChairman(vRedisReplyArray[6].str);
-					pConfLiveInfo->SetLiveAbstract(vRedisReplyArray[7].str);
-					pConfLiveInfo->SetIsPublic(ispublic);
-					pConfLiveInfo->SetLivePWD(vRedisReplyArray[9].str);
-					pConfLiveInfo->SetIsUseRec(isuserec);
-					pConfLiveInfo->SetLiveAddr(vRedisReplyArray[11].str);
-					pConfLiveInfo->SetWatchtimes(iWatchtimes);
-					pConfLiveInfo->SetLiketimes(iLiketimes);
-					pConfLiveInfo->SetWatchaddr(vRedisReplyArray[14].str);
-					pConfLiveInfo->SetAndroidtimes(iAndroidtimes);
-					pConfLiveInfo->SetIOStimes(iIOStimes);
-					pConfLiveInfo->SetPCtimes(iPCtimes);
-					pConfLiveInfo->SetMobiletimes(iMobiletimes);
-					pConfLiveInfo->SetConvertstatus(iConvertstatus);
-					pConfLiveInfo->SetTaskid(vRedisReplyArray[20].str);
+						pConfLiveInfo->SetLiveInfoID(ullLiveinfoid);
+						pConfLiveInfo->SetConfID(ullConfid);
+						pConfLiveInfo->SetConfReportID(ullConfReportid);
+						pConfLiveInfo->SetLiveSubject(vRedisReplyArray[3].str);
+						pConfLiveInfo->SetStartTime(vRedisReplyArray[4].str);
+						pConfLiveInfo->SetEndTime(vRedisReplyArray[5].str);
+						pConfLiveInfo->SetLiveChairman(vRedisReplyArray[6].str);
+						pConfLiveInfo->SetLiveAbstract(vRedisReplyArray[7].str);
+						pConfLiveInfo->SetIsPublic(ispublic);
+						pConfLiveInfo->SetLivePWD(vRedisReplyArray[9].str);
+						pConfLiveInfo->SetIsUseRec(isuserec);
+						pConfLiveInfo->SetLiveAddr(vRedisReplyArray[11].str);
+						pConfLiveInfo->SetWatchtimes(iWatchtimes);
+						pConfLiveInfo->SetLiketimes(iLiketimes);
+						pConfLiveInfo->SetWatchaddr(vRedisReplyArray[14].str);
+						pConfLiveInfo->SetAndroidtimes(iAndroidtimes);
+						pConfLiveInfo->SetIOStimes(iIOStimes);
+						pConfLiveInfo->SetPCtimes(iPCtimes);
+						pConfLiveInfo->SetMobiletimes(iMobiletimes);
+						pConfLiveInfo->SetConvertstatus(iConvertstatus);
+						pConfLiveInfo->SetTaskid(vRedisReplyArray[20].str);
 
-					bool bInsertOK = false;
-					bInsertOK = pConfLiveInfo->InsertConfLiveInfoToDB();
+						bool bInsertOK = false;
+						bInsertOK = pConfLiveInfo->InsertConfLiveInfoToDB();
 
-					if (bInsertOK)// 如果不删除可能会导致redis有脏数据
-					{
-						m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+						if (bInsertOK)// 如果不删除可能会导致redis有脏数据
+						{
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
+
+							char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+							char confliveinfo_confid_confrptid_liveinfoid_key[256] = { 0 };
+							sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+							sprintf(confliveinfo_confid_confrptid_liveinfoid_key, "confliveinfo_%s_%s_%s", conf_id_value, conf_report_id_value, liveinfo_id_value);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(confliveinfo_confid_confrptid_liveinfoid_key);
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->deletehashvalue(confliveinfoidktimeset_confid_confrptid_key, liveinfo_id_value);
+
+							m_pRedisConnList[e_RC_TT_WriteDBThread]->sethashvalue(cStatusRefreshTime_Key, refresh_time_value, cConfliveFieldName);
+						}
+						else
+						{
+							sr_printf(SR_LOGLEVEL_ERROR, " --error-- WriteUserConfInfoToDB ==pConfLiveInfo->InsertConfLiveInfoToDB(): error\n");
+						}
 					}
 					else
 					{
-						sr_printf(SR_LOGLEVEL_ERROR, " --error-- WriteUserConfInfoToDB ==pConfLiveInfo->InsertConfLiveInfoToDB(): error\n");
+						sr_printf(SR_LOGLEVEL_ERROR, " --error-- m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet ==%s\n", strinsertliveinfoconfidconfrptidliveinfoidkey.c_str());
 					}
-				}
-				else
-				{
-					sr_printf(SR_LOGLEVEL_ERROR, " --error-- m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet ==%s\n", strinsertliveinfoconfidliveinfoidkey.c_str());
 				}
 			}
 			else if (strncmp("modifyrollcallinfo", ptrOPkey, 18) == 0)
@@ -8856,88 +17693,92 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 				vGetFileds.push_back(strOPtypeFieldName);
 				vGetFileds.push_back(strPartInfoFieldName);
 
-				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strmodifyrollcallinfoconfidrollcallidtime_key, vGetFileds, vRedisReplyArray);
-
-				if (bhashHMGet_ok
-					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				bool bExist = m_pRedisConnList[e_RC_TT_WriteDBThread]->existskey(ptrOPkey);
+				if (bExist)
 				{
-					sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(rollcall_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(rollcall_name_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-					sprintf(op_type_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-					strPartinfoValue.assign(vRedisReplyArray[4].str.c_str());
+					bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet(strmodifyrollcallinfoconfidrollcallidtime_key, vGetFileds, vRedisReplyArray);
 
-					unsigned long long ullConfid = 0;
-					unsigned long long ullRollcallid = 0;
-					unsigned int uiOptype = 0;
-					
+					if (bhashHMGet_ok
+						&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+					{
+						sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(rollcall_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(rollcall_name_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+						sprintf(op_type_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+						strPartinfoValue.assign(vRedisReplyArray[4].str.c_str());
+
+						unsigned long long ullConfid = 0;
+						unsigned long long ullRollcallid = 0;
+						unsigned int uiOptype = 0;
+
 #ifdef WIN32
-					sscanf(conf_id_value, "%I64d", &ullConfid);
-					sscanf(rollcall_id_value, "%I64d", &ullRollcallid);
+						sscanf(conf_id_value, "%I64d", &ullConfid);
+						sscanf(rollcall_id_value, "%I64d", &ullRollcallid);
 #elif defined LINUX
-					sscanf(conf_id_value, "%lld", &ullConfid);
-					sscanf(rollcall_id_value, "%lld", &ullRollcallid);
+						sscanf(conf_id_value, "%lld", &ullConfid);
+						sscanf(rollcall_id_value, "%lld", &ullRollcallid);
 #endif
 
-					sscanf(op_type_value, "%d", &uiOptype);
+						sscanf(op_type_value, "%d", &uiOptype);
 
-					// 不管什么操作都将先删除点名名单
-					pRollCallList->SetCallInfoID(ullRollcallid);
-					pRollCallList->DeleteCallListForDB();
+						// 不管什么操作都将先删除点名名单
+						pRollCallList->SetCallInfoID(ullRollcallid);
+						pRollCallList->DeleteCallListForDB();
 
-					pConfRollCallInfo->SetCallInfoID(ullRollcallid);
-					pConfRollCallInfo->SetConfID(ullConfid);
-					pConfRollCallInfo->DeleteConfCallInfoForDB();
+						pConfRollCallInfo->SetCallInfoID(ullRollcallid);
+						pConfRollCallInfo->SetConfID(ullConfid);
+						pConfRollCallInfo->DeleteConfCallInfoForDB();
 
-					// 新增、修改需要分析点名成员列表
-					if (uiOptype == 1
-						|| uiOptype == 3)
-					{
-						// 插入call_list表
-						//pRollCallList->SetCallInfoID(ullRollcallid);
-						
-						char *sep1 = { "#" };
-						char *sep2 = { "@" };
-						std::string str;
-						std::string struserid;
-						std::string strorderno;
-						int index;
-						char *token = strtok((char *)strPartinfoValue.c_str(), sep1);
-						while (token != NULL)
+						// 新增、修改需要分析点名成员列表
+						if (uiOptype == 1
+							|| uiOptype == 3)
 						{
-							str = token;
-							//printf("%s\n", str.c_str());
-							index = str.find(sep2);
-							if (index > 0)
+							// 插入call_list表
+							//pRollCallList->SetCallInfoID(ullRollcallid);
+
+							char *sep1 = { "#" };
+							char *sep2 = { "@" };
+							std::string str;
+							std::string struserid;
+							std::string strorderno;
+							int index;
+							char *token = strtok((char *)strPartinfoValue.c_str(), sep1);
+							while (token != NULL)
 							{
-								//ms.insert(pair_string(str.substr(0, index), str.substr(index + 1, str.length())));
-								struserid = str.substr(0, index);
-								strorderno = str.substr(index + 1, str.length());
+								str = token;
+								//printf("%s\n", str.c_str());
+								index = str.find(sep2);
+								if (index > 0)
+								{
+									//ms.insert(pair_string(str.substr(0, index), str.substr(index + 1, str.length())));
+									struserid = str.substr(0, index);
+									strorderno = str.substr(index + 1, str.length());
 
-								unsigned int uiUserid = 0;
-								unsigned int uiOrderNo = 0;
-								sscanf(struserid.c_str(), "%d", &uiUserid);
-								sscanf(strorderno.c_str(), "%d", &uiOrderNo);
+									unsigned int uiUserid = 0;
+									unsigned int uiOrderNo = 0;
+									sscanf(struserid.c_str(), "%d", &uiUserid);
+									sscanf(strorderno.c_str(), "%d", &uiOrderNo);
 
-								pRollCallList->SetUserID(uiUserid);
-								pRollCallList->SetOrderNO(uiOrderNo);
-								pRollCallList->InsertCallListToDB();
+									pRollCallList->SetUserID(uiUserid);
+									pRollCallList->SetOrderNO(uiOrderNo);
+									pRollCallList->InsertCallListToDB();
+								}
+								token = strtok(NULL, sep1);
 							}
-							token = strtok(NULL, sep1);
+
+							// 插入call_info表
+							//pConfRollCallInfo->SetCallInfoID(ullRollcallid);
+							//pConfRollCallInfo->SetConfID(ullConfid);
+							pConfRollCallInfo->SetCallInfoName(vRedisReplyArray[2].str);
+							pConfRollCallInfo->InsertConfCallInfoToDB();
 						}
 
-						// 插入call_info表
-						//pConfRollCallInfo->SetCallInfoID(ullRollcallid);
-						//pConfRollCallInfo->SetConfID(ullConfid);
-						pConfRollCallInfo->SetCallInfoName(vRedisReplyArray[2].str);
-						pConfRollCallInfo->InsertConfCallInfoToDB();
+						m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
 					}
-
-					m_pRedisConnList[e_RC_TT_WriteDBThread]->deletevalue(ptrOPkey);
-				}
-				else
-				{
-					sr_printf(SR_LOGLEVEL_ERROR, " --error-- m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet ==%s\n", strmodifyrollcallinfoconfidrollcallidtime_key.c_str());
+					else
+					{
+						sr_printf(SR_LOGLEVEL_ERROR, " --error-- m_pRedisConnList[e_RC_TT_WriteDBThread]->hashHMGet ==%s\n", strmodifyrollcallinfoconfidrollcallidtime_key.c_str());
+					}
 				}
 			}
 			else
@@ -8977,8 +17818,7 @@ unsigned int CDevMgr::WriteUserConfInfoToDB(CConference* pConference, CConfRepor
 	return uiOpRedisNum;
 }
 
-//void CDevMgr::DelUserConfDetail(int suid, unsigned long long confid, char* time)
-void CDevMgr::DelUserConfDetail(int suid, unsigned long long confid, char* time, time_t lltime)
+void CDevMgr::DelUserConfDetail(int suid, unsigned long long confid, unsigned long long confreportid, unsigned long long userrptdetailid, char* time, time_t lltime)
 {
 	if (!m_pUpMsqThread)
 		return;
@@ -8986,9 +17826,9 @@ void CDevMgr::DelUserConfDetail(int suid, unsigned long long confid, char* time,
 	if (time == NULL)
 		return;
 
-	typedef CBufferT<int, unsigned long long, CAsyncThread*, time_t, void*, void*, void*, void*> CParam;
+	typedef CBufferT<int, unsigned long long, unsigned long long, unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*> CParam;
 	CParam* pParam;
-	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, suid, confid, m_pUpMsqThread, lltime);
+	pParam = new CParam(time, strlen(time), NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, suid, confid, confreportid, userrptdetailid, m_pUpMsqThread, lltime, m_pWriteDBThread);
 
 	typedef void (CDevMgr::* ACTION)(void*);
     m_pUpMsqThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
@@ -9004,18 +17844,23 @@ void CDevMgr::Handle_DelUserConfDetail(void* pArg)
 		return;
 	}
 
-	typedef CBufferT<int, unsigned long long, CAsyncThread*, time_t, void*, void*, void*, void*> CParam;
+	typedef CBufferT<int, unsigned long long, unsigned long long, unsigned long long, CAsyncThread*, time_t, CAsyncThread*, void*> CParam;
 	CParam* pParam = (CParam*)pArg;
 
 	char* ptime = (char*)pParam->m_pData1;
 	int suid = pParam->m_Arg1;
 	unsigned long long confid = pParam->m_Arg2;
-
-	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg3);
-
-	time_t hand_del_time = (time_t)(pParam->m_Arg4);
-
-	if (pUpMsgThread == NULL
+	unsigned long long confreportid = pParam->m_Arg3;
+	unsigned long long userrptdetailid = pParam->m_Arg4;
+	CAsyncThread* pUpMsgThread = (CAsyncThread*)(pParam->m_Arg5);
+	time_t hand_del_time = (time_t)(pParam->m_Arg6);
+	CAsyncThread* pWriteDBThread = (CAsyncThread*)(pParam->m_Arg7);
+	
+	if (confid == 0
+		|| confreportid == 0
+		|| suid == 0
+		|| userrptdetailid == 0
+		|| pUpMsgThread == NULL
 		|| m_pRedisConnList[e_RC_TT_UpMsqThread] == NULL) // test delet by csh at 2016.10.21
 	{
 		delete pParam;
@@ -9072,17 +17917,13 @@ void CDevMgr::Handle_DelUserConfDetail(void* pArg)
 		char cTermtypeFieldName[32] = { 0 };
 		char termtype_value[32] = { 0 };
 
-		char userconfdetail_confid_suid_key[128] = { 0 };
-		char confterlist_confid_key[128] = { 0 };
-
-#ifdef WIN32
-		sprintf(conf_id_value, "%I64d", confid);
-#elif defined LINUX
-		sprintf(conf_id_value, "%lld", confid);
-#endif
-		sprintf(userconfdetail_confid_suid_key, "userconfdtl_%s_%d", conf_id_value, suid);
-		sprintf(confterlist_confid_key, "confterlist_%s", conf_id_value);
-
+		//char keeplivetime_s[128] = { 0 };
+		char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+		char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+		char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+		char userconfdetail_confid_confrptid_userid_userdtlid_key[256] = { 0 };
+		char upuserconfdtl_confid_confrptid_userid_userdtlid_key[256] = { 0 };
 
 		sprintf(cConfidFieldName, "%s", "conf_id");
 		sprintf(cConfReportidFieldName, "%s", "conf_report_id");
@@ -9094,111 +17935,139 @@ void CDevMgr::Handle_DelUserConfDetail(void* pArg)
 		sprintf(cFromtypeFieldName, "%s", "fromtype");
 		sprintf(cTermtypeFieldName, "%s", "termtype");
 
+#ifdef WIN32
+		//sprintf(keeplivetime_s, "%I64d", hand_del_time);
+		sprintf(conf_id_value, "%I64d", confid);
+		sprintf(conf_report_id_value, "%I64d", confreportid);
+		sprintf(use_rpt_detail_id_value, "%I64d", userrptdetailid);
+#elif defined LINUX
+		//sprintf(keeplivetime_s, "%lld", hand_del_time);
+		sprintf(conf_id_value, "%lld", confid);
+		sprintf(conf_report_id_value, "%lld", confreportid);
+		sprintf(use_rpt_detail_id_value, "%lld", userrptdetailid);
+#endif
+
+		sprintf(user_id_ext_value, "%d", suid);
+		//sprintf(user_alias_value, "%s", alias);
+		//sprintf(real_jointime_value, "%s", ptime);
+		sprintf(real_leavetime_value, "%s", ptime);
+		//sprintf(fromtype_value, "%d", fromtype);
+		//sprintf(termtype_value, "%d", termtype);
+
+		//sprintf(confidktimeset_key, "%s", "confidktimeset");
+		//sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+		//sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, conf_report_id_value);
+		//sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value);
+		sprintf(userconfdetail_confid_confrptid_userid_userdtlid_key, "userconfdetail_%s_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value, use_rpt_detail_id_value);
+		sprintf(upuserconfdtl_confid_confrptid_userid_userdtlid_key, "upuserconfdtl_%s_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value, use_rpt_detail_id_value);
+				
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(4);
-		//////////////////////////////////////////////////////////////////////////
-		REDISKEY struserconfdetailconfidsuidkey = userconfdetail_confid_suid_key;
-		REDISFILEDS vGetFileds;
-		vGetFileds.clear();
-		RedisReplyArray vRedisReplyArray;
-		vRedisReplyArray.clear();
-
-		// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
-		REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-		REDISKEY strUseRptDetailidFieldName = cUseRptDetailidFieldName;
-		REDISKEY strUserAliasFieldName = cUserAliasFieldName;
-		REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
-		REDISKEY strFromtypeFieldName = cFromtypeFieldName;
-		REDISKEY strTermtypeFieldName = cTermtypeFieldName;
-
-		vGetFileds.push_back(strConfReportidFieldName);
-		vGetFileds.push_back(strUseRptDetailidFieldName);
-		vGetFileds.push_back(strUserAliasFieldName);
-		vGetFileds.push_back(strRealJointimeFieldName);
-		vGetFileds.push_back(strFromtypeFieldName);
-		vGetFileds.push_back(strTermtypeFieldName);
-
-		bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(struserconfdetailconfidsuidkey, vGetFileds, vRedisReplyArray);
-
-		//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet==userconfdetail_confid_suid_key--->> bhashHMGet_ok:%d, vRedisReplyArray.size:%d\n", bhashHMGet_ok, vRedisReplyArray.size());
-
-		char userconfdetail_confid_suid_rptid_key[128] = { 0 };
-
-		if (bhashHMGet_ok
-			&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+		bool bExistUP = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+		if (bExistUP)
 		{
-			sprintf(conf_report_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
-			sprintf(use_rpt_detail_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
-			sprintf(user_alias_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
-			sprintf(real_jointime_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
-			sprintf(fromtype_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
-			sprintf(termtype_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+			m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+			//PushMsgToWriteDBQueue(upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+		}
+		else
+		{
+			bool bExist = m_pRedisConnList[e_RC_TT_UpMsqThread]->existskey(userconfdetail_confid_confrptid_userid_userdtlid_key);
+			if (bExist)
+			{
+				REDISKEY struserconfdetailconfidconfrptiduseriduserdtlidkey = userconfdetail_confid_confrptid_userid_userdtlid_key;
+				REDISFILEDS vGetFileds;
+				vGetFileds.clear();
+				RedisReplyArray vRedisReplyArray;
+				vRedisReplyArray.clear();
 
-			//char userconfdetail_confid_suid_rptid_key[128] = { 0 };
-			sprintf(userconfdetail_confid_suid_rptid_key, "userconfdtl_%s_%d_%s", conf_id_value, suid, conf_report_id_value);
+				// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
+				REDISKEY strConfidFieldName = cConfidFieldName;
+				REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+				REDISKEY strUserRptDtlidFieldName = cUseRptDetailidFieldName;
+				REDISKEY strUseridextFieldName = cUseridextFieldName;
+				REDISKEY strUserAliasFieldName = cUserAliasFieldName;
+				REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
+				REDISKEY strFromtypeFieldName = cFromtypeFieldName;
+				REDISKEY strTermtypeFieldName = cTermtypeFieldName;
 
-			sprintf(user_id_ext_value, "%d", suid);
+				vGetFileds.push_back(strConfidFieldName);
+				vGetFileds.push_back(strConfReportidFieldName);
+				vGetFileds.push_back(strUserRptDtlidFieldName);
+				vGetFileds.push_back(strUserAliasFieldName);
+				vGetFileds.push_back(strRealJointimeFieldName);
+				vGetFileds.push_back(strFromtypeFieldName);
+				vGetFileds.push_back(strTermtypeFieldName);
 
+				bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMGet(struserconfdetailconfidconfrptiduseriduserdtlidkey, vGetFileds, vRedisReplyArray);
 
-			REDISKEY struserconfdtlconfidsuidrptidkey = userconfdetail_confid_suid_rptid_key;
-			REDISVDATA vUserConfdtlConfidSuidRptidData;
-			vUserConfdtlConfidSuidRptidData.clear();
+				if (bhashHMGet_ok
+					&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+				{
+					//sprintf(conf_id_value, "%s", vRedisReplyArray[0].str.c_str()); // 需要与push_back插入顺序一致
+					//sprintf(conf_report_id_value, "%s", vRedisReplyArray[1].str.c_str()); // 需要与push_back插入顺序一致
+					//sprintf(use_rpt_detail_id_value, "%s", vRedisReplyArray[2].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(user_alias_value, "%s", vRedisReplyArray[3].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(real_jointime_value, "%s", vRedisReplyArray[4].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(fromtype_value, "%s", vRedisReplyArray[5].str.c_str()); // 需要与push_back插入顺序一致
+					sprintf(termtype_value, "%s", vRedisReplyArray[6].str.c_str()); // 需要与push_back插入顺序一致
 
-			REDISKEY strConfidFieldName = cConfidFieldName;
-			REDISVALUE strconfidvalue = conf_id_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strConfidFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strconfidvalue);
+					REDISKEY strupuserconfdtlconfidconfrptiduseriduserdtlidkey = upuserconfdtl_confid_confrptid_userid_userdtlid_key;
+					REDISVDATA vUserConfdtlConfidSuidRptidData;
+					vUserConfdtlConfidSuidRptidData.clear();
 
-			REDISKEY strConfReportidFieldName = cConfReportidFieldName;
-			REDISVALUE strconfreportidvalue = conf_report_id_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strConfReportidFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strconfreportidvalue);
+					//REDISKEY strConfidFieldName = cConfidFieldName;
+					REDISVALUE strconfidvalue = conf_id_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strConfidFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strconfidvalue);
 
-			REDISKEY strUserRptDtlidFieldName = cUseRptDetailidFieldName;
-			REDISVALUE struserrptdtlidvalue = use_rpt_detail_id_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strUserRptDtlidFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(struserrptdtlidvalue);
+					//REDISKEY strConfReportidFieldName = cConfReportidFieldName;
+					REDISVALUE strconfreportidvalue = conf_report_id_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strConfReportidFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strconfreportidvalue);
 
-			REDISKEY strUseridextFieldName = cUseridextFieldName;
-			REDISVALUE struseridextvalue = user_id_ext_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strUseridextFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(struseridextvalue);
+					//REDISKEY strUserRptDtlidFieldName = cUseRptDetailidFieldName;
+					REDISVALUE struserrptdtlidvalue = use_rpt_detail_id_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strUserRptDtlidFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(struserrptdtlidvalue);
 
-			REDISKEY strUserAliasFieldName = cUserAliasFieldName;
-			REDISVALUE struseraliasvalue = user_alias_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strUserAliasFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(struseraliasvalue);
+					//REDISKEY strUseridextFieldName = cUseridextFieldName;
+					REDISVALUE struseridextvalue = user_id_ext_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strUseridextFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(struseridextvalue);
 
-			REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
-			REDISVALUE strrealjointimevalue = real_jointime_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strRealJointimeFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strrealjointimevalue);
+					//REDISKEY strUserAliasFieldName = cUserAliasFieldName;
+					REDISVALUE struseraliasvalue = user_alias_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strUserAliasFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(struseraliasvalue);
 
-			REDISKEY strRealLeavetimeFieldName = cRealLeavetimeFieldName;
-			REDISVALUE strrealleavetimevalue = ptime;
-			vUserConfdtlConfidSuidRptidData.push_back(strRealLeavetimeFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strrealleavetimevalue);
+					//REDISKEY strRealJointimeFieldName = cRealJointimeFieldName;
+					REDISVALUE strrealjointimevalue = real_jointime_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strRealJointimeFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strrealjointimevalue);
 
-			REDISKEY strFromtypeFieldName = cFromtypeFieldName;
-			REDISVALUE strfromtypevalue = fromtype_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strFromtypeFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strfromtypevalue);
+					REDISKEY strRealLeavetimeFieldName = cRealLeavetimeFieldName;
+					REDISVALUE strrealleavetimevalue = ptime;
+					vUserConfdtlConfidSuidRptidData.push_back(strRealLeavetimeFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strrealleavetimevalue);
 
-			REDISKEY strTermtypeFieldName = cTermtypeFieldName;
-			REDISVALUE strtermtypevalue = termtype_value;
-			vUserConfdtlConfidSuidRptidData.push_back(strTermtypeFieldName);
-			vUserConfdtlConfidSuidRptidData.push_back(strtermtypevalue);
+					//REDISKEY strFromtypeFieldName = cFromtypeFieldName;
+					REDISVALUE strfromtypevalue = fromtype_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strFromtypeFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strfromtypevalue);
 
-			bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(struserconfdtlconfidsuidrptidkey, vUserConfdtlConfidSuidRptidData);
+					//REDISKEY strTermtypeFieldName = cTermtypeFieldName;
+					REDISVALUE strtermtypevalue = termtype_value;
+					vUserConfdtlConfidSuidRptidData.push_back(strTermtypeFieldName);
+					vUserConfdtlConfidSuidRptidData.push_back(strtermtypevalue);
 
-			//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==userconfdetail_confid_suid_rptid_key---->>>> %d\n", bhashHMSet_ok);
-			bool bListLPushOK = false;
-			bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", userconfdetail_confid_suid_rptid_key);
-			sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_DelUserConfDetail listLPush ** (%s) **bListLPushOK=%d\n", userconfdetail_confid_suid_rptid_key, bListLPushOK);
+					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet(strupuserconfdtlconfidconfrptiduseriduserdtlidkey, vUserConfdtlConfidSuidRptidData);
 
-			m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(userconfdetail_confid_suid_key);
+					//sr_printf(SR_LOGLEVEL_ERROR, " m_pRedisConnList[e_RC_TT_UpMsqThread]->hashHMSet==userconfdetail_confid_suid_rptid_key---->>>> %d\n", bhashHMSet_ok);
+					bool bListLPushOK = false;
+					bListLPushOK = m_pRedisConnList[e_RC_TT_UpMsqThread]->listLPush("op_key_list", upuserconfdtl_confid_confrptid_userid_userdtlid_key);
+					sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_DelUserConfDetail listLPush ** (%s) **bListLPushOK=%d\n", upuserconfdtl_confid_confrptid_userid_userdtlid_key, bListLPushOK);
 
-			m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(confterlist_confid_key, user_id_ext_value);
-
+				}
+			}
 		}
 
 		// 删除终端统计信息
@@ -9208,11 +18077,22 @@ void CDevMgr::Handle_DelUserConfDetail(void* pArg)
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->selectdb(7);
 		m_pRedisConnList[e_RC_TT_UpMsqThread]->deletevalue(tercalldetail_confid_tersuid_key);
 
+		if (pWriteDBThread)
+		{
+			typedef CBufferT<CAsyncThread*, void*, void*, void*, void*, void*, void*, void*> CParam;
+			CParam* pParam;
+			pParam = new CParam(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, pWriteDBThread);
+
+			typedef void (CDevMgr::* ACTION)(void*);
+			pWriteDBThread->Put(CFunctorCommand_1<CDevMgr, ACTION>::CreateInstance(
+				*this, &CDevMgr::Handle_WriteUserConfInfoToDB, (void*)pParam));
+		}
+
 #ifdef LINUX
 		gettimeofday(&end, NULL); // μs level
 		time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
 
-		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_DelUserConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", userconfdetail_confid_suid_rptid_key, time_use);
+		sr_printf(SR_LOGLEVEL_DEBUG, "==-->>Handle_DelUserConfDetail into db(4) ** (%s) **time_use** is: %lf us \n", userconfdetail_confid_confrptid_userid_userdtlid_key, time_use);
 #endif
 
 	} while (0);
@@ -9342,6 +18222,21 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 	{
 		pDataDictionary = iter_mapAsyncThreadDataDictionary->second;
 	}
+
+	CSysParameter* pSysParameter = NULL;
+	std::map<CAsyncThread*, CSysParameter*>::iterator iter_mapAsyncThreadSysParameter = m_mapAsyncThreadSysParameter.find(pThread);
+	if (iter_mapAsyncThreadSysParameter != m_mapAsyncThreadSysParameter.end())
+	{
+		pSysParameter = iter_mapAsyncThreadSysParameter->second;
+	}
+	
+	CCompCapLincene* pCompLinceneInfo = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pThread);
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLinceneInfo = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
 	if (pDevice == NULL
 		|| pDeviceConfig == NULL
 		|| pConference == NULL
@@ -9354,7 +18249,9 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 		|| pRollCallList == NULL
 		|| pConfPollInfo == NULL
 		|| pPollList == NULL
-		|| pDataDictionary == NULL)
+		|| pDataDictionary == NULL
+		|| pCompLinceneInfo == NULL
+		|| pSysParameter == NULL)
 	{
 		return false;
 	}
@@ -9409,7 +18306,7 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 
 				if (pClient != NULL)
 				{
-					bool bRegister = ProcessReqRegister(&req, pClient, pDeviceConfig, pDevice, pDataDictionary, &rspsend);
+					bool bRegister = ProcessReqRegister(&req, pClient, pDeviceConfig, pDevice, pDataDictionary, pCompLinceneInfo, pSysParameter, &rspsend);
 
 					SerialProtoMsgAndSend(pClient, SRMsgId_RspRegister, &rspsend);
 
@@ -9549,22 +18446,27 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 												vGetFileds.push_back(strOuterFieldName);
 												vGetFileds.push_back(strVPNFieldName);
 
-												bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-												if (bhashHMGet_ok
-													&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+												bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+												if (bExist)
 												{
-													pSvrinfo = psvrdomaininfo->add_svrinfos();
-													pSvrinfo->set_svrtype(uiSvrtype);
-													pSvrinfo->set_deviceid(uiDeviceid);
+													bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+													if (bhashHMGet_ok
+														&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+													{
+														pSvrinfo = psvrdomaininfo->add_svrinfos();
+														pSvrinfo->set_svrtype(uiSvrtype);
+														pSvrinfo->set_deviceid(uiDeviceid);
 
-													SRMsgs::IndUpSvrInfoToDevmgr_IPPORTInfo* pSvripportinfo = new SRMsgs::IndUpSvrInfoToDevmgr_IPPORTInfo();
-													pSvripportinfo->set_inner(vRedisReplyArray[0].str);
-													pSvripportinfo->set_outer(vRedisReplyArray[1].str);
-													pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
-													pSvrinfo->set_allocated_ipport(pSvripportinfo);
+														SRMsgs::IndUpSvrInfoToDevmgr_IPPORTInfo* pSvripportinfo = new SRMsgs::IndUpSvrInfoToDevmgr_IPPORTInfo();
+														pSvripportinfo->set_inner(vRedisReplyArray[0].str);
+														pSvripportinfo->set_outer(vRedisReplyArray[1].str);
+														pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
+														pSvrinfo->set_allocated_ipport(pSvripportinfo);
 
-													bNeedSend = true;
+														bNeedSend = true;
+													}
 												}
+
 
 												//RedisReplyKeyValuePair vRedisReplyPair;
 												//vRedisReplyPair.clear();
@@ -9681,6 +18583,41 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 	//	}
 	//	break;
 	//}
+	case SRMsgId_IndSyncConfInfo:
+	{
+		SRMsgs::IndSyncConfInfo ind;
+		//if (ind.ParsePartialFromArray(pData + 8, nLen - 8))
+		if (ind.ParsePartialFromArray(pData + 16, nLen - 16))
+		{
+			if (ind.has_deviceid() && ind.has_token())
+			{
+#ifdef LINUX
+				float time_use = 0;
+				struct timeval start;
+				struct timeval end;
+				gettimeofday(&start, NULL); // μs level
+#endif
+
+				SyncConfInfo(&ind);
+				
+#ifdef LINUX
+				gettimeofday(&end, NULL); // μs level
+				time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+				sr_printf(SR_LOGLEVEL_INFO, "**Handle SRMsgId_IndSyncConfInfo param(deviceid=%d,token=%s)*****time_use** is: %lf us \n", ind.deviceid(), ind.token().c_str(), time_use);
+#endif 
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndSyncConfInfo msg param is null error\n");
+			}
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndSyncConfInfo ParsePartialFromArray failed.\n");
+		}
+		break;
+	}
 	case SRMsgId_ReqUnRegister:
 	{
 		SRMsgs::ReqUnRegister req;
@@ -10083,27 +19020,29 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				ptmNow = localtime(&timeNow);
 				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon+1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
-				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
-				}
+				AddUserConfDetail(ind.suid(), ind.confid(), ind.confreportid(), ind.userrptdetailid(), (char*)(ind.alias().c_str()), szTime, timeNow, ind.fromtype(), ind.termtype());
 
-				//更新user_conf_detail表
-				if (busemsgcrptid)
-				{
-					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_IndNewTermJoinConf msg has_confreportid is %"SR_PRIu64".\n", ind.confreportid());
-					AddUserConfDetail(ind.suid(), ind.confid(), ind.confreportid(), m_pub_userrpt_detail_id, (char*)(ind.alias().c_str()), szTime, timeNow, ind.fromtype(), ind.termtype());
-				}
-				else
-				{
-					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_IndNewTermJoinConf msg not have confreportid param or is null.\n");
-					AddUserConfDetail(ind.suid(), ind.confid(), 0, m_pub_userrpt_detail_id, (char*)(ind.alias().c_str()), szTime, timeNow, ind.fromtype(), ind.termtype());
-				}
-				m_pub_userrpt_detail_id++;
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
+
+				////更新user_conf_detail表
+				//if (busemsgcrptid)
+				//{
+				//	sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_IndNewTermJoinConf msg has_confreportid is %"SR_PRIu64".\n", ind.confreportid());
+				//	AddUserConfDetail(ind.suid(), ind.confid(), ind.confreportid(), m_pub_userrpt_detail_id, (char*)(ind.alias().c_str()), szTime, timeNow, ind.fromtype(), ind.termtype());
+				//}
+				//else
+				//{
+				//	sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_IndNewTermJoinConf msg not have confreportid param or is null.\n");
+				//	AddUserConfDetail(ind.suid(), ind.confid(), 0, m_pub_userrpt_detail_id, (char*)(ind.alias().c_str()), szTime, timeNow, ind.fromtype(), ind.termtype());
+				//}
+				//m_pub_userrpt_detail_id++;
 
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -10173,7 +19112,8 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				//	DelUserConfDetail(ind.suid(), ind.confid(), szTime, timeNow);
 				//}	
 
-				DelUserConfDetail(ind.suid(), ind.confid(), szTime, timeNow);
+				DelUserConfDetail(ind.suid(), ind.confid(), ind.confreportid(), ind.userrptdetailid(), szTime, timeNow);
+				RecoverTermLincene(ind.deviceid(), ind.confid(), ind.userrelcompid(), ind.termtype(), ind.confrelcompid(), ind.fromtype(), szTime, timeNow);
 			
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -10223,31 +19163,36 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				ptmNow = localtime(&timeNow);
 				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon+1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
-				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
-				}
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
 
 				UpdateConfRealtime(ind.confid(), 1, szTime, timeNow, ind.permanentenable()); // update conference set conf_realendtime
-
-				// 传入的confreportid目前没用
-				if (busemsgcrptid)
-				{
-					//更新confreport表
-					UpdateConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
-
-				}
-				else
-				{
-					//更新confreport表
-					UpdateConfReport(ind.confid(), 0, szTime, timeNow);
-				}
+				//更新confreport表
+				UpdateConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
 				//同时更新device_conf_detail
-				UpdateDeviceConfDetail(ind.confid(), ind.deviceid(), szTime, timeNow);
+				UpdateDeviceConfDetail(ind.confid(), ind.deviceid(), ind.confreportid(), ind.mcconfdetailid(), szTime, timeNow);
+				RecoverConfLincene(ind.deviceid(), ind.confid(), ind.confrelcompid(), szTime, timeNow);
+
+				//// 传入的confreportid目前没用
+				//if (busemsgcrptid)
+				//{
+				//	//更新confreport表
+				//	UpdateConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
+
+				//}
+				//else
+				//{
+				//	//更新confreport表
+				//	UpdateConfReport(ind.confid(), 0, szTime, timeNow);
+				//}
+				////同时更新device_conf_detail
+				//UpdateDeviceConfDetail(ind.confid(), ind.deviceid(), szTime, timeNow);
 
 				//删除redis表db2
 				// conference_deviceid,里面存放的是[confid,deviceid]键值对,由web server插入，删除是由devmgr删除
@@ -10266,6 +19211,8 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				if (ptrRet != NULL)
 				{
 					iMcid = atoi(ptrRet);
+
+					delete ptrRet; // 不删除会导致内存泄漏
 				}
 
 				if (iMcid == ind.deviceid())
@@ -10295,6 +19242,8 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				if (ptrRet != NULL)
 				{
 					iMcid = atoi(ptrRet);
+
+					delete ptrRet; // 不删除会导致内存泄漏
 				}
 
 				if (iMcid == ind.deviceid())
@@ -10349,9 +19298,11 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				{
 					if (pClient != NULL)
 					{
-						SRMsgs::RspConfInfoToMC rspsend;
-						GetConfInfoFromDB(&req, pConference, pConfParticipant, pConfLiveSetting, pConfRollCallInfo, pRollCallList, pConfPollInfo, pPollList, &rspsend);
-						SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
+						//SRMsgs::RspConfInfoToMC rspsend;
+						//GetConfInfoFromDB(&req, pConference, pConfParticipant, pConfLiveSetting, pConfRollCallInfo, pRollCallList, pConfPollInfo, pPollList, &rspsend);
+						//SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
+
+						GetConfInfoFromDB(&req, pConference, pConfParticipant, pConfLiveSetting, pConfRollCallInfo, pRollCallList, pConfPollInfo, pPollList, pClient);
 					}
 					else
 					{
@@ -10414,31 +19365,36 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 
 					UpdateConfRealtime(ind.confid(), 0, szTime, timeNow); // update conference set conf_realstarttime
 
-					bool busemsgcrptid = false;
-					if (ind.has_confreportid())
-					{
-						if (ind.confreportid() != 0)
-						{
-							busemsgcrptid = true;
-						}
-					}
+					InsertConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
 
-					if (busemsgcrptid)
-					{
-						// 此处使用的是devmgr事先分配好的confreportid
-						InsertConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
-						//同时更新device_conf_detail
-						InsertDeviceConfDetail(ind.confid(), ind.deviceid(), ind.confreportid(), m_pub_device_detail_id, szTime, timeNow); // 将device_conf_detail信息写内存，便于插入device_conf_detail表
-					}
-					else
-					{
-						InsertConfReport(ind.confid(), m_pub_confreport_id, szTime, timeNow); // 将confreport信息写内存，便于插入confreport表
-						//同时更新device_conf_detail
-						InsertDeviceConfDetail(ind.confid(), ind.deviceid(), m_pub_confreport_id, m_pub_device_detail_id, szTime, timeNow); // 将device_conf_detail信息写内存，便于插入device_conf_detail表
+					//同时更新device_conf_detail
+					InsertDeviceConfDetail(ind.confid(), ind.deviceid(), ind.confreportid(), ind.mcconfdetailid(), szTime, timeNow); // 将device_conf_detail信息写内存，便于插入device_conf_detail表
 
-						m_pub_confreport_id++;
-					}
-					m_pub_device_detail_id++;
+					//bool busemsgcrptid = false;
+					//if (ind.has_confreportid())
+					//{
+					//	if (ind.confreportid() != 0)
+					//	{
+					//		busemsgcrptid = true;
+					//	}
+					//}
+					
+					//if (busemsgcrptid)
+					//{
+					//	// 此处使用的是devmgr事先分配好的confreportid
+					//	InsertConfReport(ind.confid(), ind.confreportid(), szTime, timeNow);
+					//	//同时更新device_conf_detail
+					//	InsertDeviceConfDetail(ind.confid(), ind.deviceid(), ind.confreportid(), m_pub_device_detail_id, szTime, timeNow); // 将device_conf_detail信息写内存，便于插入device_conf_detail表
+					//}
+					//else
+					//{
+					//	InsertConfReport(ind.confid(), m_pub_confreport_id, szTime, timeNow); // 将confreport信息写内存，便于插入confreport表
+					//	//同时更新device_conf_detail
+					//	InsertDeviceConfDetail(ind.confid(), ind.deviceid(), m_pub_confreport_id, m_pub_device_detail_id, szTime, timeNow); // 将device_conf_detail信息写内存，便于插入device_conf_detail表
+
+					//	m_pub_confreport_id++;
+					//}
+					//m_pub_device_detail_id++;
 
 					//更新redis
 					char deviceid_id[256] = { 0 };
@@ -10509,6 +19465,9 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				//心跳，需更新数据库
 				UpdatePeerHeartbeatToDB(&ind, timeNow);
 
+				//校验授权信息
+				UpdateCheckMCHeartbeatLinceneInfo(&ind);
+
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
 				time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
@@ -10560,14 +19519,14 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 
 				//printf("###SRMsgId_IndNetMPConfInfoInMC OK: Updata CDeviceConfDetail --===-->>\n");
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
-				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
-				}
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
 
 				//更新device_conf_detail
 				pDeviceConfDetail->SetConfID(ind.confid());
@@ -10576,7 +19535,7 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				{
 					if (ind.addordel() == 2)
 					{
-						UpdateDeviceConfDetail(ind.confid(), ind.netmpid(), szTime, timeNow);
+						UpdateDeviceConfDetail(ind.confid(), ind.netmpid(), ind.confreportid(), ind.netmpconfdetailid(), szTime, timeNow);
 
                         //删除db6				
                         char deviceid_id[256] = { 0 };
@@ -10601,14 +19560,16 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				{
 					if (ind.addordel() == 1)
 					{
-						if (busemsgcrptid)
-						{
-							InsertDeviceConfDetail(ind.confid(), ind.netmpid(), ind.confreportid(), m_pub_device_detail_id, szTime, timeNow, true);
-						}
-						else
-						{
-							InsertDeviceConfDetail(ind.confid(), ind.netmpid(), 0, m_pub_device_detail_id, szTime, timeNow, true);
-						}
+						InsertDeviceConfDetail(ind.confid(), ind.netmpid(), ind.confreportid(), ind.netmpconfdetailid(), szTime, timeNow, true);
+
+						//if (busemsgcrptid)
+						//{
+						//	InsertDeviceConfDetail(ind.confid(), ind.netmpid(), ind.confreportid(), m_pub_device_detail_id, szTime, timeNow, true);
+						//}
+						//else
+						//{
+						//	InsertDeviceConfDetail(ind.confid(), ind.netmpid(), 0, m_pub_device_detail_id, szTime, timeNow, true);
+						//}
 
 						m_pub_device_detail_id++;
 
@@ -10874,28 +19835,30 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				memset(strconfname, 0, sizeof(strconfname));
 				sprintf(strconfname, "%s", ind.confname().c_str());
 
-				m_pub_confrecord_id++;
-				//m_pub_recordfile_id++;
+				//m_pub_confrecord_id++;
+				////m_pub_recordfile_id++;
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
-				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
-				}
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
 
-				if (busemsgcrptid)
-				{
-					InsertConfRecord(ind.confid(), ind.confreportid(), m_pub_confrecord_id, szTime, timeNow, strconfname); // confreportid取0表示需要从redis取对应会议的confreportid值,再找不到就从mysql找
-					//InsertRecordFile(ind.confid(), ind.confreportid(), m_pub_confrecord_id, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow);
-				}
-				else
-				{
-					InsertConfRecord(ind.confid(), 0, m_pub_confrecord_id, szTime, timeNow, strconfname); // confreportid取0表示需要从redis取对应会议的confreportid值,再找不到就从mysql找
-					//InsertRecordFile(ind.confid(), 0, m_pub_confrecord_id, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow);
-				}
+				//if (busemsgcrptid)
+				//{
+				//	InsertConfRecord(ind.confid(), ind.confreportid(), m_pub_confrecord_id, szTime, timeNow, strconfname); // confreportid取0表示需要从redis取对应会议的confreportid值,再找不到就从mysql找
+				//	//InsertRecordFile(ind.confid(), ind.confreportid(), m_pub_confrecord_id, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow);
+				//}
+				//else
+				//{
+				//	InsertConfRecord(ind.confid(), 0, m_pub_confrecord_id, szTime, timeNow, strconfname); // confreportid取0表示需要从redis取对应会议的confreportid值,再找不到就从mysql找
+				//	//InsertRecordFile(ind.confid(), 0, m_pub_confrecord_id, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow);
+				//}
+
+				InsertConfRecord(ind.confid(), ind.confreportid(), ind.confrecordid(), szTime, timeNow, strconfname); 
 
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -10945,20 +19908,20 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 
 				char filestorsvrip[128];
 				memset(filestorsvrip, 0, sizeof(filestorsvrip));
-				char filestorpath[300];
+				char filestorpath[512];
 				memset(filestorpath, 0, sizeof(filestorpath));
-				char sdefilepath[300];
+				char sdefilepath[512];
 				memset(sdefilepath, 0, sizeof(sdefilepath));
-				char relativepath[300];
+				char relativepath[512];
 				memset(relativepath, 0, sizeof(relativepath));
 				//sprintf(filestorsvrip, "%s", ind.filestorsvrip().c_str());
 				//sprintf(filestorpath, "%s", ind.filestorpath().c_str());
 				//sprintf(sdefilepath, "%s", ind.sdefilepath().c_str());
 				// 不能格式化，格式化容易将路径双斜杠\\解析成转义字符
 				memcpy(filestorsvrip, ind.filestorsvrip().c_str(), ind.filestorsvrip().length());
-				sprintf(filestorpath, ind.filestorpath().c_str(), ind.filestorpath().length());
-				sprintf(sdefilepath, ind.sdefilepath().c_str(), ind.sdefilepath().length());
-				sprintf(relativepath, ind.relativepath().c_str(), ind.relativepath().length());
+				memcpy(filestorpath, ind.filestorpath().c_str(), ind.filestorpath().length());
+				memcpy(sdefilepath, ind.sdefilepath().c_str(), ind.sdefilepath().length());
+				memcpy(relativepath, ind.relativepath().c_str(), ind.relativepath().length());
 
 				//if (ind.stopreason() == 0) // 异常(请求结束超时、故障迁移失败)结束录制，
 				//{
@@ -10969,20 +19932,20 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				//	// 只更新指定文件recordfile结束时间为1970-------的结束时间
 				//}
 
-				m_pub_recordfile_id++;
+				//m_pub_recordfile_id++;
 
 				char strconfname[256];
 				memset(strconfname, 0, sizeof(strconfname));
 				sprintf(strconfname, "%s", ind.confname().c_str());
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
-				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
-				}
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
 
 				bool bneedinsert = false;
 				if (ind.filestorsvrip().length() > 0
@@ -10994,24 +19957,32 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 					bneedinsert = true;
 				}
 
-				if (busemsgcrptid)
-				{
-					if (bneedinsert)
-					{
-						InsertRecordFile(ind.confid(), ind.confreportid(), 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
-					}
+				RecoverRecordLincene(ind.deviceid(), ind.confid() ,ind.confrelcompid(),szTime, timeNow);
+				//if (busemsgcrptid)
+				//{
+				//	if (bneedinsert)
+				//	{
+				//		InsertRecordFile(ind.confid(), ind.confreportid(), 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
+				//	}
 
-					UpdateConfRecord(ind.confid(), ind.confreportid(), szTime, timeNow, strconfname);
-				}
-				else
-				{
-					if (bneedinsert)
-					{
-						InsertRecordFile(ind.confid(), 0, 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
-					}
+				//	UpdateConfRecord(ind.confid(), ind.confreportid(), szTime, timeNow, strconfname);
+				//}
+				//else
+				//{
+				//	if (bneedinsert)
+				//	{
+				//		InsertRecordFile(ind.confid(), 0, 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
+				//	}
 
-					UpdateConfRecord(ind.confid(), 0, szTime, timeNow, strconfname);
+				//	UpdateConfRecord(ind.confid(), 0, szTime, timeNow, strconfname);
+				//}
+
+				if (bneedinsert)
+				{
+					InsertRecordFile(ind.confid(), ind.confreportid(), ind.confrecordid(), ind.recordfileid(), filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
 				}
+
+				UpdateConfRecord(ind.confid(), ind.confreportid(), ind.confrecordid(), szTime, timeNow, strconfname);
 
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -11061,20 +20032,20 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 
 				char filestorsvrip[128];
 				memset(filestorsvrip, 0, sizeof(filestorsvrip));
-				char filestorpath[300];
+				char filestorpath[512];
 				memset(filestorpath, 0, sizeof(filestorpath));
-				char sdefilepath[300];
+				char sdefilepath[512];
 				memset(sdefilepath, 0, sizeof(sdefilepath));
-				char relativepath[300];
+				char relativepath[512];
 				memset(relativepath, 0, sizeof(relativepath));
 				//sprintf(filestorsvrip, "%s", ind.filestorsvrip().c_str());
 				//sprintf(filestorpath, "%s", ind.filestorpath().c_str());
 				//sprintf(sdefilepath, "%s", ind.sdefilepath().c_str());
 				// 不能格式化，格式化容易将路径双斜杠\\解析成转义字符
 				memcpy(filestorsvrip, ind.filestorsvrip().c_str(), ind.filestorsvrip().length());
-				sprintf(filestorpath, ind.filestorpath().c_str(), ind.filestorpath().length());
-				sprintf(sdefilepath, ind.sdefilepath().c_str(), ind.sdefilepath().length());
-				sprintf(relativepath, ind.relativepath().c_str(), ind.relativepath().length());
+				memcpy(filestorpath, ind.filestorpath().c_str(), ind.filestorpath().length());
+				memcpy(sdefilepath, ind.sdefilepath().c_str(), ind.sdefilepath().length());
+				memcpy(relativepath, ind.relativepath().c_str(), ind.relativepath().length());
 
 				//if (ind.recordstate() == 1) // 开始
 				//{
@@ -11086,24 +20057,39 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				//	// 更新指定文件recordfile结束时间为1970-------的结束时间
 				//}
 
-				m_pub_recordfile_id++;
+				//m_pub_recordfile_id++;
 
-				bool busemsgcrptid = false;
-				if (ind.has_confreportid())
+				//bool busemsgcrptid = false;
+				//if (ind.has_confreportid())
+				//{
+				//	if (ind.confreportid() != 0)
+				//	{
+				//		busemsgcrptid = true;
+				//	}
+				//}
+
+				//if (busemsgcrptid)
+				//{
+				//	InsertRecordFile(ind.confid(), ind.confreportid(), 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());// 同一会议快速开始/停止录制，Recordid需要从redis中获取最新的,所以此处设置为0
+				//}
+				//else
+				//{
+				//	InsertRecordFile(ind.confid(), 0, 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());// 同一会议快速开始/停止录制，Recordid需要从redis中获取最新的,所以此处设置为0
+				//}
+
+				bool bneedinsert = false;
+				if (ind.filestorsvrip().length() > 0
+					&& ind.filestorpath().length() > 0
+					//&& ind.sdefilepath().length() > 0
+					//&& ind.relativepath().length() > 0
+					&& ind.recordstate() == 2)
 				{
-					if (ind.confreportid() != 0)
-					{
-						busemsgcrptid = true;
-					}
+					bneedinsert = true;
 				}
 
-				if (busemsgcrptid)
+				if (bneedinsert)
 				{
-					InsertRecordFile(ind.confid(), ind.confreportid(), 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());// 同一会议快速开始/停止录制，Recordid需要从redis中获取最新的,所以此处设置为0
-				}
-				else
-				{
-					InsertRecordFile(ind.confid(), 0, 0, m_pub_recordfile_id, filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());// 同一会议快速开始/停止录制，Recordid需要从redis中获取最新的,所以此处设置为0
+					InsertRecordFile(ind.confid(), ind.confreportid(), ind.confrecordid(), ind.recordfileid(), filestorsvrip, relativepath, filestorpath, sdefilepath, timeNow, ind.filesize());
 				}
 
 #ifdef LINUX
@@ -11152,8 +20138,19 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				ptmNow = localtime(&timeNow);
 				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
 
-				m_pub_liveinfo_id++;
-				InsertConfLiveInfo(m_pub_liveinfo_id, &ind, szTime, timeNow);
+				//m_pub_liveinfo_id++;
+				//InsertConfLiveInfo(m_pub_liveinfo_id, &ind, szTime, timeNow);
+
+				if (ind.confid() == 0
+					|| ind.confreportid() == 0
+					|| ind.liveinfoid() == 0)
+				{
+					sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndCRSStartLive param confid or confreportid or liveinfoid is 0.\n");
+				} 
+				else
+				{
+					InsertConfLiveInfo(ind.liveinfoid(), &ind, szTime, timeNow);
+				}
 
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -11201,7 +20198,17 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 				ptmNow = localtime(&timeNow);
 				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
 
-				UpdateConfLiveInfo(&ind, szTime, timeNow);
+				if (ind.confid() == 0
+					|| ind.confreportid() == 0
+					|| ind.liveinfoid() == 0)
+				{
+					sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndCRSStopLive param confid or confreportid or liveinfoid is 0.\n");
+				}
+				else
+				{
+					UpdateConfLiveInfo(&ind, szTime, timeNow);
+					RecoverLiveLincene(ind.deviceid(), ind.confid(), ind.confrelcompid(), szTime, timeNow);
+				}
 
 #ifdef LINUX
 				gettimeofday(&end, NULL); // μs level
@@ -11401,6 +20408,158 @@ bool CDevMgr::ParseClientData(DeviceConnect *pClient, CAsyncThread* pThread, con
 		{
 			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndSubSvrHeartTodev ParsePartialFromArray failed.\n");
 		}
+		break;
+	}
+	case SRMsgId_ReqLicenseFromDevMgr:
+	{
+		SRMsgs::ReqLicenseFromDevMgr ind;
+		//if (ind.ParsePartialFromArray(pData + 8, nLen - 8))
+		if (ind.ParsePartialFromArray(pData + 16, nLen - 16))
+		{
+			sr_printf(SR_LOGLEVEL_NORMAL, "mc->devmgr,deviceid=%u,confid=%"SR_PRIu64",%s(0x%x) --\n%s\n",
+				ind.deviceid(), ind.confid(), ind.GetTypeName().c_str(), (getMsgIdByClassName(ReqLicenseFromDevMgr)), ind.Utf8DebugString().c_str());
+
+			if ( ind.has_deviceid() && ind.has_token() && ind.has_confid())
+			{
+
+#ifdef LINUX
+				float time_use = 0;
+				struct timeval start;
+				struct timeval end;
+				gettimeofday(&start, NULL); // μs level
+#endif 
+				SRMsgs::RspLicenseToMC rspsend;
+				if (pClient != NULL)
+				{
+					ReqCompLinceneInfo(&ind, pCompLinceneInfo, &rspsend);
+
+					SerialProtoMsgAndSend(pClient, SRMsgId_RspLicenseToMC, &rspsend);
+				}
+				else
+				{
+					sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_ReqLicenseFromDevMgr pClient is null error\n");
+				}
+
+#ifdef LINUX
+				gettimeofday(&end, NULL); // μs level
+				time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+				sr_printf(SR_LOGLEVEL_INFO, "***Handle SRMsgId_ReqLicenseFromDevMgr param(deviceid,token,conf_id)=(%d, %s, %lld )*****time_use** is: %lf us 0x%x\n", ind.deviceid(), ind.token().c_str(), ind.confid(), time_use, getMsgIdByClassName(RspLicenseToMC));
+#endif 
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_ReqLicenseFromDevMgr param is null error.\n");
+			}
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_ReqLicenseFromDevMgr ParsePartialFromArray failed.\n");
+		}
+
+		break;
+	}
+	case SRMsgId_IndCompanyUseLicenceACK:
+	{
+		SRMsgs::IndCompanyUseLicenceACK ind;
+		//if (ind.ParsePartialFromArray(pData + 8, nLen - 8))
+		if (ind.ParsePartialFromArray(pData + 16, nLen - 16))
+		{
+			sr_printf(SR_LOGLEVEL_NORMAL, "mc->devmgr,deviceid=%u,confid=%"SR_PRIu64",%s(0x%x) --\n%s\n",
+				ind.deviceid(), ind.confid(), ind.GetTypeName().c_str(), (getMsgIdByClassName(IndCompanyUseLicenceACK)), ind.Utf8DebugString().c_str());
+
+			if (ind.has_deviceid() && ind.has_token() && ind.has_confid())
+			{
+
+#ifdef LINUX
+				float time_use = 0;
+				struct timeval start;
+				struct timeval end;
+				gettimeofday(&start, NULL); // μs level
+#endif 
+				//获取当前时间串
+				time_t timeNow;
+				struct tm *ptmNow;
+				char szTime[30];
+				timeNow = time(NULL);
+				ptmNow = localtime(&timeNow);
+				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+
+				if (ind.confid() == 0
+					|| ind.deviceid() == 0)
+				{
+					sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndCompanyUseLicenceACK param confid or deviceid  is 0.\n");
+				}
+				else
+				{
+					CompanyUseLicenceACK(&ind);
+				}
+
+#ifdef LINUX
+				gettimeofday(&end, NULL); // μs level
+				time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+				sr_printf(SR_LOGLEVEL_INFO, "***Handle SRMsgId_IndCompanyUseLicenceACK param(deviceid,token,conf_id)=(%d, %s, %lld )*****time_use** is: %lf us \n", ind.deviceid(), ind.token().c_str(), ind.confid(), time_use);
+#endif 
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndCompanyUseLicenceACK param is null error.\n");
+			}
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndCompanyUseLicenceACK ParsePartialFromArray failed.\n");
+		}
+		break;
+	}
+	case SRMsgId_IndSubCompCapInfoToDevmgr:
+	{
+		SRMsgs::IndSubCompCapInfoToDevmgr indinfo;
+		if (indinfo.ParsePartialFromArray(pData + 16, nLen - 16))
+		{
+			if (indinfo.has_deviceid() && indinfo.has_token())
+			{
+				sr_printf(SR_LOGLEVEL_NORMAL, "SRMsgId_IndSubCompCapInfoToDevmgr OK: param(deviceid,token)=(%d, %s )\n", indinfo.deviceid(), indinfo.token().c_str());
+#ifdef LINUX
+				float time_use = 0;
+				struct timeval start;
+				struct timeval end;
+				gettimeofday(&start, NULL); // μs level
+#endif 
+				//获取当前时间串
+				time_t timeNow;
+				struct tm *ptmNow;
+				char szTime[30];
+				timeNow = time(NULL);
+				ptmNow = localtime(&timeNow);
+				sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+				SyncSubCompCapInfo(&indinfo, timeNow);
+
+#ifdef LINUX
+				gettimeofday(&end, NULL); // μs level
+				time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+
+				sr_printf(SR_LOGLEVEL_INFO, "Handle SRMsgId_IndSubCompCapInfoToDevmgr param(deviceid,token)=(%d, %s )*****time_use** is: %lf us \n", indinfo.deviceid(), indinfo.token().c_str(), time_use);
+#endif 
+			}
+			else
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndSubCompCapInfoToDevmgr param is fail.\n");
+			}
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndSubCompCapInfoToDevmgr ParsePartialFromArray failed.\n");
+		}
+
+		break;
+	}
+	case SRMsgId_IndVASAnalyVideoState:
+	{
+
 		break;
 	}
 	}//switch (header.m_msguid)
@@ -11926,7 +21085,7 @@ void CDevMgr::Handle_UpdateSelfHeartbeatToDB(void *pArg)
 	}
 }
 
-bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *pClient, CDeviceConfig* pDeviceConfig, CDevice* pDevice, CDataDictionary* pDataDictionary, SRMsgs::RspRegister* rspsend)
+bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *pClient, CDeviceConfig* pDeviceConfig, CDevice* pDevice, CDataDictionary* pDataDictionary, CCompCapLincene* pCompLincene, CSysParameter* pSysParameter, SRMsgs::RspRegister* rspsend)
 {
 
 	struct in_addr inIP;
@@ -12234,6 +21393,11 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 			{
 				pDevice->SetMaxBandwidth(req->max_bandwidth());
 			}
+			// 未携带最大终端数的服务使用配置服务的配置项
+			if (req->has_max_terms())
+			{
+				pDevice->SetMaxTerms(req->max_terms());
+			}
 			pDevice->SetStatus(1);
 			if (req->has_systemlicence())
 			{
@@ -12262,33 +21426,84 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 				//更新redis
 				if (m_pRedisConnList[e_RC_TT_MainThread] != NULL)
 				{
-					char id[256] = { 0 };
+					char id[128] = { 0 };
 					sprintf(id, "%d", pDevice->GetDeviceID());
 
 					m_pRedisConnList[e_RC_TT_MainThread]->selectdb(3);
-					char mgid[256] = { 0 };
+					char mgid[128] = { 0 };
 					sprintf(mgid, "%d", mediagroup_id);
 					m_pRedisConnList[e_RC_TT_MainThread]->setvalue("dev_deviceidandgroupid", mgid, id);
+					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister update redis db(3) Table:dev_deviceidandgroupid (deviceid,mediagroup_id)=(%s, %s)\n", id, mgid);
+					
+					// 目前只存netmp的能力集
+					if (req->svr_type() == DEVICE_SERVER::DEVICE_NETMP)
+					{
+						char local_svr_capabilityset_deviceid[128] = { 0 };
+						sprintf(local_svr_capabilityset_deviceid, "local_svr_capabilityset_%s", id);
 
+						char cMaxTermsFieldName[32] = { 0 };
+						char cMaxBandwidthFieldName[32] = { 0 };
+						char max_terms_value[65] = { 0 };
+						char max_bandwidth_value[65] = { 0 };
+
+						sprintf(cMaxTermsFieldName, "%s", "max_terms");
+						sprintf(cMaxBandwidthFieldName, "%s", "max_bandwidth");
+						sprintf(max_terms_value, "%d", pDevice->GetMaxTerms());
+						sprintf(max_bandwidth_value, "%d", pDevice->GetMaxBandwidth());
+
+						REDISKEY strlocalsvrcapabilitysetdeviceidkey = local_svr_capabilityset_deviceid;
+						REDISVDATA vCapabilitysetInfodata;
+						vCapabilitysetInfodata.clear();
+
+						REDISKEY strMaxTermsFieldName = cMaxTermsFieldName;
+						REDISVALUE strmaxtermsvalue = max_terms_value;
+						vCapabilitysetInfodata.push_back(strMaxTermsFieldName);
+						vCapabilitysetInfodata.push_back(strmaxtermsvalue);
+
+						REDISKEY strMaxBandwidthFieldName = cMaxBandwidthFieldName;
+						REDISVALUE strmaxbandwidthvalue = max_bandwidth_value;
+						vCapabilitysetInfodata.push_back(strMaxBandwidthFieldName);
+						vCapabilitysetInfodata.push_back(strmaxbandwidthvalue);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strlocalsvrcapabilitysetdeviceidkey, vCapabilitysetInfodata);
+
+						sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister update redis db(3) Table:%s capabilityset info.\n", local_svr_capabilityset_deviceid);
+					}
+	
+					if (req->svr_type() == DEVICE_SERVER::DEVICE_MC)
+					{
+						char cTimeoutMcGroupKey[32] = { 0 };
+						sprintf(cTimeoutMcGroupKey, "%s", "timeout_mc_group");
+						char* ptrRet = NULL;
+						ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(cTimeoutMcGroupKey, id);
+						if (ptrRet != NULL)
+						{
+							m_pRedisConnList[e_RC_TT_MainThread]->deletehashvalue(cTimeoutMcGroupKey, id);
+							delete ptrRet; // 不删除会导致内存泄漏
+						}
+					}
 					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister update redis db(3) Table:dev_deviceidandgroupid (deviceid,mediagroup_id)=(%s, %s)\n", id, mgid);
 					
 					char device_ipport_deviceid[128] = { 0 };
 					sprintf(device_ipport_deviceid, "device_ipport_%s", id);
 
-					char cInnerFieldName[128] = { 0 };
-					char cOuterFieldName[128] = { 0 };
-					char cVPNFieldName[128] = { 0 };
-					char cMapInternetIPsFieldName[128] = { 0 };
+					char cInnerFieldName[32] = { 0 };
+					char cOuterFieldName[32] = { 0 };
+					char cVPNFieldName[32] = { 0 };
+					char cMapInternetIPsFieldName[32] = { 0 };
+					char cNettypeFieldName[32] = { 0 };
 
 					char inner_ipprort_value[65] = { 0 };
 					char outer_ipprort_value[65] = { 0 };
 					char vpn_ipprort_value[65] = { 0 };
 					char map_internetips_value[512] = { 0 };// 格式：点分十进制ip1,点分十进制ip2,....点分十进制ipn
+					char net_type_value[33] = { 0 };
 
 					sprintf(cInnerFieldName, "%s", "inner");
 					sprintf(cOuterFieldName, "%s", "outer");
 					sprintf(cVPNFieldName, "%s", "vpn");
 					sprintf(cMapInternetIPsFieldName, "%s", "mapinternetips");
+					sprintf(cNettypeFieldName, "%s", "nettype");
 					
 					//组合内网ip port
 					unsigned long long ullinner = ((unsigned long long)(ipaddr_in.s_addr) << 32) + req->port();
@@ -12370,6 +21585,16 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 							vIPPortInfodata.push_back(strMapInternetIPsFieldName);
 							vIPPortInfodata.push_back(strmapinternetipsvalue);
 						}
+					}
+
+					if (req->svr_type() == DEVICE_SERVER::DEVICE_NETMP)
+					{
+						sprintf(net_type_value, "%d", req->nettype());
+
+						REDISKEY strNettypeFieldName = cNettypeFieldName;
+						REDISVALUE strnettypevalue = net_type_value;
+						vIPPortInfodata.push_back(strNettypeFieldName);
+						vIPPortInfodata.push_back(strnettypevalue);
 					}
 
 					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strdeviceipportdeviceidkey, vIPPortInfodata);
@@ -12510,9 +21735,41 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 				rspsend->set_failurereason("");
 				rspsend->set_groupid(mediagroup_id);
 				if (req->svr_type() == DEVICE_SERVER::DEVICE_MC
-					|| req->svr_type() == DEVICE_SERVER::DEVICE_RELAY_MC)
+					|| req->svr_type() == DEVICE_SERVER::DEVICE_RELAY_MC
+					|| req->svr_type() == DEVICE_SERVER::DEVICE_DEV)
 				{
 					rspsend->set_domainname(strdevdomainname);
+					//将mc注册消息时添加所有企业的授权信息
+
+					std::map<int, map<std::string, sLinceneInfo> > mapAllComplinceneInfo;
+					GetAllCompLinceneInfo(mapAllComplinceneInfo, pCompLincene);
+
+					for (std::map<int, std::map<std::string, sLinceneInfo> >::iterator iters_allComp = mapAllComplinceneInfo.begin(); iters_allComp != mapAllComplinceneInfo.end(); iters_allComp++)
+					{
+						sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_ReqRegister::mapAllComplincene() compid: %d   \r\n", iters_allComp->first);
+						SRMsgs::RspRegister_CompanyInfo* paddcompinfo = rspsend->add_compinfos();
+						paddcompinfo->set_companyid(iters_allComp->first);
+						paddcompinfo->set_companyname("");
+
+						for (std::map<std::string, sLinceneInfo>::iterator iter_slincene = iters_allComp->second.begin(); iter_slincene != iters_allComp->second.end();iter_slincene++)
+						{
+							sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_ReqRegister::mapAllComplincene() capkey: %s，amount:%d, starttime:%s, expiretime:%s   \r\n", iter_slincene->first.c_str(), iter_slincene->second.amount, iter_slincene->second.starttime.c_str(), iter_slincene->second.expiretime.c_str());
+							SRMsgs::RspRegister_LicenceInfo* paddliceneinfo = paddcompinfo->add_totallicinfos();
+
+							std::map<std::string, int>::iterator iter_table = m_MapCompCapReverTables.find(iter_slincene->first);
+							if (iter_table != m_MapCompCapReverTables.end())
+							{
+								paddliceneinfo->set_licencetype(iter_table->second);
+							}
+
+							paddliceneinfo->set_licencenum(iter_slincene->second.amount);
+							paddliceneinfo->set_exptime(iter_slincene->second.expiretime.c_str());
+							paddliceneinfo->set_starttime(iter_slincene->second.starttime.c_str());
+
+						}
+						
+					}
+					
 				}
 				if (req->svr_type() == DEVICE_SERVER::DEVICE_GW)
 				{
@@ -12556,6 +21813,17 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 						}
 					}
 				}
+				
+				if (req->svr_type() == DEVICE_SERVER::DEVICE_MP)
+				{
+					pSysParameter->SelectMPSysMtu();
+
+					//赋值给resp
+					rspsend->set_sysmtu(pSysParameter->GetMPMaxMtu());
+
+					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister pSysParameter->GetMPMaxMtu() is %d.\n", pSysParameter->GetMPMaxMtu());
+				}
+				
 				if (pClient != NULL)
 				{
 					bRegister = true;
@@ -12568,7 +21836,7 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 					{
 						time_t timeNow;
 						timeNow = time(NULL);
-						SyncConfInfo(req, pDevice, timeNow);
+						//SyncConfInfo(req, pDevice, timeNow);
 					}
 				}
 
@@ -12633,6 +21901,17 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 			{
 				pDevice->SetMaxBandwidth(req->max_bandwidth());
 			}
+			// 目前仅有netmp携带最大终端数
+			if (req->has_max_terms())
+			{
+				pDevice->SetMaxTerms(req->max_terms());
+			}
+			else
+			{
+				// 未携带最大终端数的服务仍然使用配置服务的配置项
+				pDevice->SetMaxTerms(pDeviceConfig->GetConfigMaxTerms());
+			}
+
 			if (req->has_systemlicence())
 			{
 				pDevice->SetSystemLicence(req->systemlicence());
@@ -12667,33 +21946,72 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 				//更新redis
 				if (m_pRedisConnList[e_RC_TT_MainThread] != NULL)
 				{
-					char id[256] = { 0 };
+					char id[128] = { 0 };
 					sprintf(id, "%d", pDevice->GetDeviceID());
 
 					m_pRedisConnList[e_RC_TT_MainThread]->selectdb(3);
-					char buf[256] = { 0 };
+					char buf[128] = { 0 };
 					sprintf(buf, "%d", mediagroup_id);
 					m_pRedisConnList[e_RC_TT_MainThread]->setvalue("dev_deviceidandgroupid", buf, id);
 
 					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister update redis db(3) Table:dev_deviceidandgroupid (deviceid,mediagroup_id)=(%s, %s)\n", id, buf);
 					
+					// 目前只存netmp的能力集
+					if (req->svr_type() == DEVICE_SERVER::DEVICE_NETMP)
+					{
+						char local_svr_capabilityset_deviceid[128] = { 0 };
+						sprintf(local_svr_capabilityset_deviceid, "local_svr_capabilityset_%s", id);
+
+						char cMaxTermsFieldName[32] = { 0 };
+						char cMaxBandwidthFieldName[32] = { 0 };
+						char max_terms_value[65] = { 0 };
+						char max_bandwidth_value[65] = { 0 };
+
+						sprintf(cMaxTermsFieldName, "%s", "max_terms");
+						sprintf(cMaxBandwidthFieldName, "%s", "max_bandwidth");
+						sprintf(max_terms_value, "%d", pDevice->GetMaxTerms());
+						sprintf(max_bandwidth_value, "%d", pDevice->GetMaxBandwidth());
+
+						REDISKEY strlocalsvrcapabilitysetdeviceidkey = local_svr_capabilityset_deviceid;
+						REDISVDATA vCapabilitysetInfodata;
+						vCapabilitysetInfodata.clear();
+
+						REDISKEY strMaxTermsFieldName = cMaxTermsFieldName;
+						REDISVALUE strmaxtermsvalue = max_terms_value;
+						vCapabilitysetInfodata.push_back(strMaxTermsFieldName);
+						vCapabilitysetInfodata.push_back(strmaxtermsvalue);
+
+						REDISKEY strMaxBandwidthFieldName = cMaxBandwidthFieldName;
+						REDISVALUE strmaxbandwidthvalue = max_bandwidth_value;
+						vCapabilitysetInfodata.push_back(strMaxBandwidthFieldName);
+						vCapabilitysetInfodata.push_back(strmaxbandwidthvalue);
+
+						bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strlocalsvrcapabilitysetdeviceidkey, vCapabilitysetInfodata);
+
+						sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister update redis db(3) Table:%s capabilityset info.\n", local_svr_capabilityset_deviceid);
+					}
+
+
 					char device_ipport_deviceid[128] = { 0 };
 					sprintf(device_ipport_deviceid, "device_ipport_%s", id);
 					
-					char cInnerFieldName[128] = { 0 };
-					char cOuterFieldName[128] = { 0 };
-					char cVPNFieldName[128] = { 0 };
-					char cMapInternetIPsFieldName[128] = { 0 };
+					char cInnerFieldName[32] = { 0 };
+					char cOuterFieldName[32] = { 0 };
+					char cVPNFieldName[32] = { 0 };
+					char cMapInternetIPsFieldName[32] = { 0 };
+					char cNettypeFieldName[32] = { 0 };
 
 					char inner_ipprort_value[65] = { 0 };
 					char outer_ipprort_value[65] = { 0 };
 					char vpn_ipprort_value[65] = { 0 };
 					char map_internetips_value[512] = { 0 };// 格式：点分十进制ip1,点分十进制ip2,....点分十进制ipn
+					char net_type_value[33] = { 0 };
 
 					sprintf(cInnerFieldName, "%s", "inner");
 					sprintf(cOuterFieldName, "%s", "outer");
 					sprintf(cVPNFieldName, "%s", "vpn");
 					sprintf(cMapInternetIPsFieldName, "%s", "mapinternetips");
+					sprintf(cNettypeFieldName, "%s", "nettype");
 
 					//组合内网ip port
 					unsigned long long ullinner = ((unsigned long long)(ipaddr_in.s_addr) << 32) + req->port();
@@ -12775,6 +22093,16 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 							vIPPortInfodata.push_back(strMapInternetIPsFieldName);
 							vIPPortInfodata.push_back(strmapinternetipsvalue);
 						}
+					}
+
+					if (req->svr_type() == DEVICE_SERVER::DEVICE_NETMP)
+					{
+						sprintf(net_type_value, "%d", req->nettype());
+
+						REDISKEY strNettypeFieldName = cNettypeFieldName;
+						REDISVALUE strnettypevalue = net_type_value;
+						vIPPortInfodata.push_back(strNettypeFieldName);
+						vIPPortInfodata.push_back(strnettypevalue);
 					}
 
 					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(strdeviceipportdeviceidkey, vIPPortInfodata);
@@ -12913,9 +22241,40 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 				rspsend->set_failurereason("");
 				rspsend->set_groupid(mediagroup_id);
 				if (req->svr_type() == DEVICE_SERVER::DEVICE_MC
-					|| req->svr_type() == DEVICE_SERVER::DEVICE_RELAY_MC)
+					|| req->svr_type() == DEVICE_SERVER::DEVICE_RELAY_MC
+					|| req->svr_type() == DEVICE_SERVER::DEVICE_DEV)
 				{
 					rspsend->set_domainname(strdevdomainname);
+
+					std::map<int, map<std::string, sLinceneInfo> > mapAllComplinceneInfo;
+					GetAllCompLinceneInfo(mapAllComplinceneInfo, pCompLincene);
+
+					for (std::map<int, std::map<std::string, sLinceneInfo> >::iterator iters_allComp = mapAllComplinceneInfo.begin(); iters_allComp != mapAllComplinceneInfo.end(); iters_allComp++)
+					{
+						sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_ReqRegister::mapAllComplincene() compid: %d   \r\n", iters_allComp->first);
+						SRMsgs::RspRegister_CompanyInfo* paddcompinfo = rspsend->add_compinfos();
+						paddcompinfo->set_companyid(iters_allComp->first);
+						paddcompinfo->set_companyname("");
+
+						for (std::map<std::string, sLinceneInfo>::iterator iter_slincene = iters_allComp->second.begin(); iter_slincene != iters_allComp->second.end(); iter_slincene++)
+						{
+							sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_ReqRegister::mapAllComplincene() capkey: %s，amount:%d, starttime:%s, expiretime:%s   \r\n", iter_slincene->first.c_str(), iter_slincene->second.amount, iter_slincene->second.starttime.c_str(), iter_slincene->second.expiretime.c_str());
+							SRMsgs::RspRegister_LicenceInfo* paddliceneinfo = paddcompinfo->add_totallicinfos();
+
+							std::map<std::string, int>::iterator iter_table = m_MapCompCapReverTables.find(iter_slincene->first);
+							if (iter_table != m_MapCompCapReverTables.end())
+							{
+								paddliceneinfo->set_licencetype(iter_table->second);
+							}
+
+							paddliceneinfo->set_licencenum(iter_slincene->second.amount);
+							paddliceneinfo->set_exptime(iter_slincene->second.expiretime.c_str());
+							paddliceneinfo->set_starttime(iter_slincene->second.starttime.c_str());
+
+						}
+
+					}
+
 				}
 				if (req->svr_type() == DEVICE_SERVER::DEVICE_GW)
 				{
@@ -12959,6 +22318,17 @@ bool CDevMgr::ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *
 						}
 					}
 				}
+				
+				if (req->svr_type() == DEVICE_SERVER::DEVICE_MP)
+				{
+					pSysParameter->SelectMPSysMtu();
+
+					//赋值给resp
+					rspsend->set_sysmtu(pSysParameter->GetMPMaxMtu());
+
+					sr_printf(SR_LOGLEVEL_INFO, "SRMsgId_ReqRegister pSysParameter->GetMPMaxMtu() is %d.\n", pSysParameter->GetMPMaxMtu());
+				}
+
 				if (pClient != NULL)
 				{
 					bRegister = true;
@@ -13047,6 +22417,13 @@ bool CDevMgr::ParseServerData(AcitiveConnect *pSvr, CAsyncThread* pThread, const
 		pConfLiveSetting = iter_mapAsyncThreadConfLiveSetting->second;
 	}
 
+	CCompCapLincene* pCompLinceneInfo = NULL;
+	std::map<CAsyncThread*, CCompCapLincene*>::iterator iter_mapAsyncThreadLinceneCompCap = m_mapAsyncThreadLinceneCompCap.find(pThread);
+	if (iter_mapAsyncThreadLinceneCompCap != m_mapAsyncThreadLinceneCompCap.end())
+	{
+		pCompLinceneInfo = iter_mapAsyncThreadLinceneCompCap->second;
+	}
+
 	if (pDevice == NULL
 		|| pDeviceConfig == NULL
 		|| pConference == NULL
@@ -13054,7 +22431,8 @@ bool CDevMgr::ParseServerData(AcitiveConnect *pSvr, CAsyncThread* pThread, const
 		|| pUserConfDetail == NULL
 		|| pDeviceConfDetail == NULL
 		|| pConfParticipant == NULL
-		|| pConfLiveSetting == NULL)
+		|| pConfLiveSetting == NULL
+		|| pCompLinceneInfo == NULL)
 	{
 		return false;
 	}
@@ -13108,7 +22486,7 @@ bool CDevMgr::ParseServerData(AcitiveConnect *pSvr, CAsyncThread* pThread, const
 
 			//if (rsp.has_ip() && rsp.has_port() && rsp.has_auth_password() && rsp.has_svr_type() && rsp.has_cpunums())
 			//{
-				processRspRegister(&rsp);
+			processRspRegister(&rsp, pCompLinceneInfo);
 			//}
 			//else
 			//{
@@ -13263,11 +22641,50 @@ bool CDevMgr::ParseServerData(AcitiveConnect *pSvr, CAsyncThread* pThread, const
 		}
 		break;
 	}
+	case SRMsgId_IndUpCompCapInfoToDevmgr:
+	{
+		SRMsgs::IndUpCompCapInfoToDevmgr ind;
+		if (ind.ParsePartialFromArray(pData + 16, nLen - 16))
+		{
+
+			if (m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr != pSvr)
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndUpCompCapInfoToDevmgr devmgr isnot the current connected devmgr\n");
+				return false;
+			}
+
+
+			sr_printf(SR_LOGLEVEL_DEBUG, "devmgr(server)->me(client), SRMsgId_IndUpCompCapInfoToDevmgr -- \n%s\n", ind.Utf8DebugString().c_str());
+
+			//#ifdef LINUX
+			//			float time_use = 0;
+			//			struct timeval start;
+			//			struct timeval end;
+			//			gettimeofday(&start, NULL); // μs level
+			//#endif 
+			//获取当前时间串
+			time_t timeNow;
+			struct tm *ptmNow;
+			char szTime[30];
+			timeNow = time(NULL);
+			ptmNow = localtime(&timeNow);
+			sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+			SyncUpCompCapInfo(&ind, timeNow);
+
+		}
+		else
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "SRMsgId_IndUpCompCapInfoToDevmgr ParsePartialFromArray failed.\n");
+		}
+
+		break;
+	}
 	}//switch (header.m_msguid)
 	return true;
 }
 
-SR_void CDevMgr::processRspRegister(const SRMsgs::RspRegister* s)
+SR_void CDevMgr::processRspRegister(const SRMsgs::RspRegister* s, CCompCapLincene* pCompLincene)
 {
 	if ((!s->has_isok()) || (!s->has_deviceid()) || (!s->has_token()))
 	{
@@ -13427,21 +22844,25 @@ SR_void CDevMgr::processRspRegister(const SRMsgs::RspRegister* s)
 						vGetFileds.push_back(strOuterFieldName);
 						vGetFileds.push_back(strVPNFieldName);
 
-						bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-						if (bhashHMGet_ok
-							&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+						bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+						if (bExist)
 						{
-							pSvrinfo = psvrdomaininfo->add_svrinfos();
-							pSvrinfo->set_svrtype(uiSvrtype);
-							pSvrinfo->set_deviceid(uiDeviceid);
+							bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+							if (bhashHMGet_ok
+								&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+							{
+								pSvrinfo = psvrdomaininfo->add_svrinfos();
+								pSvrinfo->set_svrtype(uiSvrtype);
+								pSvrinfo->set_deviceid(uiDeviceid);
 
-							SRMsgs::IndSubSvrInfoToDevmgr_IPPORTInfo* pSvripportinfo = new SRMsgs::IndSubSvrInfoToDevmgr_IPPORTInfo();
-							pSvripportinfo->set_inner(vRedisReplyArray[0].str);
-							pSvripportinfo->set_outer(vRedisReplyArray[1].str);
-							pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
-							pSvrinfo->set_allocated_ipport(pSvripportinfo);
+								SRMsgs::IndSubSvrInfoToDevmgr_IPPORTInfo* pSvripportinfo = new SRMsgs::IndSubSvrInfoToDevmgr_IPPORTInfo();
+								pSvripportinfo->set_inner(vRedisReplyArray[0].str);
+								pSvripportinfo->set_outer(vRedisReplyArray[1].str);
+								pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
+								pSvrinfo->set_allocated_ipport(pSvripportinfo);
 
-							bNeedSend = true;
+								bNeedSend = true;
+							}
 						}
 					}
 
@@ -13457,6 +22878,78 @@ SR_void CDevMgr::processRspRegister(const SRMsgs::RspRegister* s)
 			}
 		}
 	}
+
+	//主动推送本级域的企业授权信息
+	std::map<int, map<std::string, sLinceneInfo> > mapAllComplinceneInfo;
+	GetAllCompLinceneInfo(mapAllComplinceneInfo, pCompLincene);
+	if (mapAllComplinceneInfo.size() > 0)
+	{
+		bool bNeedSend = false;
+		SRMsgs::IndSubCompCapInfoToDevmgr  indcompcapinfo;
+		for (std::map<int, std::map<std::string, sLinceneInfo> >::iterator iters_allComp = mapAllComplinceneInfo.begin(); iters_allComp != mapAllComplinceneInfo.end(); iters_allComp++)
+		{
+			sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_RspRegister::processRspRegister  mapAllComplincene() compid: %d   \r\n", iters_allComp->first);
+
+			indcompcapinfo.set_deviceid(m_uiMyDeviceid);
+			indcompcapinfo.set_token(m_szMyToken);
+			indcompcapinfo.set_operationtype(1);
+			SRMsgs::IndSubCompCapInfoToDevmgr_CompanyInfo* psubcompcapinfo = indcompcapinfo.add_compinfos();
+			psubcompcapinfo->set_companyid(iters_allComp->first);
+
+			for (std::map<std::string, sLinceneInfo>::iterator iter_slincene = iters_allComp->second.begin(); iter_slincene != iters_allComp->second.end(); iter_slincene++)
+			{
+				sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_RspRegister::processRspRegister   mapAllComplincene() capkey: %s，amount:%d, starttime:%s, expiretime:%s   \r\n", iter_slincene->first.c_str(), iter_slincene->second.amount, iter_slincene->second.starttime.c_str(), iter_slincene->second.expiretime.c_str());
+				SRMsgs::IndSubCompCapInfoToDevmgr_LicenceInfo* paddliceneinfo = psubcompcapinfo->add_totallicinfos();
+
+				std::map<std::string, int>::iterator iter_table = m_MapCompCapReverTables.find(iter_slincene->first);
+				if (iter_table != m_MapCompCapReverTables.end())
+				{
+					paddliceneinfo->set_licencetype(iter_table->second);
+				}
+
+				paddliceneinfo->set_licencenum(iter_slincene->second.amount);
+				paddliceneinfo->set_exptime(iter_slincene->second.expiretime.c_str());
+				paddliceneinfo->set_starttime(iter_slincene->second.starttime.c_str());
+
+				bNeedSend = true;
+			}
+
+		}
+
+		if (m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr && bNeedSend == true)
+		{
+
+			SerialAndSendDevmgr((AcitiveConnect*)(m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr), getMsgIdByClassName(IndSubCompCapInfoToDevmgr), &indcompcapinfo);
+		}
+	}
+	
+	//将上级devmgr的企业授权同步到本级redis
+	if (s->compinfos_size() > 0)
+	{
+		std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapUpdateComplinceneInfo;
+
+		for (int i = 0; i < s->compinfos_size(); i++)
+		{
+			const SRMsgs::RspRegister_CompanyInfo getLinceneInfo = s->compinfos(i);
+
+			for (int j = 0; j < getLinceneInfo.totallicinfos_size(); j++)
+			{
+				const SRMsgs::RspRegister_LicenceInfo lincinfo = getLinceneInfo.totallicinfos(j);
+				map<unsigned int, sLinceneInfo> CompLinceneInfo;
+				sLinceneInfo tempInfo;
+				tempInfo.amount = lincinfo.licencenum();
+				tempInfo.starttime = lincinfo.starttime();
+				tempInfo.expiretime = lincinfo.exptime();
+				CompLinceneInfo.insert(make_pair(lincinfo.licencetype(),tempInfo));
+
+				mapUpdateComplinceneInfo.insert(make_pair(getLinceneInfo.companyid(), CompLinceneInfo));
+			}
+			SyncCompIdToRedis(0,getLinceneInfo.companyid());
+		}
+		//update redis
+		UpdateCompanyInfoRedis(mapUpdateComplinceneInfo,1,false);
+	}
+
 }
 
 void CDevMgr::SyncUpSvrInfo(const SRMsgs::IndUpSvrInfoToDevmgr* ind, time_t timeNow)
@@ -14248,9 +23741,9 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 									char device_ipport_deviceid[128] = { 0 };
 									sprintf(device_ipport_deviceid, "device_ipport_%s", cOnlineDeviceidbuf);
 
-									char cInnerFieldName[128] = { 0 };
-									char cOuterFieldName[128] = { 0 };
-									char cVPNFieldName[128] = { 0 };
+									char cInnerFieldName[32] = { 0 };
+									char cOuterFieldName[32] = { 0 };
+									char cVPNFieldName[32] = { 0 };
 
 									//char inner_ipprort_value[65] = { 0 };
 									//char outer_ipprort_value[65] = { 0 };
@@ -14273,175 +23766,183 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 									vGetFileds.push_back(strInnerFieldName);
 									vGetFileds.push_back(strOuterFieldName);
 									vGetFileds.push_back(strVPNFieldName);
-									
-									bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-									if (bhashHMGet_ok
-										&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+
+									bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+									if (bExist)
 									{
-										unsigned int rspip = 0;
-										unsigned int rspport = 0;
-										unsigned long long ullrspIPPort = 0;
-
-										// 获取的内网地址
-										if (req_get_net_type == 0)
+										bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+										if (bhashHMGet_ok
+											&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 										{
-											if (vRedisReplyArray[0].str.length() > 0
-												&& vRedisReplyArray[1].str.length() == 0
-												&& vRedisReplyArray[2].str.length() == 0)
+											unsigned int rspip = 0;
+											unsigned int rspport = 0;
+											unsigned long long ullrspIPPort = 0;
+
+											// 获取的内网地址
+											if (req_get_net_type == 0)
 											{
+												if (vRedisReplyArray[0].str.length() > 0
+													&& vRedisReplyArray[1].str.length() == 0
+													&& vRedisReplyArray[2].str.length() == 0)
+												{
 #ifdef WIN32
-												sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+													sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-												sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+													sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+												}
 											}
-										}
-										else if (req_get_net_type == 1)// 获取的外网地址
-										{
-											if (vRedisReplyArray[0].str.length() > 0
-												&& vRedisReplyArray[1].str.length() > 0
-												&& vRedisReplyArray[2].str.length() == 0)
+											else if (req_get_net_type == 1)// 获取的外网地址
 											{
+												if (vRedisReplyArray[0].str.length() > 0
+													&& vRedisReplyArray[1].str.length() > 0
+													&& vRedisReplyArray[2].str.length() == 0)
+												{
 #ifdef WIN32
-												sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
+													sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-												sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
+													sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+												}
 											}
-										}
-										else if (req_get_net_type == 2) // 获取的vpn地址
-										{
-											if (vRedisReplyArray[0].str.length() > 0
-												&& vRedisReplyArray[1].str.length() == 0
-												&& vRedisReplyArray[2].str.length() > 0)
+											else if (req_get_net_type == 2) // 获取的vpn地址
 											{
+												if (vRedisReplyArray[0].str.length() > 0
+													&& vRedisReplyArray[1].str.length() == 0
+													&& vRedisReplyArray[2].str.length() > 0)
+												{
 #ifdef WIN32
-												sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+													sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-												sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+													sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+												}
+											}
+
+											rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+											rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
+
+											// 获取的地址为无效地址
+											if (rspip == 0
+												|| rspport == 0)
+											{
+												continue;
+											}
+
+											if (req_get_svr_type == DEVICE_SERVER::DEVICE_MC)
+											{
+												char svrname_load_s[128] = { 0 };
+												sprintf(svrname_load_s, "%s_%d", svrname_groupid.c_str(), tempDeviceid);
+												m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+
+												char cTernumFieldName[128] = { 0 };
+												char cCpuFieldName[128] = { 0 };
+												char cSRcntFieldName[128] = { 0 };
+												char cSTDcntFieldName[128] = { 0 };
+												char cRECcntFieldName[128] = { 0 };
+												char cConfcntFieldName[128] = { 0 };
+												char cLivecntFieldName[128] = { 0 };
+
+												sprintf(cTernumFieldName, "%s", "ternum");
+												sprintf(cCpuFieldName, "%s", "cpu");
+												sprintf(cSRcntFieldName, "%s", "srcnt");
+												sprintf(cSTDcntFieldName, "%s", "stdcnt");
+												sprintf(cRECcntFieldName, "%s", "reccnt");
+												sprintf(cConfcntFieldName, "%s", "confcnt");
+												sprintf(cLivecntFieldName, "%s", "livecnt");
+
+												REDISKEY strsvrnamegroupiddeviceidkey = svrname_load_s;
+												REDISFILEDS vGetFileds;
+												vGetFileds.clear();
+												RedisReplyArray vRedisReplyArray;
+												vRedisReplyArray.clear();
+
+												// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
+												REDISKEY strTernumFieldName = cTernumFieldName;
+												REDISKEY strCpuFieldName = cCpuFieldName;
+												REDISKEY strSRcntFieldName = cSRcntFieldName;
+												REDISKEY strSTDcntFieldName = cSTDcntFieldName;
+												REDISKEY strRECcntFieldName = cRECcntFieldName;
+												REDISKEY strConfcntFieldName = cConfcntFieldName;
+												REDISKEY strLivecntFieldName = cLivecntFieldName;
+												vGetFileds.push_back(strTernumFieldName);
+												vGetFileds.push_back(strCpuFieldName);
+												vGetFileds.push_back(strSRcntFieldName);
+												vGetFileds.push_back(strSTDcntFieldName);
+												vGetFileds.push_back(strRECcntFieldName);
+												vGetFileds.push_back(strConfcntFieldName);
+												vGetFileds.push_back(strLivecntFieldName);
+
+												bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(svrname_load_s);
+												if (bExist)
+												{
+													bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrnamegroupiddeviceidkey, vGetFileds, vRedisReplyArray);
+													if (bhashHMGet_ok
+														&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+													{
+														bHaveDeviceinfo = true;
+														int iTernum = 0;
+														int iCpu = 0;
+
+														sscanf(vRedisReplyArray[0].str.c_str(), "%d", &iTernum);
+														sscanf(vRedisReplyArray[1].str.c_str(), "%d", &iCpu);
+
+														// 目前没有按照负载大小进行排序，把所有的在线设备都传给对方
+														SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+														pdinfo->set_deviceid(tempDeviceid);
+														pdinfo->set_svr_type(req->get_svr_type());
+														pdinfo->set_get_svr_type(req->get_svr_type());
+														pdinfo->set_groupid(uiGroupid);
+														pdinfo->set_ip(rspip);
+														pdinfo->set_port(rspport);
+
+														pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行行带宽；mp:上行带宽（netmp->mp）；mc：终端连接数；gw：终端连接数；crs：磁盘使用率]
+														pdinfo->set_load2(iCpu);//set_load2设置内容[netmp:终端连接数；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+													}
+													else
+													{
+														sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(0)== Table:%s == get mc load error onlinedeviceid=%s !!!\n", svrname_load_s, cOnlineDeviceidbuf);
+													}
+												}
+											}
+											else if (req_get_svr_type == DEVICE_SERVER::DEVICE_SRS)
+											{
+												char srs_isroot_groupid_s[128] = { 0 };
+												sprintf(srs_isroot_groupid_s, "srs_isroot_%s", cGroupid);
+												m_pRedisConnList[e_RC_TT_MainThread]->selectdb(3);
+												char *ptrRetisroot = NULL;
+												ptrRetisroot = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(srs_isroot_groupid_s, cOnlineDeviceidbuf); // 获取该key对应的value
+												if (ptrRetisroot != NULL)
+												{
+													bHaveDeviceinfo = true;
+													unsigned int uiisroot = 0;
+													sscanf(ptrRetisroot, "%u", &uiisroot);
+
+													delete ptrRetisroot; // 不删除会导致内存泄漏
+
+
+													// 目前没有按照负载大小进行排序，把所有的在线设备都传给对方
+													SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+													pdinfo->set_deviceid(tempDeviceid);
+													pdinfo->set_svr_type(req->get_svr_type());
+													pdinfo->set_get_svr_type(req->get_svr_type());
+													pdinfo->set_groupid(uiGroupid);
+													pdinfo->set_ip(rspip);
+													pdinfo->set_port(rspport);
+
+													pdinfo->set_load(uiisroot); // srs是否根节点,0-不是,1-是
+													pdinfo->set_load2(0);// 不关注
+												}
+												else
+												{
+													sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get srs is root error onlinedeviceid=%s !!!\n", srs_isroot_groupid_s, cOnlineDeviceidbuf);
+												}
 											}
 										}
-
-										rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-										rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
-										
-										// 获取的地址为无效地址
-										if (rspip == 0
-											|| rspport == 0)
+										else // 无法获取该设备的ip + port
 										{
-											continue;
+											sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, cOnlineDeviceidbuf);
 										}
-										
-										if (req_get_svr_type == DEVICE_SERVER::DEVICE_MC)
-										{
-											char svrname_load_s[128] = { 0 };
-											sprintf(svrname_load_s, "%s_%d", svrname_groupid.c_str(), tempDeviceid);
-											m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
-
-											char cTernumFieldName[128] = { 0 };
-											char cCpuFieldName[128] = { 0 };
-											char cSRcntFieldName[128] = { 0 };
-											char cSTDcntFieldName[128] = { 0 };
-											char cRECcntFieldName[128] = { 0 };
-											char cConfcntFieldName[128] = { 0 };
-											char cLivecntFieldName[128] = { 0 };
-
-											sprintf(cTernumFieldName, "%s", "ternum");
-											sprintf(cCpuFieldName, "%s", "cpu");
-											sprintf(cSRcntFieldName, "%s", "srcnt");
-											sprintf(cSTDcntFieldName, "%s", "stdcnt");
-											sprintf(cRECcntFieldName, "%s", "reccnt");
-											sprintf(cConfcntFieldName, "%s", "confcnt");
-											sprintf(cLivecntFieldName, "%s", "livecnt");
-
-											REDISKEY strsvrnamegroupiddeviceidkey = svrname_load_s;
-											REDISFILEDS vGetFileds;
-											vGetFileds.clear();
-											RedisReplyArray vRedisReplyArray;
-											vRedisReplyArray.clear();
-
-											// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
-											REDISKEY strTernumFieldName = cTernumFieldName;
-											REDISKEY strCpuFieldName = cCpuFieldName;
-											REDISKEY strSRcntFieldName = cSRcntFieldName;
-											REDISKEY strSTDcntFieldName = cSTDcntFieldName;
-											REDISKEY strRECcntFieldName = cRECcntFieldName;
-											REDISKEY strConfcntFieldName = cConfcntFieldName;
-											REDISKEY strLivecntFieldName = cLivecntFieldName;
-											vGetFileds.push_back(strTernumFieldName);
-											vGetFileds.push_back(strCpuFieldName);
-											vGetFileds.push_back(strSRcntFieldName);
-											vGetFileds.push_back(strSTDcntFieldName);
-											vGetFileds.push_back(strRECcntFieldName);
-											vGetFileds.push_back(strConfcntFieldName);
-											vGetFileds.push_back(strLivecntFieldName);
-
-											bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrnamegroupiddeviceidkey, vGetFileds, vRedisReplyArray);
-											if (bhashHMGet_ok
-												&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
-											{
-												bHaveDeviceinfo = true;
-												int iTernum = 0;
-												int iCpu = 0;
-
-												sscanf(vRedisReplyArray[0].str.c_str(), "%d", &iTernum);
-												sscanf(vRedisReplyArray[1].str.c_str(), "%d", &iCpu);
-												
-												// 目前没有按照负载大小进行排序，把所有的在线设备都传给对方
-												SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-												pdinfo->set_deviceid(tempDeviceid);
-												pdinfo->set_svr_type(req->get_svr_type());
-												pdinfo->set_get_svr_type(req->get_svr_type());
-												pdinfo->set_groupid(uiGroupid);
-												pdinfo->set_ip(rspip);
-												pdinfo->set_port(rspport);
-
-												pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行行带宽；mp:上行带宽（netmp->mp）；mc：终端连接数；gw：终端连接数；crs：磁盘使用率]
-												pdinfo->set_load2(iCpu);//set_load2设置内容[netmp:终端连接数；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
-											}
-											else
-											{
-												sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(0)== Table:%s == get mc load error onlinedeviceid=%s !!!\n", svrname_load_s, cOnlineDeviceidbuf);
-											}
-										}
-										else if (req_get_svr_type == DEVICE_SERVER::DEVICE_SRS)
-										{
-											char srs_isroot_groupid_s[128] = { 0 };
-											sprintf(srs_isroot_groupid_s, "srs_isroot_%s", cGroupid);
-											m_pRedisConnList[e_RC_TT_MainThread]->selectdb(3);
-											char *ptrRetisroot = NULL;
-											ptrRetisroot = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(srs_isroot_groupid_s, cOnlineDeviceidbuf); // 获取该key对应的value
-											if (ptrRetisroot != NULL)
-											{
-												bHaveDeviceinfo = true;
-												unsigned int uiisroot = 0;
-												sscanf(ptrRetisroot, "%u", &uiisroot);
-
-												delete ptrRetisroot; // 不删除会导致内存泄漏
-
-
-												// 目前没有按照负载大小进行排序，把所有的在线设备都传给对方
-												SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-												pdinfo->set_deviceid(tempDeviceid);
-												pdinfo->set_svr_type(req->get_svr_type());
-												pdinfo->set_get_svr_type(req->get_svr_type());
-												pdinfo->set_groupid(uiGroupid);
-												pdinfo->set_ip(rspip);
-												pdinfo->set_port(rspport);
-
-												pdinfo->set_load(uiisroot); // srs是否根节点,0-不是,1-是
-												pdinfo->set_load2(0);// 不关注
-											}
-											else
-											{
-												sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get srs is root error onlinedeviceid=%s !!!\n", srs_isroot_groupid_s, cOnlineDeviceidbuf);
-											}
-										}
-									}
-									else // 无法获取该设备的ip + port
-									{
-										sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, cOnlineDeviceidbuf);
 									}
 								} 
 								else
@@ -14690,9 +24191,9 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 															char device_ipport_deviceid[128] = { 0 };
 															sprintf(device_ipport_deviceid, "device_ipport_%s", deviceid_value);
 
-															char cInnerFieldName[128] = { 0 };
-															char cOuterFieldName[128] = { 0 };
-															char cVPNFieldName[128] = { 0 };
+															char cInnerFieldName[32] = { 0 };
+															char cOuterFieldName[32] = { 0 };
+															char cVPNFieldName[32] = { 0 };
 
 															//char inner_ipprort_value[65] = { 0 };
 															//char outer_ipprort_value[65] = { 0 };
@@ -14716,93 +24217,97 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 															vGetFileds.push_back(strOuterFieldName);
 															vGetFileds.push_back(strVPNFieldName);
 
-															bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-															if (bhashHMGet_ok
-																&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+															bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+															if (bExist)
 															{
-																unsigned int rspip = 0;
-																unsigned int rspport = 0;
-																unsigned long long ullrspIPPort = 0;
-
-																// 获取的内网地址
-																if (req_get_net_type == 0)
+																bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+																if (bhashHMGet_ok
+																	&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() == 0
-																		&& vRedisReplyArray[2].str.length() == 0)
+																	unsigned int rspip = 0;
+																	unsigned int rspport = 0;
+																	unsigned long long ullrspIPPort = 0;
+
+																	// 获取的内网地址
+																	if (req_get_net_type == 0)
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() == 0
+																			&& vRedisReplyArray[2].str.length() == 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
-																else if (req_get_net_type == 1)// 获取的外网地址
-																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() > 0
-																		&& vRedisReplyArray[2].str.length() == 0)
+																	else if (req_get_net_type == 1)// 获取的外网地址
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() > 0
+																			&& vRedisReplyArray[2].str.length() == 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
-																else if (req_get_net_type == 2) // 获取的vpn地址
-																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() == 0
-																		&& vRedisReplyArray[2].str.length() > 0)
+																	else if (req_get_net_type == 2) // 获取的vpn地址
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() == 0
+																			&& vRedisReplyArray[2].str.length() > 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
 
-																rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-																rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
+																	rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+																	rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
 
-																// 获取的地址为无效地址
-																if (rspip == 0
-																	|| rspport == 0)
-																{
-																}
-																else
-																{
-																	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
-																	char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(svrname_groupid.c_str(), deviceid_value);
-																	if (pload != NULL)
+																	// 获取的地址为无效地址
+																	if (rspip == 0
+																		|| rspport == 0)
 																	{
-																		int iTernum = 0;
-																		sscanf(pload, "%d", &iTernum);
+																	}
+																	else
+																	{
+																		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
+																		char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(svrname_groupid.c_str(), deviceid_value);
+																		if (pload != NULL)
+																		{
+																			int iTernum = 0;
+																			sscanf(pload, "%d", &iTernum);
 
-																		delete pload; // 不删除会导致内存泄漏
-																		
-																		SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-																		pdinfo->set_deviceid(uiDeviceid);
-																		pdinfo->set_svr_type(uiSvrtype);
-																		pdinfo->set_get_svr_type(uiSvrtype);
-																		pdinfo->set_groupid(uiGroupid);
-																		pdinfo->set_domainname(req_get_svr_domainname);
-																		pdinfo->set_ip(rspip);
-																		pdinfo->set_port(rspport);
+																			delete pload; // 不删除会导致内存泄漏
 
-																		pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
-																		pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+																			SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+																			pdinfo->set_deviceid(uiDeviceid);
+																			pdinfo->set_svr_type(uiSvrtype);
+																			pdinfo->set_get_svr_type(uiSvrtype);
+																			pdinfo->set_groupid(uiGroupid);
+																			pdinfo->set_domainname(req_get_svr_domainname);
+																			pdinfo->set_ip(rspip);
+																			pdinfo->set_port(rspport);
 
-																		bHaveDeviceinfo = true;
+																			pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
+																			pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+
+																			bHaveDeviceinfo = true;
+																		}
 																	}
 																}
-															}
-															else // 无法获取该设备的ip + port
-															{
-																sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, deviceid_value);
+																else // 无法获取该设备的ip + port
+																{
+																	sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, deviceid_value);
+																}
 															}
 														}
 													}													
@@ -14883,9 +24388,9 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 															char svrtype_ipport_domainname_deviceid_s[128] = { 0 };
 															sprintf(svrtype_ipport_domainname_deviceid_s, "relaymc_ipport_%s_%s", req_get_svr_domainname.c_str(), deviceid_value);
 
-															char cInnerFieldName[128] = { 0 };
-															char cOuterFieldName[128] = { 0 };
-															char cVPNFieldName[128] = { 0 };
+															char cInnerFieldName[32] = { 0 };
+															char cOuterFieldName[32] = { 0 };
+															char cVPNFieldName[32] = { 0 };
 
 															//char inner_ipprort_value[65] = { 0 };
 															//char outer_ipprort_value[65] = { 0 };
@@ -14909,94 +24414,98 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 															vGetFileds.push_back(strOuterFieldName);
 															vGetFileds.push_back(strVPNFieldName);
 
-															bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrtypeipportdomainnamedeviceidkey, vGetFileds, vRedisReplyArray);
-															if (bhashHMGet_ok
-																&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+															bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(svrtype_ipport_domainname_deviceid_s);
+															if (bExist)
 															{
-																unsigned int rspip = 0;
-																unsigned int rspport = 0;
-																unsigned long long ullrspIPPort = 0;
-
-																// 获取的内网地址
-																if (req_get_net_type == 0)
+																bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrtypeipportdomainnamedeviceidkey, vGetFileds, vRedisReplyArray);
+																if (bhashHMGet_ok
+																	&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() == 0
-																		&& vRedisReplyArray[2].str.length() == 0)
+																	unsigned int rspip = 0;
+																	unsigned int rspport = 0;
+																	unsigned long long ullrspIPPort = 0;
+
+																	// 获取的内网地址
+																	if (req_get_net_type == 0)
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() == 0
+																			&& vRedisReplyArray[2].str.length() == 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
-																else if (req_get_net_type == 1)// 获取的外网地址
-																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() > 0
-																		&& vRedisReplyArray[2].str.length() == 0)
+																	else if (req_get_net_type == 1)// 获取的外网地址
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() > 0
+																			&& vRedisReplyArray[2].str.length() == 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
-																else if (req_get_net_type == 2) // 获取的vpn地址
-																{
-																	if (vRedisReplyArray[0].str.length() > 0
-																		&& vRedisReplyArray[1].str.length() == 0
-																		&& vRedisReplyArray[2].str.length() > 0)
+																	else if (req_get_net_type == 2) // 获取的vpn地址
 																	{
+																		if (vRedisReplyArray[0].str.length() > 0
+																			&& vRedisReplyArray[1].str.length() == 0
+																			&& vRedisReplyArray[2].str.length() > 0)
+																		{
 #ifdef WIN32
-																		sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																		sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+																			sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																		}
 																	}
-																}
 
-																rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-																rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
+																	rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+																	rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
 
-																// 获取的地址为无效地址
-																if (rspip == 0
-																	|| rspport == 0)
-																{
-																}
-																else
-																{
-																	m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
-																	char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(sys_svrtype_domainname_s, deviceid_value);
-																	if (pload != NULL)
+																	// 获取的地址为无效地址
+																	if (rspip == 0
+																		|| rspport == 0)
 																	{
-																		int iTernum = 0;
-																		sscanf(pload, "%d", &iTernum);
+																	}
+																	else
+																	{
+																		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
+																		char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(sys_svrtype_domainname_s, deviceid_value);
+																		if (pload != NULL)
+																		{
+																			int iTernum = 0;
+																			sscanf(pload, "%d", &iTernum);
 
-																		delete pload; // 不删除会导致内存泄漏
+																			delete pload; // 不删除会导致内存泄漏
 
-																		bGetdevinfoOK = true;
-																		SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-																		pdinfo->set_deviceid(uiDeviceid);
-																		pdinfo->set_svr_type(uiSvrtype);
-																		pdinfo->set_get_svr_type(uiSvrtype);
-																		pdinfo->set_groupid(uiGroupid);
-																		pdinfo->set_domainname(req_get_svr_domainname);
-																		pdinfo->set_ip(rspip);
-																		pdinfo->set_port(rspport);
+																			bGetdevinfoOK = true;
+																			SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+																			pdinfo->set_deviceid(uiDeviceid);
+																			pdinfo->set_svr_type(uiSvrtype);
+																			pdinfo->set_get_svr_type(uiSvrtype);
+																			pdinfo->set_groupid(uiGroupid);
+																			pdinfo->set_domainname(req_get_svr_domainname);
+																			pdinfo->set_ip(rspip);
+																			pdinfo->set_port(rspport);
 
-																		pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
-																		pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+																			pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
+																			pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
 
-																		bHaveDeviceinfo = true;
+																			bHaveDeviceinfo = true;
+																		}
 																	}
 																}
-															}
-															else // 无法获取该设备的ip + port
-															{
-																sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", svrtype_ipport_domainname_deviceid_s, deviceid_value);
+																else // 无法获取该设备的ip + port
+																{
+																	sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", svrtype_ipport_domainname_deviceid_s, deviceid_value);
+																}
 															}
 														}
 													}
@@ -15112,9 +24621,9 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 																char device_ipport_deviceid[128] = { 0 };
 																sprintf(device_ipport_deviceid, "device_ipport_%s", deviceid_value);
 
-																char cInnerFieldName[128] = { 0 };
-																char cOuterFieldName[128] = { 0 };
-																char cVPNFieldName[128] = { 0 };
+																char cInnerFieldName[32] = { 0 };
+																char cOuterFieldName[32] = { 0 };
+																char cVPNFieldName[32] = { 0 };
 
 																//char inner_ipprort_value[65] = { 0 };
 																//char outer_ipprort_value[65] = { 0 };
@@ -15138,94 +24647,98 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 																vGetFileds.push_back(strOuterFieldName);
 																vGetFileds.push_back(strVPNFieldName);
 
-																bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-																if (bhashHMGet_ok
-																	&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+																if (bExist)
 																{
-																	unsigned int rspip = 0;
-																	unsigned int rspport = 0;
-																	unsigned long long ullrspIPPort = 0;
-
-																	// 获取的内网地址
-																	if (req_get_net_type == 0)
+																	bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+																	if (bhashHMGet_ok
+																		&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() == 0
-																			&& vRedisReplyArray[2].str.length() == 0)
+																		unsigned int rspip = 0;
+																		unsigned int rspport = 0;
+																		unsigned long long ullrspIPPort = 0;
+
+																		// 获取的内网地址
+																		if (req_get_net_type == 0)
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() == 0
+																				&& vRedisReplyArray[2].str.length() == 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
-																	else if (req_get_net_type == 1)// 获取的外网地址
-																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() > 0
-																			&& vRedisReplyArray[2].str.length() == 0)
+																		else if (req_get_net_type == 1)// 获取的外网地址
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() > 0
+																				&& vRedisReplyArray[2].str.length() == 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
-																	else if (req_get_net_type == 2) // 获取的vpn地址
-																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() == 0
-																			&& vRedisReplyArray[2].str.length() > 0)
+																		else if (req_get_net_type == 2) // 获取的vpn地址
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() == 0
+																				&& vRedisReplyArray[2].str.length() > 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
 
-																	rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-																	rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
+																		rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+																		rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
 
-																	// 获取的地址为无效地址
-																	if (rspip == 0
-																		|| rspport == 0)
-																	{
-																	}
-																	else
-																	{
-																		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
-																		char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(svrname_groupid.c_str(), deviceid_value);
-																		if (pload != NULL)
+																		// 获取的地址为无效地址
+																		if (rspip == 0
+																			|| rspport == 0)
 																		{
-																			int iTernum = 0;
-																			sscanf(pload, "%d", &iTernum);
+																		}
+																		else
+																		{
+																			m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
+																			char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(svrname_groupid.c_str(), deviceid_value);
+																			if (pload != NULL)
+																			{
+																				int iTernum = 0;
+																				sscanf(pload, "%d", &iTernum);
 
-																			delete pload; // 不删除会导致内存泄漏
+																				delete pload; // 不删除会导致内存泄漏
 
-																			bGetdevinfoOK = true;
-																			SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-																			pdinfo->set_deviceid(uiDeviceid);
-																			pdinfo->set_svr_type(uiSvrtype);
-																			pdinfo->set_get_svr_type(uiSvrtype);
-																			pdinfo->set_groupid(uiGroupid);
-																			pdinfo->set_domainname(strdomainname);
-																			pdinfo->set_ip(rspip);
-																			pdinfo->set_port(rspport);
+																				bGetdevinfoOK = true;
+																				SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+																				pdinfo->set_deviceid(uiDeviceid);
+																				pdinfo->set_svr_type(uiSvrtype);
+																				pdinfo->set_get_svr_type(uiSvrtype);
+																				pdinfo->set_groupid(uiGroupid);
+																				pdinfo->set_domainname(strdomainname);
+																				pdinfo->set_ip(rspip);
+																				pdinfo->set_port(rspport);
 
-																			pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
-																			pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
-																			
-																			bHaveDeviceinfo = true;
+																				pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
+																				pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+
+																				bHaveDeviceinfo = true;
+																			}
 																		}
 																	}
-																}
-																else // 无法获取该设备的ip + port
-																{
-																	sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, deviceid_value);
+																	else // 无法获取该设备的ip + port
+																	{
+																		sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, deviceid_value);
+																	}
 																}
 															}
 														}
@@ -15305,9 +24818,9 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 																char svrtype_ipport_domainname_deviceid_s[128] = { 0 };
 																sprintf(svrtype_ipport_domainname_deviceid_s, "relaymc_ipport_%s_%s", strdomainname.c_str(), deviceid_value);
 
-																char cInnerFieldName[128] = { 0 };
-																char cOuterFieldName[128] = { 0 };
-																char cVPNFieldName[128] = { 0 };
+																char cInnerFieldName[32] = { 0 };
+																char cOuterFieldName[32] = { 0 };
+																char cVPNFieldName[32] = { 0 };
 
 																//char inner_ipprort_value[65] = { 0 };
 																//char outer_ipprort_value[65] = { 0 };
@@ -15331,94 +24844,98 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 																vGetFileds.push_back(strOuterFieldName);
 																vGetFileds.push_back(strVPNFieldName);
 
-																bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrtypeipportdomainnamedeviceidkey, vGetFileds, vRedisReplyArray);
-																if (bhashHMGet_ok
-																	&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(svrtype_ipport_domainname_deviceid_s);
+																if (bExist)
 																{
-																	unsigned int rspip = 0;
-																	unsigned int rspport = 0;
-																	unsigned long long ullrspIPPort = 0;
-
-																	// 获取的内网地址
-																	if (req_get_net_type == 0)
+																	bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrtypeipportdomainnamedeviceidkey, vGetFileds, vRedisReplyArray);
+																	if (bhashHMGet_ok
+																		&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() == 0
-																			&& vRedisReplyArray[2].str.length() == 0)
+																		unsigned int rspip = 0;
+																		unsigned int rspport = 0;
+																		unsigned long long ullrspIPPort = 0;
+
+																		// 获取的内网地址
+																		if (req_get_net_type == 0)
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() == 0
+																				&& vRedisReplyArray[2].str.length() == 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
-																	else if (req_get_net_type == 1)// 获取的外网地址
-																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() > 0
-																			&& vRedisReplyArray[2].str.length() == 0)
+																		else if (req_get_net_type == 1)// 获取的外网地址
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() > 0
+																				&& vRedisReplyArray[2].str.length() == 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
-																	else if (req_get_net_type == 2) // 获取的vpn地址
-																	{
-																		if (vRedisReplyArray[0].str.length() > 0
-																			&& vRedisReplyArray[1].str.length() == 0
-																			&& vRedisReplyArray[2].str.length() > 0)
+																		else if (req_get_net_type == 2) // 获取的vpn地址
 																		{
+																			if (vRedisReplyArray[0].str.length() > 0
+																				&& vRedisReplyArray[1].str.length() == 0
+																				&& vRedisReplyArray[2].str.length() > 0)
+																			{
 #ifdef WIN32
-																			sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																			sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+																				sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																			}
 																		}
-																	}
 
-																	rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-																	rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
+																		rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+																		rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
 
-																	// 获取的地址为无效地址
-																	if (rspip == 0
-																		|| rspport == 0)
-																	{
-																	}
-																	else
-																	{
-																		m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
-																		char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(sys_svrtype_domainname_s, deviceid_value);
-																		if (pload != NULL)
+																		// 获取的地址为无效地址
+																		if (rspip == 0
+																			|| rspport == 0)
 																		{
-																			int iTernum = 0;
-																			sscanf(pload, "%d", &iTernum);
-
-																			delete pload; // 不删除会导致内存泄漏
-
-																			bGetdevinfoOK = true;
-																			SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-																			pdinfo->set_deviceid(uiDeviceid);
-																			pdinfo->set_svr_type(uiSvrtype);
-																			pdinfo->set_get_svr_type(uiSvrtype);
-																			pdinfo->set_groupid(uiGroupid);
-																			pdinfo->set_domainname(strdomainname);
-																			pdinfo->set_ip(rspip);
-																			pdinfo->set_port(rspport);
-
-																			pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
-																			pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
-
-																			bHaveDeviceinfo = true;
 																		}
-																	}																	
-																}
-																else // 无法获取该设备的ip + port
-																{
-																	sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", svrtype_ipport_domainname_deviceid_s, deviceid_value);
+																		else
+																		{
+																			m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
+																			char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(sys_svrtype_domainname_s, deviceid_value);
+																			if (pload != NULL)
+																			{
+																				int iTernum = 0;
+																				sscanf(pload, "%d", &iTernum);
+
+																				delete pload; // 不删除会导致内存泄漏
+
+																				bGetdevinfoOK = true;
+																				SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+																				pdinfo->set_deviceid(uiDeviceid);
+																				pdinfo->set_svr_type(uiSvrtype);
+																				pdinfo->set_get_svr_type(uiSvrtype);
+																				pdinfo->set_groupid(uiGroupid);
+																				pdinfo->set_domainname(strdomainname);
+																				pdinfo->set_ip(rspip);
+																				pdinfo->set_port(rspport);
+
+																				pdinfo->set_load(iTernum); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；relaymc：终端连接数；gw：终端连接数；crs：磁盘使用率]
+																				pdinfo->set_load2(0);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+
+																				bHaveDeviceinfo = true;
+																			}
+																		}
+																	}
+																	else // 无法获取该设备的ip + port
+																	{
+																		sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get relaymc IPPort error onlinedeviceid=%s !!!\n", svrtype_ipport_domainname_deviceid_s, deviceid_value);
+																	}
 																}
 															}
 														}
@@ -15589,20 +25106,23 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 												char device_ipport_deviceid[128] = { 0 };
 												sprintf(device_ipport_deviceid, "device_ipport_%s", cDeviceidbuf);
 
-												char cInnerFieldName[128] = { 0 };
-												char cOuterFieldName[128] = { 0 };
-												char cVPNFieldName[128] = { 0 };
-												char cMapInternetIPsFieldName[128] = { 0 };
+												char cInnerFieldName[32] = { 0 };
+												char cOuterFieldName[32] = { 0 };
+												char cVPNFieldName[32] = { 0 };
+												char cMapInternetIPsFieldName[32] = { 0 };
+												char cNettypeFieldName[32] = { 0 };
 
 												//char inner_ipprort_value[65] = { 0 };
 												//char outer_ipprort_value[65] = { 0 };
 												//char vpn_ipprort_value[65] = { 0 };
 												//char map_internetips_value[512] = { 0 };// 格式：点分十进制ip1,点分十进制ip2,....点分十进制ipn
+												//char net_type_value[33] = { 0 };
 
 												sprintf(cInnerFieldName, "%s", "inner");
 												sprintf(cOuterFieldName, "%s", "outer");
 												sprintf(cVPNFieldName, "%s", "vpn");
 												sprintf(cMapInternetIPsFieldName, "%s", "mapinternetips");
+												sprintf(cNettypeFieldName, "%s", "nettype");
 
 												REDISKEY strdeviceipportdeviceidkey = device_ipport_deviceid;
 												REDISFILEDS vGetFileds;
@@ -15615,187 +25135,246 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 												REDISKEY strOuterFieldName = cOuterFieldName;
 												REDISKEY strVPNFieldName = cVPNFieldName;
 												REDISKEY strMapInternetIPsFieldName = cMapInternetIPsFieldName;
+												REDISKEY strNettypeFieldName = cNettypeFieldName;
 												vGetFileds.push_back(strInnerFieldName);
 												vGetFileds.push_back(strOuterFieldName);
 												vGetFileds.push_back(strVPNFieldName);
 												vGetFileds.push_back(strMapInternetIPsFieldName);
+												vGetFileds.push_back(strNettypeFieldName);
 
-												bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-												if (bhashHMGet_ok
-													&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+												bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+												if (bExist)
 												{
-													unsigned int rspip = 0;
-													unsigned int rspport = 0;
-													unsigned long long ullrspIPPort = 0;
-
-													// 外网relayserver的地址通过restful返给终端直接使用,终端侧发现有外网relayserver时,入会消息不携带stunserver地址(即不进行打洞)
-													// 获取的内网地址
-													if (req_get_net_type == 0)
+													bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+													if (bhashHMGet_ok
+														&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
 													{
-														if (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP
-															|| req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC)
+														unsigned int rspip = 0;
+														unsigned int rspport = 0;
+														unsigned long long ullrspIPPort = 0;
+
+														// 外网relayserver的地址通过restful返给终端直接使用,终端侧发现有外网relayserver时,入会消息不携带stunserver地址(即不进行打洞)
+														// 获取的内网地址
+														if (req_get_net_type == 0)
 														{
-															if (vRedisReplyArray[0].str.length() > 0)
+															if (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP
+																|| req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC)
 															{
+																if (vRedisReplyArray[0].str.length() > 0)
+																{
 #ifdef WIN32
-																sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																	sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																	sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
 #endif
+																}
 															}
-														} 
-														else
+															else
+															{
+																if (vRedisReplyArray[0].str.length() > 0
+																	&& vRedisReplyArray[1].str.length() == 0
+																	&& vRedisReplyArray[2].str.length() == 0)
+																{
+#ifdef WIN32
+																	sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+#elif defined LINUX
+																	sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+#endif
+																}
+															}
+														}
+														else if (req_get_net_type == 1)// 获取的外网地址
 														{
 															if (vRedisReplyArray[0].str.length() > 0
-																&& vRedisReplyArray[1].str.length() == 0
+																&& vRedisReplyArray[1].str.length() > 0
 																&& vRedisReplyArray[2].str.length() == 0)
 															{
 #ifdef WIN32
-																sscanf(vRedisReplyArray[0].str.c_str(), "%I64d", &ullrspIPPort);
+																sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
 #elif defined LINUX
-																sscanf(vRedisReplyArray[0].str.c_str(), "%lld", &ullrspIPPort);
+																sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
 #endif
 															}
 														}
-													}
-													else if (req_get_net_type == 1)// 获取的外网地址
-													{
-														if (vRedisReplyArray[0].str.length() > 0
-															&& vRedisReplyArray[1].str.length() > 0
-															&& vRedisReplyArray[2].str.length() == 0)
+														else if (req_get_net_type == 2) // 获取的vpn地址
 														{
-#ifdef WIN32
-															sscanf(vRedisReplyArray[1].str.c_str(), "%I64d", &ullrspIPPort);
-#elif defined LINUX
-															sscanf(vRedisReplyArray[1].str.c_str(), "%lld", &ullrspIPPort);
-#endif
-														}
-													}
-													else if (req_get_net_type == 2) // 获取的vpn地址
-													{
-														if (vRedisReplyArray[0].str.length() > 0
-															&& vRedisReplyArray[1].str.length() == 0
-															&& vRedisReplyArray[2].str.length() > 0)
-														{
-#ifdef WIN32
-															sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
-#elif defined LINUX
-															sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
-#endif
-														}
-													}
-
-													rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
-													rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
-
-													// 获取的地址为无效地址
-													if (rspip == 0
-														|| rspport == 0)
-													{
-													}
-													else
-													{
-														SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
-														pdinfo->set_deviceid(load[jj]->deviceid);
-														pdinfo->set_svr_type(req->get_svr_type());
-														pdinfo->set_get_svr_type(req->get_svr_type());
-														pdinfo->set_groupid(uiGroupid);
-														pdinfo->set_ip(rspip);
-														pdinfo->set_port(rspport);
-
-														//pdinfo->set_load(load[jj]->load);
-
-														// load[jj]->load值存放格式load1+load2，如下：
-														//uidevicetype == 2组合netmp的load1 load2,load1为终端数,load2为下行带宽
-														//uidevicetype == 4组合relayserver的load1 load2,load1为下行带宽,load2为终端数
-														//uidevicetype == 5组合mp的load1 load2,load1为cpu使用率,load2为上行带宽（netmp->mp）
-														//uidevicetype == 6组合gw的load1 load2,load1为cpu使用率,load2为终端数
-														//uidevicetype == 9组合crs的load1 load2,load1为cpu使用率,load2为磁盘使用率（高16位是总容量,低16位是剩余容量,单位：GB）
-														//uidevicetype == 11组合stunserver的load1 load2,load1为下行带宽,load2为终端数
-														int iLoad2 = (int)((unsigned long long)(load[jj]->load) >> 32); // 高32位 netmp:termNum，mc/mp/crs:cpu
-														int iLoad = ((int)((unsigned long long)(load[jj]->load) & 0xffffffff)); // 低32位
-														pdinfo->set_load(iLoad); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；stunserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；gw：终端连接数；crs：磁盘使用率（高16位是总容量,低16位是剩余容量,单位：GB）]
-														pdinfo->set_load2(iLoad2);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；stunserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
-
-														// 获取的是netmp、relaymc服务映射的外网ip
-														if (vRedisReplyArray[3].str.length() > 0
-															&& (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP
-															|| req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC))
-														{
-															char *pip;
-															pip = strtok((char*)(vRedisReplyArray[3].str.c_str()), ",");
-															while (pip)
+															if (vRedisReplyArray[0].str.length() > 0
+																&& vRedisReplyArray[1].str.length() == 0
+																&& vRedisReplyArray[2].str.length() > 0)
 															{
-																SRMsgs::RspGetDeviceInfo_MapIPInfo* paddmapip = pdinfo->add_mapinternetips();
-																paddmapip->set_mapip(pip);
-
-																pip = strtok(NULL, ",");
+#ifdef WIN32
+																sscanf(vRedisReplyArray[2].str.c_str(), "%I64d", &ullrspIPPort);
+#elif defined LINUX
+																sscanf(vRedisReplyArray[2].str.c_str(), "%lld", &ullrspIPPort);
+#endif
 															}
 														}
 
+														rspip = (unsigned int)((unsigned long long)(ullrspIPPort) >> 32);
+														rspport = ((unsigned int)((unsigned long long)(ullrspIPPort)& 0xffffffff));
 
-														if (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP)  // mc -> netmp，relayserver -> netmp
+														// 获取的地址为无效地址
+														if (rspip == 0
+															|| rspport == 0)
 														{
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo netmp redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==ternum = %d, tx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo netmp redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== ternum = %d, tx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
 														}
-														else if (req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC) // mc -> relaymc
+														else
 														{
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relaymc redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relaymc redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
-														}
-														else if (req_get_svr_type == DEVICE_SERVER::DEVICE_RELAYSERVER) // mc -> relayserver
-														{
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver outeripport:[len=%d, str=%s]\n", vRedisReplyArray[1].str.length(), vRedisReplyArray[1].str.c_str());
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
-														}
-														else if (req_get_svr_type == DEVICE_SERVER::DEVICE_MP) // mc -> mp
-														{
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, rx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, rx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
-														}
-														else if (req_get_svr_type == DEVICE_SERVER::DEVICE_GW) // mc -> gw
-														{
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
-														}
-														else if (req_get_svr_type == DEVICE_SERVER::DEVICE_CRS) // mc -> crs
-														{
-#ifdef WIN32
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, disk = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#elif defined LINUX
-															sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, disk = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
-#endif
-														}
+															SRMsgs::RspGetDeviceInfo_DeviceInfo *pdinfo = rsp->add_deviceinfolist();
+															pdinfo->set_deviceid(load[jj]->deviceid);
+															pdinfo->set_svr_type(req->get_svr_type());
+															pdinfo->set_get_svr_type(req->get_svr_type());
+															pdinfo->set_groupid(uiGroupid);
+															pdinfo->set_ip(rspip);
+															pdinfo->set_port(rspport);
 
-														bHaveDeviceinfo = true;
-														//bhasRecord = true;
-														iSendSize++;
-														//if (iSendSize == devnums) // 发送的记录数等于需查询的记录数（默认2）
-														//{
-														//	break;
-														//}
-													} 
-												}
-												else // 无法获取该设备的ip + port
-												{
-													sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, cDeviceidbuf);
+															//pdinfo->set_load(load[jj]->load);
+
+															// load[jj]->load值存放格式load1+load2，如下：
+															//uidevicetype == 2组合netmp的load1 load2,load1为终端数,load2为下行带宽
+															//uidevicetype == 4组合relayserver的load1 load2,load1为下行带宽,load2为终端数
+															//uidevicetype == 5组合mp的load1 load2,load1为cpu使用率,load2为上行带宽（netmp->mp）
+															//uidevicetype == 6组合gw的load1 load2,load1为cpu使用率,load2为终端数
+															//uidevicetype == 9组合crs的load1 load2,load1为cpu使用率,load2为磁盘使用率（高16位是总容量,低16位是剩余容量,单位：GB）
+															//uidevicetype == 11组合stunserver的load1 load2,load1为下行带宽,load2为终端数
+															int iLoad2 = (int)((unsigned long long)(load[jj]->load) >> 32); // 高32位 netmp:termNum，mc/mp/crs:cpu
+															int iLoad = ((int)((unsigned long long)(load[jj]->load) & 0xffffffff)); // 低32位
+															pdinfo->set_load(iLoad); //set_load设置内容[netmp:下行带宽；relayserver:终端连接数；stunserver:终端连接数；mp:上行带宽（netmp->mp）；mc：终端连接数；gw：终端连接数；crs：磁盘使用率（高16位是总容量,低16位是剩余容量,单位：GB）]
+															pdinfo->set_load2(iLoad2);//set_load2设置内容[netmp:终端连接数；relayserver:下行带宽；stunserver:下行带宽；mp:cpu负载;mc:cpu负载;gw:cpu负载;crs:cpu负载]
+
+															// 获取的是netmp、relaymc服务映射的外网ip
+															if (vRedisReplyArray[3].str.length() > 0
+																&& (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP
+																|| req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC))
+															{
+																char *pip;
+																pip = strtok((char*)(vRedisReplyArray[3].str.c_str()), ",");
+																while (pip)
+																{
+																	SRMsgs::RspGetDeviceInfo_MapIPInfo* paddmapip = pdinfo->add_mapinternetips();
+																	paddmapip->set_mapip(pip);
+
+																	pip = strtok(NULL, ",");
+																}
+															}
+															// 获取netmp服务的地址类型
+															if (vRedisReplyArray[4].str.length() > 0
+																&& req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP)
+															{
+																SR_uint32 uiNettype = 0;
+																sscanf(vRedisReplyArray[4].str.c_str(), "%d", &uiNettype);
+																pdinfo->set_nettype(uiNettype);
+															}
+															if (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP)
+															{
+																char local_svr_capabilityset_deviceid[128] = { 0 };
+																sprintf(local_svr_capabilityset_deviceid, "local_svr_capabilityset_%s", cDeviceidbuf);
+
+																bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(local_svr_capabilityset_deviceid);
+																if (bExist)
+																{
+																	char cMaxTermsFieldName[32] = { 0 };
+																	char cMaxBandwidthFieldName[32] = { 0 };
+																	char max_terms_value[65] = { 0 };
+																	char max_bandwidth_value[65] = { 0 };
+
+																	sprintf(cMaxTermsFieldName, "%s", "max_terms");
+																	sprintf(cMaxBandwidthFieldName, "%s", "max_bandwidth");
+
+																	REDISKEY strlocalsvrcapabilitysetdeviceidkey = local_svr_capabilityset_deviceid;
+																	REDISFILEDS vGetCapabilitysetFileds;
+																	vGetCapabilitysetFileds.clear();
+																	RedisReplyArray vRedisReplyCapabilitysetArray;
+																	vRedisReplyCapabilitysetArray.clear();
+
+																	// 注意：此处的push_back影响hashHMGet结果vRedisReplyArray的顺序
+																	REDISKEY strMaxTermsFieldName = cMaxTermsFieldName;
+																	REDISKEY strMaxBandwidthFieldName = cMaxBandwidthFieldName;
+																	vGetCapabilitysetFileds.push_back(strMaxTermsFieldName);
+																	vGetCapabilitysetFileds.push_back(strMaxBandwidthFieldName);
+
+																	bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strlocalsvrcapabilitysetdeviceidkey, vGetCapabilitysetFileds, vRedisReplyCapabilitysetArray);
+																	if (bhashHMGet_ok
+																		&& vRedisReplyCapabilitysetArray.size() == vGetCapabilitysetFileds.size()) // 与push_back的个数一致
+																	{
+																		SR_uint32 uiMaxTerms = 0;
+																		SR_uint32 uiMaxBandwidth = 0;
+																		sscanf(vRedisReplyCapabilitysetArray[0].str.c_str(), "%d", &uiMaxTerms);
+																		sscanf(vRedisReplyCapabilitysetArray[1].str.c_str(), "%d", &uiMaxBandwidth);
+																		pdinfo->set_max_terms(uiMaxTerms);
+																		pdinfo->set_max_bandwidth(uiMaxBandwidth);
+																	}
+																}
+																else
+																{
+																	sr_printf(SR_LOGLEVEL_WARNING, "***** WARRING ***local_svr_capabilityset_deviceid(%s)*** not in db3 *****\n", local_svr_capabilityset_deviceid);
+																}
+															}
+
+
+															if (req_get_svr_type == DEVICE_SERVER::DEVICE_NETMP)  // mc -> netmp，relayserver -> netmp
+															{
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo netmp redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==ternum = %d, tx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo netmp redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== ternum = %d, tx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+															else if (req_get_svr_type == DEVICE_SERVER::DEVICE_RELAY_MC) // mc -> relaymc
+															{
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relaymc redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relaymc redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+															else if (req_get_svr_type == DEVICE_SERVER::DEVICE_RELAYSERVER) // mc -> relayserver
+															{
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver outeripport:[len=%d, str=%s]\n", vRedisReplyArray[1].str.length(), vRedisReplyArray[1].str.c_str());
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo relayserver redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)==tx = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+															else if (req_get_svr_type == DEVICE_SERVER::DEVICE_MP) // mc -> mp
+															{
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, rx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, rx = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+															else if (req_get_svr_type == DEVICE_SERVER::DEVICE_GW) // mc -> gw
+															{
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, ternum = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+															else if (req_get_svr_type == DEVICE_SERVER::DEVICE_CRS) // mc -> crs
+															{
+#ifdef WIN32
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %I64d; redis db(1)==cpu = %d, disk = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#elif defined LINUX
+																sr_printf(SR_LOGLEVEL_INFO, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s, ullrspIPPort = %lld; redis db(1)== cpu = %d, disk = %d\n", device_ipport_deviceid, ullrspIPPort, iLoad2, iLoad);
+#endif
+															}
+
+															bHaveDeviceinfo = true;
+															//bhasRecord = true;
+															iSendSize++;
+															//if (iSendSize == devnums) // 发送的记录数等于需查询的记录数（默认2）
+															//{
+															//	break;
+															//}
+														}
+													}
+													else // 无法获取该设备的ip + port
+													{
+														sr_printf(SR_LOGLEVEL_ERROR, "==SRMsgId_ReqGetDeviceInfo redis db(3)== Table:%s == get IPPort error onlinedeviceid=%s !!!\n", device_ipport_deviceid, cDeviceidbuf);
+													}
 												}
 											}
 										}
@@ -15877,7 +25456,6 @@ bool CDevMgr::GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetD
 
 	return true;
 }
-
 
 bool CDevMgr::GetSysDeviceInfo(const SRMsgs::ReqGetSysDeviceInfo* req, SRMsgs::RspGetSysDeviceInfo* rsp)
 {
@@ -16071,21 +25649,25 @@ bool CDevMgr::GetSysDeviceInfo(const SRMsgs::ReqGetSysDeviceInfo* req, SRMsgs::R
 							vGetFileds.push_back(strOuterFieldName);
 							vGetFileds.push_back(strVPNFieldName);
 
-							bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
-							if (bhashHMGet_ok
-								&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+							bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(device_ipport_deviceid);
+							if (bExist)
 							{
-								SRMsgs::RspGetSysDeviceInfo_IPPORTInfo* pSvripportinfo = new SRMsgs::RspGetSysDeviceInfo_IPPORTInfo();
-								pSvripportinfo->set_inner(vRedisReplyArray[0].str);
-								pSvripportinfo->set_outer(vRedisReplyArray[1].str);
-								pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
-								padddevinfo->set_allocated_ipport(pSvripportinfo);
+								bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strdeviceipportdeviceidkey, vGetFileds, vRedisReplyArray);
+								if (bhashHMGet_ok
+									&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+								{
+									SRMsgs::RspGetSysDeviceInfo_IPPORTInfo* pSvripportinfo = new SRMsgs::RspGetSysDeviceInfo_IPPORTInfo();
+									pSvripportinfo->set_inner(vRedisReplyArray[0].str);
+									pSvripportinfo->set_outer(vRedisReplyArray[1].str);
+									pSvripportinfo->set_vpn(vRedisReplyArray[2].str);
+									padddevinfo->set_allocated_ipport(pSvripportinfo);
+								}
+								else
+								{
+									// 获取该设备的ip、port信息失败
+								}
 							}
-							else
-							{
-								// 获取该设备的ip、port信息失败
-							}
-
+							
 							m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0); // 获取该设备负载信息
 							char * pload = m_pRedisConnList[e_RC_TT_MainThread]->getvalue(svrname_groupid.c_str(), cOnlineDeviceidbuf);
 							if (pload != NULL)
@@ -16120,6 +25702,8 @@ bool CDevMgr::GetSysDeviceInfo(const SRMsgs::ReqGetSysDeviceInfo* req, SRMsgs::R
 								pSvrloadinfo->set_rx(rx);//上行(接收)带宽
 								pSvrloadinfo->set_cpu(cpu);
 								padddevinfo->set_allocated_loadinfos(pSvrloadinfo);
+
+								delete pload; // 不删除会导致内存泄漏
 							}
 							else
 							{
@@ -16406,22 +25990,114 @@ bool CDevMgr::GetSystemCurLoad(const SRMsgs::ReqGetSystemCurLoad* req, SRMsgs::R
 							vGetFileds.push_back(strConfcntFieldName);
 							vGetFileds.push_back(strLivecntFieldName);
 
-							bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrnamegroupiddeviceidkey, vGetFileds, vRedisReplyArray);
-							if (bhashHMGet_ok
-								&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+							bool bExist = m_pRedisConnList[e_RC_TT_MainThread]->existskey(svrname_load_s);
+							if (bExist)
 							{
-								SR_uint32 uiReccnt = 0;
-								SR_uint32 uiConfcnt = 0;
-								SR_uint32 uiLivecnt = 0;
+								bool bhashHMGet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrnamegroupiddeviceidkey, vGetFileds, vRedisReplyArray);
+								if (bhashHMGet_ok
+									&& vRedisReplyArray.size() == vGetFileds.size()) // 与push_back的个数一致
+								{
+									SR_uint32 uiReccnt = 0;
+									SR_uint32 uiConfcnt = 0;
+									SR_uint32 uiLivecnt = 0;
 
-								sscanf(vRedisReplyArray[4].str.c_str(), "%u", &uiReccnt);
-								sscanf(vRedisReplyArray[5].str.c_str(), "%u", &uiConfcnt);
-								sscanf(vRedisReplyArray[6].str.c_str(), "%u", &uiLivecnt);
+									sscanf(vRedisReplyArray[4].str.c_str(), "%u", &uiReccnt);
+									sscanf(vRedisReplyArray[5].str.c_str(), "%u", &uiConfcnt);
+									sscanf(vRedisReplyArray[6].str.c_str(), "%u", &uiLivecnt);
 
-								uicurreccnt += uiReccnt;
-								uicurconfcnt += uiConfcnt;
-								uicurlivecnt += uiLivecnt;
+									uicurreccnt += uiReccnt;
+									uicurconfcnt += uiConfcnt;
+									uicurlivecnt += uiLivecnt;
+								}
 							}
+						
+							m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+							char cMonitorcntFieldName[128] = { 0 };
+							char cVoicecntFieldName[128] = { 0 };
+							sprintf(cMonitorcntFieldName, "%s", "monitorcnt ");
+							sprintf(cVoicecntFieldName, "%s", "voicecnt");
+							char mccompanyidkey[16] = { 0 };
+							sprintf(mccompanyidkey, "%s", "mc_companyid");
+							char mcidkey[64] = { 0 };
+							sprintf(mcidkey, "%d", tempDeviceid);
+							char mccomp_value[256] = { 0 };
+							char* ptrRet = NULL;
+							ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(mccompanyidkey, mcidkey);
+							m_pRedisConnList[e_RC_TT_MainThread]->selectdb(0);
+							if (ptrRet != NULL)
+							{
+								sprintf(mccomp_value, "%s", ptrRet);
+								std::string sMcCompanyValue;
+								sMcCompanyValue = mccomp_value;
+								sr_printf(SR_LOGLEVEL_DEBUG, "***** WARRING ***mcidkey(%s)*** mccomp_value：%s, sMcCompanyValue:%s *****\n", mcidkey, mccomp_value, sMcCompanyValue.c_str());
+								std::map<std::string, int> cmd_key_val;
+								cmd_key_val.clear();
+								if (sMcCompanyValue.length() > 0)
+								{
+									SubString(cmd_key_val, sMcCompanyValue);
+								}
+								for (std::map<string, int>::iterator iter_mccomp = cmd_key_val.begin(); iter_mccomp != cmd_key_val.end(); iter_mccomp++)
+								{
+									unsigned int curcompid = 0;
+									sscanf(iter_mccomp->first.c_str(), "%d", &curcompid);
+									SRMsgs::RspGetSystemCurLoad_CompanyInfo* paddcompinfo = rsp->add_compinfos();
+									paddcompinfo->set_companyid(curcompid);
+
+									char compsurplickey[128] = { 0 };
+									sprintf(compsurplickey, "company_uselicinlocalmc_%s_%s_%s", cGroupid, mcidkey, iter_mccomp->first.c_str());
+
+									REDISKEY strcompsurplicencekey = compsurplickey;
+									REDISKEY strMonitorcntFieldName = cMonitorcntFieldName;
+									REDISKEY strVoicecntFieldName = cVoicecntFieldName;
+									vGetFileds.clear();
+									vRedisReplyArray.clear();
+									vGetFileds.push_back(strConfcntFieldName);
+									vGetFileds.push_back(strTernumFieldName);
+									vGetFileds.push_back(strSRcntFieldName);
+									vGetFileds.push_back(strSTDcntFieldName);
+									vGetFileds.push_back(strMonitorcntFieldName);
+									vGetFileds.push_back(strVoicecntFieldName);
+									vGetFileds.push_back(strRECcntFieldName);
+									vGetFileds.push_back(strLivecntFieldName);
+									bool bhashHMGetSurp_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMGet(strsvrnamegroupiddeviceidkey, vGetFileds, vRedisReplyArray);
+									if (bhashHMGetSurp_ok && vRedisReplyArray.size() == vGetFileds.size())
+									{
+										SR_uint32 uiTerncnt = 0;
+										SR_uint32 uiSrccnt = 0;
+										SR_uint32 uiStdccnt = 0;
+										SR_uint32 uiConfcnt = 0;
+										SR_uint32 uiLivecnt = 0;
+										SR_uint32 uiReccnt = 0;
+										SR_uint32 uiMonitorcnt = 0;
+										SR_uint32 uiVoicecnt = 0;
+
+										sscanf(vRedisReplyArray[0].str.c_str(), "%u", &uiConfcnt);
+										sscanf(vRedisReplyArray[1].str.c_str(), "%u", &uiTerncnt);
+										sscanf(vRedisReplyArray[2].str.c_str(), "%u", &uiSrccnt);
+										sscanf(vRedisReplyArray[3].str.c_str(), "%u", &uiStdccnt);
+										sscanf(vRedisReplyArray[4].str.c_str(), "%u", &uiMonitorcnt);
+										sscanf(vRedisReplyArray[5].str.c_str(), "%u", &uiVoicecnt);
+										sscanf(vRedisReplyArray[6].str.c_str(), "%u", &uiReccnt);
+										sscanf(vRedisReplyArray[7].str.c_str(), "%u", &uiLivecnt);
+
+										SRMsgs::RspGetSystemCurLoad_LoadInfo* paddcurloadsinfo = new SRMsgs::RspGetSystemCurLoad_LoadInfo();
+										paddcurloadsinfo->set_confcnt(uiConfcnt);
+										paddcurloadsinfo->set_ternum(uiTerncnt);
+										paddcurloadsinfo->set_srcnt(uiSrccnt);
+										paddcurloadsinfo->set_stdcnt(uiStdccnt);
+										paddcurloadsinfo->set_monitorcnt(uiMonitorcnt);
+										paddcurloadsinfo->set_voicecnt(uiVoicecnt);
+										paddcurloadsinfo->set_reccnt(uiReccnt);
+										paddcurloadsinfo->set_livecnt(uiLivecnt);
+
+										paddcompinfo->set_allocated_curloads(paddcurloadsinfo);
+
+									}
+
+								}
+
+							}
+
 						}
 
 					}// uiGroupid != 0
@@ -16550,6 +26226,14 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 
 			//printf("SRMsgId_IndsertodevHeart getvalue groupid redis db(3) from Table:dev_deviceidandgroupid (deviceid)=(%s)\n", deviceid_s);
 
+			char keeplivetime_s[128] = { 0 };
+
+#ifdef WIN32
+			sprintf(keeplivetime_s, "%I64d", timeNow);
+#elif defined LINUX
+			sprintf(keeplivetime_s, "%lld", timeNow);
+#endif
+
 			if (p != NULL)
 			{
 				svrname_groupid += p;
@@ -16571,6 +26255,8 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 					char cRECcntFieldName[128] = { 0 };
 					char cConfcntFieldName[128] = { 0 };
 					char cLivecntFieldName[128] = { 0 };
+					char cMonitorcntFieldName[128] = { 0 };
+					char cVoicecntFieldName[128] = { 0 };
 
 					char ternum_value[33] = { 0 };
 					char cpu_value[33] = { 0 };
@@ -16579,6 +26265,8 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 					char rec_cnt_value[33] = { 0 };
 					char conf_cnt_value[33] = { 0 };
 					char live_cnt_value[33] = { 0 };
+					char monitor_cnt_value[33] = { 0 };
+					char voice_cnt_value[33] = { 0 };
 
 					sprintf(cTernumFieldName, "%s", "ternum");
 					sprintf(cCpuFieldName, "%s", "cpu");
@@ -16587,6 +26275,8 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 					sprintf(cRECcntFieldName, "%s", "reccnt");
 					sprintf(cConfcntFieldName, "%s", "confcnt");
 					sprintf(cLivecntFieldName, "%s", "livecnt");
+					sprintf(cMonitorcntFieldName, "%s", "monitorcnt");
+					sprintf(cVoicecntFieldName, "%s", "voicecnt");
 
 					const SRMsgs::IndsertodevHeart_LoadInfo& loadinfo = ind->loadinfo();
 
@@ -16597,6 +26287,8 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 					sprintf(rec_cnt_value, "%d", loadinfo.reccnt());
 					sprintf(conf_cnt_value, "%d", loadinfo.confcnt());
 					sprintf(live_cnt_value, "%d", loadinfo.livecnt());
+					sprintf(monitor_cnt_value, "%d", loadinfo.monitorcnt());
+					sprintf(voice_cnt_value, "%d", loadinfo.voicecnt());
 
 					//REDISKEY strupconfreportidkey = netmp_##groupid_##deviceid_##netid_key;
 					REDISVDATA vLoadInfodata;
@@ -16637,7 +26329,144 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 					vLoadInfodata.push_back(strLivecntFieldName);
 					vLoadInfodata.push_back(strlivecntvalue);
 
+					REDISKEY strMonitorcntFieldName = cMonitorcntFieldName;
+					REDISVALUE strmonitorcntvalue = monitor_cnt_value;
+					vLoadInfodata.push_back(strMonitorcntFieldName);
+					vLoadInfodata.push_back(strmonitorcntvalue);
+
+					REDISKEY strVoicecntFieldName = cVoicecntFieldName;
+					REDISVALUE strvoicecntvalue = voice_cnt_value;
+					vLoadInfodata.push_back(strVoicecntFieldName);
+					vLoadInfodata.push_back(strvoicecntvalue);
+
 					bool bhashHMSet_ok = m_pRedisConnList[e_RC_TT_MainThread]->hashHMSet(svrname_load, vLoadInfodata);
+
+					// 更新每个会议的保活时间
+					m_pRedisConnList[e_RC_TT_MainThread]->selectdb(4);
+					for (int i = 0; i < ind->confinfos_size(); i++)
+					{
+						const SRMsgs::IndsertodevHeart_ConfInfo& confinfo = ind->confinfos(i);
+						SR_uint64 ullconfid = confinfo.confid();
+						SR_uint64 ullconfrptid = confinfo.confreportid();
+						if (ullconfid != 0
+							&& ullconfrptid != 0)
+						{
+							char confidktimeset_key[128] = { 0 };// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+							char confrptidktimeset_confid_key[128] = { 0 };// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+							char conf_id_value[128] = { 0 };
+							char conf_report_id_value[128] = { 0 };
+#ifdef WIN32
+							sprintf(conf_id_value, "%I64d", ullconfid);
+							sprintf(conf_report_id_value, "%I64d", ullconfrptid);
+#elif defined LINUX
+							sprintf(conf_id_value, "%lld", ullconfid);
+							sprintf(conf_report_id_value, "%lld", ullconfrptid);
+#endif
+
+							sprintf(confidktimeset_key, "%s", "confidktimeset");
+							sprintf(confrptidktimeset_confid_key, "confrptidktimeset_%s", conf_id_value);
+							m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confidktimeset_key, keeplivetime_s, conf_id_value);// <confid, keeplivetime>,keeplivetime会在会议状态上报时更新
+							m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confrptidktimeset_confid_key, keeplivetime_s, conf_report_id_value);// <confrptid, keeplivetime>,keeplivetime会在会议状态上报时更新
+							
+							// 解析设备信息
+							for (int ii = 0; ii < confinfo.devinfos_size(); ii++)
+							{
+								const SRMsgs::IndsertodevHeart_DevInfo& devinfo = confinfo.devinfos(ii);
+								SR_uint32 uidevid = devinfo.devid();
+								SR_uint64 ulldevdtlid = devinfo.devdtlid();
+								if (uidevid != 0
+									&& ulldevdtlid != 0)
+								{
+									char confdeviceidktimeset_confid_confrptid_key[256] = { 0 };// 存放<deviceid, keeplivetime>
+									char confdevdtlidktimeset_confid_confrptid_deviceid_key[256] = { 0 };// 存放<devdtlid, keeplivetime>
+
+									char device_id_value[128] = { 0 };
+									char device_detail_id_value[128] = { 0 };
+									sprintf(device_id_value, "%d", uidevid);
+#ifdef WIN32
+									sprintf(device_detail_id_value, "%I64d", ulldevdtlid);
+#elif defined LINUX
+									sprintf(device_detail_id_value, "%lld", ulldevdtlid);
+#endif
+
+									sprintf(confdeviceidktimeset_confid_confrptid_key, "confdeviceidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+									sprintf(confdevdtlidktimeset_confid_confrptid_deviceid_key, "confdevdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, device_id_value);
+									
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confdeviceidktimeset_confid_confrptid_key, keeplivetime_s, device_id_value);// <deviceid, keeplivetime>,keeplivetime会在会议状态上报时更新
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confdevdtlidktimeset_confid_confrptid_deviceid_key, keeplivetime_s, device_detail_id_value);// <devdtlid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+								}
+							}
+							// 解析会议用户信息
+							for (int jj = 0; jj < confinfo.userinfos_size(); jj++)
+							{
+								const SRMsgs::IndsertodevHeart_UserInfo& userinfo = confinfo.userinfos(jj);
+								SR_uint32 uiuserid = userinfo.userid();
+								SR_uint64 ulluserdtlid = userinfo.userdtlid();
+								if (uiuserid != 0
+									&& ulluserdtlid != 0)
+								{
+									char confuseridktimeset_confid_confrptid_key[256] = { 0 };// 存放<userid, keeplivetime>
+									char confuserdtlidktimeset_confid_confrptid_userid_key[256] = { 0 };// 存放<userdtlid, keeplivetime>
+									char use_rpt_detail_id_value[128] = { 0 };
+									char user_id_ext_value[128] = { 0 };
+
+									sprintf(user_id_ext_value, "%d", uiuserid);
+#ifdef WIN32
+									sprintf(use_rpt_detail_id_value, "%I64d", ulluserdtlid);
+#elif defined LINUX
+									sprintf(use_rpt_detail_id_value, "%lld", ulluserdtlid);
+#endif
+									
+									sprintf(confuseridktimeset_confid_confrptid_key, "confuseridktimeset_%s_%s", conf_id_value, conf_report_id_value);
+									sprintf(confuserdtlidktimeset_confid_confrptid_userid_key, "confuserdtlidktimeset_%s_%s_%s", conf_id_value, conf_report_id_value, user_id_ext_value);
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confuseridktimeset_confid_confrptid_key, keeplivetime_s, user_id_ext_value);// <userid, keeplivetime>,keeplivetime会在会议状态上报时更新
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confuserdtlidktimeset_confid_confrptid_userid_key, keeplivetime_s, use_rpt_detail_id_value);// <userdtlid, keeplivetime>,keeplivetime会在会议状态上报时更新
+
+								}
+							}
+							// 解析会议录制信息
+							for (int kk = 0; kk < confinfo.recinfos_size(); kk++)
+							{
+								const SRMsgs::IndsertodevHeart_RecInfo& recinfo = confinfo.recinfos(kk);
+								SR_uint64 uirecordid = recinfo.recordid();
+								//SR_uint64 ullrecordfileid = recinfo.recordfileid();
+								if (uirecordid != 0
+									/*&& ullrecordfileid != 0*/)
+								{
+									char confrecordidktimeset_confid_confrptid_key[256] = { 0 };// 存放<recordid, keeplivetime>
+									char conf_record_id_value[128] = { 0 };
+#ifdef WIN32
+									sprintf(conf_record_id_value, "%I64d", uirecordid);
+#elif defined LINUX
+									sprintf(conf_record_id_value, "%lld", uirecordid);
+#endif
+
+									sprintf(confrecordidktimeset_confid_confrptid_key, "confrecordidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confrecordidktimeset_confid_confrptid_key, keeplivetime_s, conf_record_id_value);// <recordid, keeplivetime>,keeplivetime会在会议状态上报时更新
+								}
+							}
+							// 解析会议直播信息
+							for (int mm = 0; mm < confinfo.liveinfos_size(); mm++)
+							{
+								const SRMsgs::IndsertodevHeart_LiveInfo& liveinfo = confinfo.liveinfos(mm);
+								SR_uint64 ullliveinfoid = liveinfo.liveinfoid();
+								if (ullliveinfoid != 0)
+								{
+									char confliveinfoidktimeset_confid_confrptid_key[256] = { 0 };// 存放<liveinfoid, keeplivetime>
+									char liveinfo_id_value[128] = { 0 };
+#ifdef WIN32
+									sprintf(liveinfo_id_value, "%I64d", ullliveinfoid);
+#elif defined LINUX
+									sprintf(liveinfo_id_value, "%lld", ullliveinfoid);
+#endif
+									sprintf(confliveinfoidktimeset_confid_confrptid_key, "confliveinfoidktimeset_%s_%s", conf_id_value, conf_report_id_value);
+									m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(confliveinfoidktimeset_confid_confrptid_key, keeplivetime_s, liveinfo_id_value);// <liveinfoid, keeplivetime>,keeplivetime会在会议状态上报时更新
+								}
+							}
+						}
+					}
 				}
 				else if (uidevicetype == DEVICE_SERVER::DEVICE_NETMP
 					|| uidevicetype == DEVICE_SERVER::DEVICE_RELAY_MC
@@ -16814,28 +26643,23 @@ void CDevMgr::UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_
 				return;
 			}
 			
-			char time_s[256] = { 0 };
-#ifdef WIN32
-			sprintf(time_s, "%I64d", timeNow);
-#elif defined LINUX
-			sprintf(time_s, "%lld", timeNow);
-#endif	
-
 			m_pRedisConnList[e_RC_TT_MainThread]->selectdb(1); // db1专门存储各设备心跳时间,HASH
-			m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(svrname_groupid.c_str(), time_s, deviceid_s);
+			m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(svrname_groupid.c_str(), keeplivetime_s, deviceid_s);
 
 			//更新map中对应的心跳时间值和token
 			iter->second.devicetype = uidevicetype;
 			iter->second.time = timeNow; 
 			iter->second.token = ind->token();
 
-			sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_IndsertodevHeart sethashvalue to redis db(1)  Table:%s :(deviceid, time_s)=(%s, %s)\n", svrname_groupid.c_str(), deviceid_s, time_s);
+			sr_printf(SR_LOGLEVEL_DEBUG, "SRMsgId_IndsertodevHeart sethashvalue to redis db(1)  Table:%s :(deviceid, time_s)=(%s, %s)\n", svrname_groupid.c_str(), deviceid_s, keeplivetime_s);
 		}
 	}
 }
 
+//void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConference* pConference, CConfParticipant* pConfParticipant, CConfLiveSetting* pConfLiveSetting
+//	, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, SRMsgs::RspConfInfoToMC* rspsend)
 void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConference* pConference, CConfParticipant* pConfParticipant, CConfLiveSetting* pConfLiveSetting
-	, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, SRMsgs::RspConfInfoToMC* rspsend)
+	, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, DeviceConnect *pClient)
 {
 	// 先查询redis db2 conference_deviceid中是否有当前mcid
 
@@ -16853,6 +26677,8 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 	if (ptrRet != NULL)
 	{
 		iMcid = atoi(ptrRet);
+
+		delete ptrRet; // 不删除会导致内存泄漏
 	}
 
 	// 此判断条件是解决一个会议分布在多个mc上的问题
@@ -16865,20 +26691,21 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 
 		if (pConference->GetExist())
 		{
+			SRMsgs::RspConfInfoToMC rspsend;
 			//存在则调用创建会议接口并发送
-			rspsend->set_isok(true);
-			rspsend->set_suid(pConference->GetUserID());
-			rspsend->set_confid(pConference->GetConfID());
-			rspsend->set_confpwd(pConference->GetConfPasswd().c_str());
-			rspsend->set_recvpwd(pConference->GetRecvPasswd().c_str());
-			rspsend->set_begintime(pConference->GetConfStartTime().c_str());
-			rspsend->set_endtime(pConference->GetConfEndTime().c_str());
-			rspsend->set_islimited(false);
-			rspsend->set_subject(pConference->GetConfSubject().c_str());
-			rspsend->set_conftype(pConference->GetConfType());
-			rspsend->set_confstartmethod(pConference->GetConfStartType());
-			rspsend->set_mutetype(0);
-			rspsend->set_ternums(pConference->GetConfMaxterm());
+			rspsend.set_isok(true);
+			rspsend.set_suid(pConference->GetUserID());
+			rspsend.set_confid(pConference->GetConfID());
+			rspsend.set_confpwd(pConference->GetConfPasswd().c_str());
+			rspsend.set_recvpwd(pConference->GetRecvPasswd().c_str());
+			rspsend.set_begintime(pConference->GetConfStartTime().c_str());
+			rspsend.set_endtime(pConference->GetConfEndTime().c_str());
+			rspsend.set_islimited(false);
+			rspsend.set_subject(pConference->GetConfSubject().c_str());
+			rspsend.set_conftype(pConference->GetConfType());
+			rspsend.set_confstartmethod(pConference->GetConfStartType());
+			rspsend.set_mutetype(0);
+			rspsend.set_ternums(pConference->GetConfMaxterm());
 
 			SRMsgs::RspConfInfoToMC_AgcSetting* pAgcSetting = new SRMsgs::RspConfInfoToMC_AgcSetting();
 			pAgcSetting->set_agc_enable(true);
@@ -16893,60 +26720,20 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 			pConfcfg->set_usevideomixer(1);
 			pConfcfg->set_mixing_frequency(48000);
 			pConfcfg->set_videosize(pConference->GetVideoSize());
+			pConfcfg->set_useedgeserver(pConference->GetUseEdgeServer());
 			pConfcfg->set_allocated_agc_setting(pAgcSetting);
 
-			rspsend->set_allocated_confcfg(pConfcfg);
+			rspsend.set_allocated_confcfg(pConfcfg);
 
-			rspsend->set_failurereason("");
-			rspsend->set_confreportid(m_pub_confreport_id);
+			rspsend.set_failurereason("");
+			rspsend.set_confreportid(m_pub_confreport_id);
 			m_pub_confreport_id++;
 
-			std::map<unsigned int, std::string> partuidnameinfos;
-			partuidnameinfos.clear();
-
-			if (pConfParticipant != NULL)
-			{
-				std::map<unsigned int, ParticipantInfo*> participantInfos;
-				participantInfos.clear();
-
-				pConfParticipant->SetConfID(req->confid());
-				pConfParticipant->SelectParticipantUserInfo(participantInfos);
-
-				SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddPartInfo = 0;
-				for (std::map<unsigned int, ParticipantInfo*>::iterator ppinfo_itor = participantInfos.begin();
-					ppinfo_itor != participantInfos.end(); ppinfo_itor++)
-				{
-					ParticipantInfo* pParticipantInfo = NULL;
-					pParticipantInfo = ppinfo_itor->second;
-					if (pParticipantInfo != NULL)
-					{
-						pAddPartInfo = rspsend->add_participants();
-						if (pAddPartInfo != 0)
-						{
-							pAddPartInfo->set_psuid(ppinfo_itor->first);
-							pAddPartInfo->set_nickname(pParticipantInfo->m_nickname);
-							pAddPartInfo->set_ip(pParticipantInfo->m_ip);
-							pAddPartInfo->set_protocoltype(pParticipantInfo->m_protocoltype);
-							pAddPartInfo->set_bandwidth(pParticipantInfo->m_bandwidth);
-							pAddPartInfo->set_usertype(pParticipantInfo->m_usertype);
-							pAddPartInfo->set_devicetype(pParticipantInfo->m_devicetype);
-							pAddPartInfo->set_devicecode(pParticipantInfo->m_devicecode);
-							pAddPartInfo->set_shortname(pParticipantInfo->m_shortname);
-							pAddPartInfo->set_orderno(pParticipantInfo->m_orderno);
-
-							partuidnameinfos.insert(std::make_pair(ppinfo_itor->first, pParticipantInfo->m_nickname));
-						}
-						delete pParticipantInfo;
-					}
-				}
-
-				participantInfos.clear();
-			}
-			rspsend->set_confctrlsuid(pConference->GetCtrlUserID());
-			rspsend->set_audioenable(pConference->GetAudioEnable());
-			rspsend->set_videoenable(pConference->GetVideoEnable());
-			rspsend->set_confname(pConference->GetConfName());
-			rspsend->set_encryptalg(pConference->GetEncryptAlg());
+			rspsend.set_confctrlsuid(pConference->GetCtrlUserID());
+			rspsend.set_audioenable(pConference->GetAudioEnable());
+			rspsend.set_videoenable(pConference->GetVideoEnable());
+			rspsend.set_confname(pConference->GetConfName());
+			rspsend.set_encryptalg(pConference->GetEncryptAlg());
 
 			if (pConfLiveSetting != NULL)
 			{
@@ -16962,21 +26749,162 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 					plivesetting->set_ispublic(pConfLiveSetting->GetIsPublic());
 					plivesetting->set_livepwd(pConfLiveSetting->GetLivePWD());
 					plivesetting->set_isuserec(pConfLiveSetting->GetIsUseRec());
-					rspsend->set_allocated_livesetinfo(plivesetting);
+					rspsend.set_allocated_livesetinfo(plivesetting);
 				}
 			}
 
-			rspsend->set_autorec(pConference->GetAutoREC());
+			rspsend.set_autorec(pConference->GetAutoREC());
+			rspsend.set_permanentenable(pConference->GetPermanentEnable());
+			//
+			CheckConfReqInfoAndRecoveryLincene(req->confid(), req->deviceid());
+			//发送会议企业id的授权
+			rspsend.set_confrelcompid(pConference->GetCompID());
 
+			SRMsgs::RspConfInfoToMC_CompanyInfo* pAddRelCompInfo = rspsend.add_complicinfos();
+			pAddRelCompInfo->set_companyid(pConference->GetCompID());
+			SRMsgs::RspConfInfoToMC_LicenceInfo* pAddRelCompLincene = pAddRelCompInfo->add_getlicinfos();
+			int surpLiceneCount = 0;
+			//同步
+			std::map<unsigned int, map<std::string, sLinceneInfo> > synclinceneInfo;
+			synclinceneInfo.clear();
+			map<std::string, sLinceneInfo> syncinfo;
+			syncinfo.clear();
+
+			if (pConference->GetCompID() > 0)
+			{
+				pAddRelCompLincene->set_licencetype(e_CompanyLincene_Conf);
+				surpLiceneCount = GetCompLinceneSuperInfo(pConference->GetCompID(), e_CompanyLincene_Conf, 1, true);
+				
+			}
+			else
+			{
+				pAddRelCompLincene->set_licencetype(e_CompanyLincene_Uknow);
+				
+			}
+			pAddRelCompLincene->set_licencenum(surpLiceneCount);
+			if (surpLiceneCount > 0)
+			{
+				SetMcCompanyUseLincene(req->deviceid(), pConference->GetCompID(), e_CompanyLincene_Conf, 1, true);
+
+				SetConfToCompList(pConference->GetCompID(), req->confid(),1);
+
+				SetMcCompLinceneInfo(req->deviceid(), pConference->GetCompID(), 1, true);
+				
+				SetConfCompLinceneInfoToRedis(req->confid(), req->deviceid(), pConference->GetCompID(), e_CompanyLincene_Conf, 1);
+				//
+				std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(e_CompanyLincene_Conf);
+				if (iter_comp_type != m_MapCompCapTables.end())
+				{
+					sLinceneInfo tempinfo;
+					tempinfo.starttime = "";
+					tempinfo.expiretime = "";
+					tempinfo.amount = 0 - surpLiceneCount;
+					syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+					synclinceneInfo.insert(make_pair(pConference->GetCompID(),syncinfo));
+					CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+				}
+				
+			}
+			if (req->complicinfos_size() > 0)
+			{
+				synclinceneInfo.clear();
+				for (int i = 0; i < req->complicinfos_size(); i++)
+				{
+					const SRMsgs::ReqConfInfoFromDevMgr_CompanyInfo getLinceneInfo = req->complicinfos(i);
+					SRMsgs::RspConfInfoToMC_CompanyInfo* pAddCompInfo = rspsend.add_complicinfos();
+					pAddCompInfo->set_companyid(getLinceneInfo.companyid());
+					//SRMsgs::RspConfInfoToMC_LicenceInfo* pAddLinceneList = rspsend->add_complicinfos();
+					syncinfo.clear();
+					for (int j = 0; j < getLinceneInfo.getlicinfos_size(); j++)
+					{
+						const SRMsgs::ReqConfInfoFromDevMgr_LicenceInfo lincinfo = getLinceneInfo.getlicinfos(j);
+
+						int linceneCount = GetCompLinceneSuperInfo(getLinceneInfo.companyid(), lincinfo.licencetype(), lincinfo.licencenum(), true);
+						if (linceneCount > 0)
+						{
+							SetMcCompanyUseLincene(req->deviceid(), getLinceneInfo.companyid(), lincinfo.licencetype(), linceneCount, true);
+
+							SetMcCompLinceneInfo(req->deviceid(), getLinceneInfo.companyid(), linceneCount, true);
+							//同步
+							SetConfCompLinceneInfoToRedis(req->confid(), req->deviceid(), getLinceneInfo.companyid(), lincinfo.licencetype(), linceneCount);
+
+							std::map<int, std::string>::iterator iter_comp_type = m_MapCompCapTables.find(lincinfo.licencetype());
+							if (iter_comp_type != m_MapCompCapTables.end())
+							{	
+								sLinceneInfo tempinfo;
+								tempinfo.starttime = "";
+								tempinfo.expiretime = "";
+								tempinfo.amount = 0 - linceneCount;
+								syncinfo.insert(make_pair(iter_comp_type->second, tempinfo));
+								
+							}
+
+						}
+						SRMsgs::RspConfInfoToMC_LicenceInfo* pAddLinceneList = pAddCompInfo->add_getlicinfos();
+						pAddLinceneList->set_licencetype(lincinfo.licencetype());
+						pAddLinceneList->set_licencenum(linceneCount);
+					}
+					synclinceneInfo.insert(make_pair(getLinceneInfo.companyid(), syncinfo));
+				}
+				CompLinceneUpdateToAllDevmgr(synclinceneInfo,2);
+			}
+
+			// 1、先发送会议基本信息(包括获取的授权信息)
+			// 2、根据参会人信息、点名列表信息、自动轮巡列表信息等业务进行分包发送
+
+			// 参会人信息
+			SR_uint32 uiPartTotalNums = 0;
+			SR_uint32 uiPartAlreadynums = 0;
+
+			SR_uint32 uiRClistTotalNums = 0;
+			SR_uint32 uiRClistAlreadynums = 0;
+			SR_uint32 uiRCpartTotalNums = 0;
+			SR_uint32 uiRCpartAlreadynums = 0;
+
+			SR_uint32 uiAPlistTotalNums = 0;
+			SR_uint32 uiAPlistAlreadynums = 0;
+			SR_uint32 uiAPpartTotalNums = 0;
+			SR_uint32 uiAPpartAlreadynums = 0;
+
+			SR_uint32 per_send_part_num = 300;
+			SR_uint32 per_send_list_num = 100;
+			SR_uint32 per_send_sub_part_num = 625;
+
+			std::map<unsigned int, std::string> partuidnameinfos;
+			partuidnameinfos.clear();
+
+			std::map<unsigned int, ParticipantInfo*> participantInfos;// key:suid
+			participantInfos.clear();
+			if (pConfParticipant != NULL)
+			{
+				pConfParticipant->SetConfID(req->confid());
+				pConfParticipant->SelectParticipantUserInfo(participantInfos);
+
+				for (std::map<unsigned int, ParticipantInfo*>::iterator ppinfo_itor = participantInfos.begin();
+					ppinfo_itor != participantInfos.end(); ppinfo_itor++)
+				{
+					ParticipantInfo* pParticipantInfo = NULL;
+					pParticipantInfo = ppinfo_itor->second;
+					if (pParticipantInfo != NULL)
+					{
+						if (ppinfo_itor->first != 0)
+						{
+							uiPartTotalNums++;
+
+							partuidnameinfos.insert(std::make_pair(ppinfo_itor->first, pParticipantInfo->m_nickname));
+						}
+					}
+				}
+			}
+
+			// 点名列表
+			std::list<RollCallInfo*> rollcallInfos;
+			rollcallInfos.clear();
 			if (pConfRollCallInfo != NULL)
 			{
-				std::list<RollCallInfo*> rollcallInfos;
-				rollcallInfos.clear();
-
 				pConfRollCallInfo->SetConfID(req->confid());
 				pConfRollCallInfo->SelectConfCallInfo(rollcallInfos);
 
-				SRMsgs::RspConfInfoToMC_RollCallInfo* pAddrcInfo = 0;
 				for (std::list<RollCallInfo*>::iterator prcinfo_itor = rollcallInfos.begin();
 					prcinfo_itor != rollcallInfos.end(); prcinfo_itor++)
 				{
@@ -16984,23 +26912,388 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 					pRollCallInfo = (*prcinfo_itor);
 					if (pRollCallInfo != NULL)
 					{
-						pAddrcInfo = rspsend->add_rollcalllist();
+						if (pRollCallInfo->m_callinfo_id != 0)
+						{
+							uiRClistTotalNums++;
+							if (pRollCallList != NULL)
+							{
+								pRollCallList->SetCallInfoID(pRollCallInfo->m_callinfo_id);
+								pRollCallList->SelectCallList(pRollCallInfo->m_calllists);// 获取点名列表（按照order_no升序获取）
+
+								for (std::list<CallList*>::iterator pcl_itor = pRollCallInfo->m_calllists.begin();
+									pcl_itor != pRollCallInfo->m_calllists.end(); /*pcl_itor++*/)
+								{
+									CallList* pCallList = NULL;
+									pCallList = (*pcl_itor);
+									if (pCallList != NULL)
+									{
+										std::map<unsigned int, std::string>::iterator user_itor = partuidnameinfos.find(pCallList->m_user_id);
+										if (user_itor == partuidnameinfos.end())
+										{
+											// 在参会者信息中找不到该被点名人
+											delete pCallList;
+											pcl_itor = pRollCallInfo->m_calllists.erase(pcl_itor);
+										}
+										else
+										{
+											uiRCpartTotalNums++;
+											(pRollCallInfo->m_totalsendpartnum)++;
+											pCallList->m_nickname.assign(user_itor->second);
+											pcl_itor++;
+										}
+									}
+									else
+									{
+										pcl_itor++;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+
+			// 自动轮巡列表
+			std::list<PollInfo*> pollInfos;
+			pollInfos.clear();
+			if (pConfPollInfo != NULL)
+			{
+				pConfPollInfo->SetConfID(req->confid());
+				pConfPollInfo->SelectConfPollInfo(pollInfos);
+
+				for (std::list<PollInfo*>::iterator papinfo_itor = pollInfos.begin();
+					papinfo_itor != pollInfos.end(); papinfo_itor++)
+				{
+					PollInfo* pPollInfo = NULL;
+					pPollInfo = (*papinfo_itor);
+					if (pPollInfo != NULL)
+					{
+						if (pPollInfo->m_pollinfo_id != 0)
+						{
+							uiAPlistTotalNums++;
+							if (pPollList != NULL)
+							{
+								pPollList->SetPollInfoID(pPollInfo->m_pollinfo_id);
+								pPollList->SelectPollList(pPollInfo->m_polllist);// 获取轮巡列表（按照order_no升序获取）
+
+								for (std::list<PollList*>::iterator ppl_itor = pPollInfo->m_polllist.begin();
+									ppl_itor != pPollInfo->m_polllist.end(); /*ppl_itor++*/)
+								{
+									PollList* ppPollList = NULL;
+									ppPollList = (*ppl_itor);
+									if (ppPollList != NULL)
+									{
+										std::map<unsigned int, std::string>::iterator user_itor = partuidnameinfos.find(ppPollList->m_user_id);
+										if (user_itor == partuidnameinfos.end())
+										{
+											// 在参会者信息中找不到该被轮巡人
+											delete ppPollList;
+											ppl_itor = pPollInfo->m_polllist.erase(ppl_itor);
+										}
+										else
+										{
+											uiAPpartTotalNums++;
+											pPollInfo->m_totalsendpartnum++;
+											ppl_itor++;
+										}
+									}
+									else
+									{
+										ppl_itor++;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// 拆包发送
+			// 一次性发送完
+			if (uiPartTotalNums <= per_send_part_num
+				&& uiRCpartTotalNums <= per_send_sub_part_num
+				&& uiAPpartTotalNums <= per_send_sub_part_num)// 25*25
+			{
+				// 添加参会人列表
+				SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddPartInfo = 0;
+				for (std::map<unsigned int, ParticipantInfo*>::iterator send_ppinfo_itor = participantInfos.begin();
+					send_ppinfo_itor != participantInfos.end(); /*send_ppinfo_itor++*/)
+				{
+					ParticipantInfo* pParticipantInfo = NULL;
+					pParticipantInfo = send_ppinfo_itor->second;
+					if (pParticipantInfo != NULL)
+					{
+						if (send_ppinfo_itor->first != 0)
+						{
+							pAddPartInfo = rspsend.add_participants();
+							if (pAddPartInfo != 0)
+							{
+								pAddPartInfo->set_psuid(send_ppinfo_itor->first);
+								pAddPartInfo->set_nickname(pParticipantInfo->m_nickname);
+								pAddPartInfo->set_ip(pParticipantInfo->m_ip);
+								pAddPartInfo->set_protocoltype(pParticipantInfo->m_protocoltype);
+								pAddPartInfo->set_bandwidth(pParticipantInfo->m_bandwidth);
+								pAddPartInfo->set_usertype(pParticipantInfo->m_usertype);
+								pAddPartInfo->set_devicetype(pParticipantInfo->m_devicetype);
+								pAddPartInfo->set_devicecode(pParticipantInfo->m_devicecode);
+								pAddPartInfo->set_shortname(pParticipantInfo->m_shortname);
+								pAddPartInfo->set_orderno(pParticipantInfo->m_orderno);
+
+								uiPartAlreadynums++;
+							}
+						}
+						delete pParticipantInfo;
+					}
+					participantInfos.erase(send_ppinfo_itor++);
+				}// for
+				participantInfos.clear();
+
+				// 添加点名列表
+				SRMsgs::RspConfInfoToMC_RollCallInfo* pAddrcInfo = 0;
+				for (std::list<RollCallInfo*>::iterator prcinfo_itor = rollcallInfos.begin();
+					prcinfo_itor != rollcallInfos.end(); /*prcinfo_itor++*/)
+				{
+					RollCallInfo* pRollCallInfo = NULL;
+					pRollCallInfo = (*prcinfo_itor);
+					if (pRollCallInfo != NULL)
+					{
+						pAddrcInfo = rspsend.add_rollcalllist();
 						if (pAddrcInfo != 0)
 						{
 							pAddrcInfo->set_rcid(pRollCallInfo->m_callinfo_id);
 							pAddrcInfo->set_rcname(pRollCallInfo->m_callinfo_name);
-							
-							if (pRollCallList != NULL)
-							{
-								std::list<CallList*> calllist;
-								calllist.clear();
 
-								pRollCallList->SetCallInfoID(pRollCallInfo->m_callinfo_id);
-								pRollCallList->SelectCallList(calllist);// 获取点名列表（按照order_no升序获取）
+							SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddcalllist = 0;
+							for (std::list<CallList*>::iterator pcl_itor = pRollCallInfo->m_calllists.begin();
+								pcl_itor != pRollCallInfo->m_calllists.end(); /*pcl_itor++*/)
+							{
+								CallList* pCallList = NULL;
+								pCallList = (*pcl_itor);
+								if (pCallList != NULL)
+								{
+									std::map<unsigned int, std::string>::iterator user_itor = partuidnameinfos.find(pCallList->m_user_id);
+									if (user_itor != partuidnameinfos.end())
+									{
+										pAddcalllist = pAddrcInfo->add_parts();
+										pAddcalllist->set_psuid(pCallList->m_user_id);
+										pAddcalllist->set_nickname(user_itor->second);
+
+										uiRCpartAlreadynums++;
+										pRollCallInfo->m_alreadysendpartnum++;
+									}
+									delete pCallList;
+								}
+								pcl_itor = pRollCallInfo->m_calllists.erase(pcl_itor);
+							}
+
+							//pAddrcInfo->set_rcparttotalnums(pRollCallInfo->m_totalsendpartnum);
+							//pAddrcInfo->set_rcpartalreadynums(pRollCallInfo->m_alreadysendpartnum);
+							uiRClistAlreadynums++;
+						}
+						delete pRollCallInfo;
+					}
+					prcinfo_itor = rollcallInfos.erase(prcinfo_itor);
+				}// for 
+				rollcallInfos.clear();
+
+				// 添加自动轮巡列表
+				SRMsgs::RspConfInfoToMC_AutoPollInfo* pAddapInfo = 0;
+				for (std::list<PollInfo*>::iterator papinfo_itor = pollInfos.begin();
+					papinfo_itor != pollInfos.end(); /*papinfo_itor++*/)
+				{
+					PollInfo* pPollInfo = NULL;
+					pPollInfo = (*papinfo_itor);
+					if (pPollInfo != NULL)
+					{
+						pAddapInfo = rspsend.add_autopolllist();
+						if (pAddapInfo != 0)
+						{
+							pAddapInfo->set_apid(pPollInfo->m_pollinfo_id);
+							pAddapInfo->set_apname(pPollInfo->m_pollinfo_name);
+
+							SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddpolllist = 0;
+							for (std::list<PollList*>::iterator ppl_itor = pPollInfo->m_polllist.begin();
+								ppl_itor != pPollInfo->m_polllist.end(); /*ppl_itor++*/)
+							{
+								PollList* ppPollList = NULL;
+								ppPollList = (*ppl_itor);
+								if (ppPollList != NULL)
+								{
+									std::map<unsigned int, std::string>::iterator user_itor = partuidnameinfos.find(ppPollList->m_user_id);
+									if (user_itor != partuidnameinfos.end())
+									{
+										pAddpolllist = pAddapInfo->add_parts();
+										pAddpolllist->set_psuid(ppPollList->m_user_id);
+										//pAddpolllist->set_nickname(user_itor->second);
+
+										uiAPpartAlreadynums++;
+										pPollInfo->m_alreadysendpartnum++;
+									}
+									delete ppPollList;
+								}
+								ppl_itor = pPollInfo->m_polllist.erase(ppl_itor);
+							}
+
+							//pAddapInfo->set_apparttotalnums(pPollInfo->m_totalsendpartnum);
+							//pAddapInfo->set_appartalreadynums(pPollInfo->m_alreadysendpartnum);
+							uiAPlistAlreadynums++;
+						}
+						delete pPollInfo;
+					}
+					papinfo_itor = pollInfos.erase(papinfo_itor);
+				}// for
+				pollInfos.clear();
+
+				rspsend.set_parttotalnums(uiPartTotalNums);
+				rspsend.set_partalreadynums(uiPartAlreadynums);
+				rspsend.set_rctotalnums(uiRClistTotalNums);
+				rspsend.set_rcalreadynums(uiRClistAlreadynums);
+				rspsend.set_aptotalnums(uiAPlistTotalNums);
+				rspsend.set_apalreadynums(uiAPlistAlreadynums);
+				SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
+			}
+			else
+			{
+				bool bFirst = true;
+				// 先发参会人信息
+				do
+				{
+					if (bFirst)
+					{
+						SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddPartInfo = 0;
+						for (std::map<unsigned int, ParticipantInfo*>::iterator send_ppinfo_itor = participantInfos.begin();
+							send_ppinfo_itor != participantInfos.end(); /*send_ppinfo_itor++*/)
+						{
+							ParticipantInfo* pParticipantInfo = NULL;
+							pParticipantInfo = send_ppinfo_itor->second;
+							if (pParticipantInfo != NULL)
+							{
+								if (send_ppinfo_itor->first != 0)
+								{
+									pAddPartInfo = rspsend.add_participants();
+									if (pAddPartInfo != 0)
+									{
+										pAddPartInfo->set_psuid(send_ppinfo_itor->first);
+										pAddPartInfo->set_nickname(pParticipantInfo->m_nickname);
+										pAddPartInfo->set_ip(pParticipantInfo->m_ip);
+										pAddPartInfo->set_protocoltype(pParticipantInfo->m_protocoltype);
+										pAddPartInfo->set_bandwidth(pParticipantInfo->m_bandwidth);
+										pAddPartInfo->set_usertype(pParticipantInfo->m_usertype);
+										pAddPartInfo->set_devicetype(pParticipantInfo->m_devicetype);
+										pAddPartInfo->set_devicecode(pParticipantInfo->m_devicecode);
+										pAddPartInfo->set_shortname(pParticipantInfo->m_shortname);
+										pAddPartInfo->set_orderno(pParticipantInfo->m_orderno);
+
+										uiPartAlreadynums++;
+									}
+								}
+								delete pParticipantInfo;
+								participantInfos.erase(send_ppinfo_itor++);
+							}
+							else
+							{
+								send_ppinfo_itor++;
+							}
+
+							if (uiPartAlreadynums % per_send_part_num == 0)
+							{
+								break;
+							}
+						}
+
+						rspsend.set_parttotalnums(uiPartTotalNums);
+						rspsend.set_partalreadynums(uiPartAlreadynums);
+						rspsend.set_rctotalnums(uiRClistTotalNums);
+						rspsend.set_rcalreadynums(uiRClistAlreadynums);
+						rspsend.set_aptotalnums(uiAPlistTotalNums);
+						rspsend.set_apalreadynums(uiAPlistAlreadynums);
+						SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
+
+						bFirst = false;
+					}
+					else
+					{
+						SRMsgs::RspConfInfoToMC rsprepeatsend;
+						rsprepeatsend.set_isok(true);
+						rsprepeatsend.set_confid(pConference->GetConfID());
+						if (participantInfos.size() > 0)
+						{
+							SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddPartInfo = 0;
+							for (std::map<unsigned int, ParticipantInfo*>::iterator send_ppinfo_itor = participantInfos.begin();
+								send_ppinfo_itor != participantInfos.end(); /*send_ppinfo_itor++*/)
+							{
+								ParticipantInfo* pParticipantInfo = NULL;
+								pParticipantInfo = send_ppinfo_itor->second;
+								if (pParticipantInfo != NULL)
+								{
+									if (send_ppinfo_itor->first != 0)
+									{
+										pAddPartInfo = rsprepeatsend.add_participants();
+										if (pAddPartInfo != 0)
+										{
+											pAddPartInfo->set_psuid(send_ppinfo_itor->first);
+											pAddPartInfo->set_nickname(pParticipantInfo->m_nickname);
+											pAddPartInfo->set_ip(pParticipantInfo->m_ip);
+											pAddPartInfo->set_protocoltype(pParticipantInfo->m_protocoltype);
+											pAddPartInfo->set_bandwidth(pParticipantInfo->m_bandwidth);
+											pAddPartInfo->set_usertype(pParticipantInfo->m_usertype);
+											pAddPartInfo->set_devicetype(pParticipantInfo->m_devicetype);
+											pAddPartInfo->set_devicecode(pParticipantInfo->m_devicecode);
+											pAddPartInfo->set_shortname(pParticipantInfo->m_shortname);
+											pAddPartInfo->set_orderno(pParticipantInfo->m_orderno);
+
+											uiPartAlreadynums++;
+										}
+									}
+									delete pParticipantInfo;
+									participantInfos.erase(send_ppinfo_itor++);
+								}
+								else
+								{
+									send_ppinfo_itor++;
+								}
+
+								if (uiPartAlreadynums % per_send_part_num == 0)
+								{
+									break;
+								}
+							}
+						}
+						rsprepeatsend.set_parttotalnums(uiPartTotalNums);
+						rsprepeatsend.set_partalreadynums(uiPartAlreadynums);
+						rsprepeatsend.set_rctotalnums(uiRClistTotalNums);
+						rsprepeatsend.set_rcalreadynums(uiRClistAlreadynums);
+						rsprepeatsend.set_aptotalnums(uiAPlistTotalNums);
+						rsprepeatsend.set_apalreadynums(uiAPlistAlreadynums);
+						SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rsprepeatsend);
+					}
+				} while (participantInfos.size() > 0);
+
+				// 点名列表发送
+				while (rollcallInfos.size() > 0)
+				{
+					SRMsgs::RspConfInfoToMC rsprepeatsendrc;
+					rsprepeatsendrc.set_isok(true);
+					rsprepeatsendrc.set_confid(pConference->GetConfID());
+
+					SRMsgs::RspConfInfoToMC_RollCallInfo* pAddrcInfo = 0;
+					for (std::list<RollCallInfo*>::iterator prcinfo_itor = rollcallInfos.begin();
+						prcinfo_itor != rollcallInfos.end(); /*prcinfo_itor++*/)
+					{
+						RollCallInfo* pRollCallInfo = NULL;
+						pRollCallInfo = (*prcinfo_itor);
+						if (pRollCallInfo != NULL)
+						{
+							pAddrcInfo = rsprepeatsendrc.add_rollcalllist();
+							if (pAddrcInfo != 0)
+							{
+								pAddrcInfo->set_rcid(pRollCallInfo->m_callinfo_id);
+								pAddrcInfo->set_rcname(pRollCallInfo->m_callinfo_name);
 
 								SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddcalllist = 0;
-								for (std::list<CallList*>::iterator pcl_itor = calllist.begin();
-									pcl_itor != calllist.end(); pcl_itor++)
+								for (std::list<CallList*>::iterator pcl_itor = pRollCallInfo->m_calllists.begin();
+									pcl_itor != pRollCallInfo->m_calllists.end(); /*pcl_itor++*/)
 								{
 									CallList* pCallList = NULL;
 									pCallList = (*pcl_itor);
@@ -17012,54 +27305,85 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 											pAddcalllist = pAddrcInfo->add_parts();
 											pAddcalllist->set_psuid(pCallList->m_user_id);
 											pAddcalllist->set_nickname(user_itor->second);
-										}
 
+											uiRCpartAlreadynums++;
+											pRollCallInfo->m_alreadysendpartnum++;
+										}
 										delete pCallList;
 									}
+									pcl_itor = pRollCallInfo->m_calllists.erase(pcl_itor);
+
+									if (uiRCpartAlreadynums % per_send_sub_part_num == 0)// 达到每次发送的最大终端数
+									{
+										break;
+									}
 								}
-								calllist.clear();
+
+								//pAddrcInfo->set_rcparttotalnums(pRollCallInfo->m_totalsendpartnum);
+								//pAddrcInfo->set_rcpartalreadynums(pRollCallInfo->m_alreadysendpartnum);
+
+								// 该列表中的终端发送完(或者本身该列表中没有终端),清除该列表
+								if (pRollCallInfo->m_totalsendpartnum == pRollCallInfo->m_alreadysendpartnum)
+								{
+									uiRClistAlreadynums++;
+									delete pRollCallInfo;
+									prcinfo_itor = rollcallInfos.erase(prcinfo_itor);
+
+									if (uiRClistAlreadynums % per_send_list_num == 0)// 达到每次发送的最大列表数,此刻跳出for循环
+									{
+										break;
+									}
+								}
+								else
+								{
+									// 该列表中的终端还未发送完,放到下一次发送,此刻跳出for循环
+									break;
+								}
+							}
+							else
+							{
+								prcinfo_itor++;
 							}
 						}
-						delete pRollCallInfo;
-					}
+						else
+						{
+							prcinfo_itor = rollcallInfos.erase(prcinfo_itor);
+						}
+					}// for 
+
+					rsprepeatsendrc.set_parttotalnums(uiPartTotalNums);
+					rsprepeatsendrc.set_partalreadynums(uiPartAlreadynums);
+					rsprepeatsendrc.set_rctotalnums(uiRClistTotalNums);
+					rsprepeatsendrc.set_rcalreadynums(uiRClistAlreadynums);
+					rsprepeatsendrc.set_aptotalnums(uiAPlistTotalNums);
+					rsprepeatsendrc.set_apalreadynums(uiAPlistAlreadynums);
+					SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rsprepeatsendrc);
 				}
 
-				rollcallInfos.clear();
-			}
-
-			if (pConfPollInfo != NULL)
-			{
-				std::list<PollInfo*> pollInfos;
-				pollInfos.clear();
-
-				pConfPollInfo->SetConfID(req->confid());
-				pConfPollInfo->SelectConfPollInfo(pollInfos);
-
-				SRMsgs::RspConfInfoToMC_AutoPollInfo* pAddapInfo = 0;
-				for (std::list<PollInfo*>::iterator papinfo_itor = pollInfos.begin();
-					papinfo_itor != pollInfos.end(); papinfo_itor++)
+				// 自动轮巡列表发送
+				while (pollInfos.size() > 0)
 				{
-					PollInfo* pPollInfo = NULL;
-					pPollInfo = (*papinfo_itor);
-					if (pPollInfo != NULL)
+					SRMsgs::RspConfInfoToMC rsprepeatsendap;
+					rsprepeatsendap.set_isok(true);
+					rsprepeatsendap.set_confid(pConference->GetConfID());
+
+					SRMsgs::RspConfInfoToMC_AutoPollInfo* pAddapInfo = 0;
+					for (std::list<PollInfo*>::iterator papinfo_itor = pollInfos.begin();
+						papinfo_itor != pollInfos.end(); /*papinfo_itor++*/)
 					{
-						pAddapInfo = rspsend->add_autopolllist();
-						if (pAddapInfo != 0)
+						PollInfo* pPollInfo = NULL;
+						pPollInfo = (*papinfo_itor);
+						if (pPollInfo != NULL)
 						{
-							pAddapInfo->set_apid(pPollInfo->m_pollinfo_id);
-							pAddapInfo->set_apname(pPollInfo->m_pollinfo_name);
-
-							if (pPollList != NULL)
+							pAddapInfo = rsprepeatsendap.add_autopolllist();
+							if (pAddapInfo != 0)
 							{
-								std::list<PollList*> polllist;
-								polllist.clear();
-
-								pPollList->SetPollInfoID(pPollInfo->m_pollinfo_id);
-								pPollList->SelectPollList(polllist);// 获取轮巡列表（按照order_no升序获取）
+								pAddapInfo->set_apid(pPollInfo->m_pollinfo_id);
+								pAddapInfo->set_apname(pPollInfo->m_pollinfo_name);
 
 								SRMsgs::RspConfInfoToMC_ParticipantInfo* pAddpolllist = 0;
-								for (std::list<PollList*>::iterator ppl_itor = polllist.begin();
-									ppl_itor != polllist.end(); ppl_itor++)
+								for (std::list<PollList*>::iterator ppl_itor = pPollInfo->m_polllist.begin();
+									ppl_itor != pPollInfo->m_polllist.end(); /*ppl_itor++*/)
 								{
 									PollList* ppPollList = NULL;
 									ppPollList = (*ppl_itor);
@@ -17071,43 +27395,273 @@ void CDevMgr::GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConfe
 											pAddpolllist = pAddapInfo->add_parts();
 											pAddpolllist->set_psuid(ppPollList->m_user_id);
 											//pAddpolllist->set_nickname(user_itor->second);
-										}
 
+											uiAPpartAlreadynums++;
+											pPollInfo->m_alreadysendpartnum++;
+										}
 										delete ppPollList;
 									}
+									ppl_itor = pPollInfo->m_polllist.erase(ppl_itor);
+
+									if (uiAPpartAlreadynums % per_send_sub_part_num == 0)// 达到每次发送的最大终端数
+									{
+										break;
+									}
 								}
-								polllist.clear();
+
+								//pAddapInfo->set_apparttotalnums(pPollInfo->m_totalsendpartnum);
+								//pAddapInfo->set_appartalreadynums(pPollInfo->m_alreadysendpartnum);
+
+								// 该列表中的终端发送完(或者本身该列表中没有终端),清除该列表
+								if (pPollInfo->m_totalsendpartnum == pPollInfo->m_alreadysendpartnum)
+								{
+									uiAPlistAlreadynums++;
+									delete pPollInfo;
+									papinfo_itor = pollInfos.erase(papinfo_itor);
+
+									if (uiAPlistAlreadynums % per_send_list_num == 0)// 达到每次发送的最大列表数,此刻跳出for循环
+									{
+										break;
+									}
+								}
+								else
+								{
+									// 该列表中的终端还未发送完,放到下一次发送,此刻跳出for循环
+									break;
+								}
+							}
+							else
+							{
+								papinfo_itor++;
 							}
 						}
-						delete pPollInfo;
-					}
+						else
+						{
+							papinfo_itor = pollInfos.erase(papinfo_itor);
+						}
+					}// for
+
+					rsprepeatsendap.set_parttotalnums(uiPartTotalNums);
+					rsprepeatsendap.set_partalreadynums(uiPartAlreadynums);
+					rsprepeatsendap.set_rctotalnums(uiRClistTotalNums);
+					rsprepeatsendap.set_rcalreadynums(uiRClistAlreadynums);
+					rsprepeatsendap.set_aptotalnums(uiAPlistTotalNums);
+					rsprepeatsendap.set_apalreadynums(uiAPlistAlreadynums);
+					SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rsprepeatsendap);
 				}
 
-				pollInfos.clear();
 			}
 
 			partuidnameinfos.clear();
-
-			rspsend->set_permanentenable(pConference->GetPermanentEnable());
 		}
 		else
 		{
 			sr_printf(SR_LOGLEVEL_DEBUG, "GetConfInfoFromDB confid=%s is not exist in mysql.\n", confid_s);
+
+			SRMsgs::RspConfInfoToMC rspsend;
 			//mysql不存在，则发送创建会议失败提示
-			rspsend->set_isok(false);
-			rspsend->set_confid(req->confid());
-			rspsend->set_failurereason("conference is not exist");
-			rspsend->set_errorcode(0x030006);
+			rspsend.set_isok(false);
+			rspsend.set_confid(req->confid());
+			rspsend.set_failurereason("conference is not exist");
+			rspsend.set_errorcode(0x030006);
+			SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
 		}
 	}
 	else
 	{
 		sr_printf(SR_LOGLEVEL_DEBUG, "GetConfInfoFromDB confid=%s reqmcid=%d is not equal related(in redis) mcid=%d.\n", confid_s, req->deviceid(), iMcid);
+
+		SRMsgs::RspConfInfoToMC rspsend;
 		//redis不存在，则发送创建会议失败提示
-		rspsend->set_isok(false);
-		rspsend->set_confid(req->confid());
-		rspsend->set_failurereason("choose mc not in redis");
-		rspsend->set_errorcode(0x030007);
+		rspsend.set_isok(false);
+		rspsend.set_confid(req->confid());
+		rspsend.set_failurereason("choose mc not in redis");
+		rspsend.set_errorcode(0x030007);
+		SerialProtoMsgAndSend(pClient, SRMsgId_RspConfInfoToMC, &rspsend);
+	}
+
+}
+
+void CDevMgr::SyncConfInfo(const SRMsgs::IndSyncConfInfo* ind)
+{
+	//if (pDevice == NULL)
+	//{
+	//	return;
+	//}
+
+	//int iDeviceid = pDevice->GetDeviceID();
+
+	//// 对该设备相关数据库Mysql、Redis进行更新处理
+	//unsigned int uiDeviceType = req->svr_type(); // 目前只有mc
+
+	if (ind->deviceid() > 0
+		&& ind->confinfos_size() > 0)
+	{
+		//获取当前时间串
+		time_t timeNow;
+		struct tm *ptmNow;
+		char szTime[30];
+		timeNow = time(NULL);
+		ptmNow = localtime(&timeNow);
+		sprintf(szTime, "%d.%02d.%02d %02d:%02d:%02d", ptmNow->tm_year + 1900, ptmNow->tm_mon + 1, ptmNow->tm_mday, ptmNow->tm_hour, ptmNow->tm_min, ptmNow->tm_sec);
+
+		for (int i = 0; i < ind->confinfos_size(); i++)
+		{
+			const SRMsgs::IndSyncConfInfo_ConfInfo& confinfo = ind->confinfos(i);
+			if (confinfo.confid() != 0
+				&& confinfo.confreportid() != 0)
+			{
+				SR_uint64 confid = confinfo.confid();
+
+				char deviceid_devid_s[128] = { 0 };
+				sprintf(deviceid_devid_s, "deviceid_%d", ind->deviceid());
+
+				char deviceid[128] = { 0 };
+				sprintf(deviceid, "%d", ind->deviceid());
+
+				char confid_s[128] = { 0 };
+#ifdef WIN32
+				sprintf(confid_s, "%I64d", confid);
+#elif defined LINUX
+				sprintf(confid_s, "%lld", confid);
+#endif
+
+				// 此处只负责同步redis db2 conference_deviceid中内容
+				m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+				// 先查找该会议是否还在redis中，如果还在，说明该会议是未结束会议
+				char *ptrRet = NULL;
+				ptrRet = m_pRedisConnList[e_RC_TT_MainThread]->gethashvalue(deviceid_devid_s, confid_s); // 获取该key对应的value
+				if (ptrRet == NULL)
+				{
+					// 该会议不存在,已经结束（可能异常结束）,需要将当前会议重新插入
+
+					m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue("conference_deviceid", deviceid, confid_s);
+					m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(deviceid_devid_s, deviceid, confid_s);
+
+					InsertConfReport(confinfo.confid(), confinfo.confreportid(), szTime, timeNow);
+					// 先插入mc的计费信息
+					for (int ii = 0; ii < confinfo.devinfos_size(); ii++)
+					{
+						const SRMsgs::IndSyncConfInfo_DevInfo& devinfo = confinfo.devinfos(ii);
+						if (devinfo.devid() != 0
+							&& devinfo.devdtlid() != 0
+							&& devinfo.devid() == ind->deviceid())
+						{
+							InsertDeviceConfDetail(confinfo.confid(), devinfo.devid(), confinfo.confreportid(), devinfo.devdtlid(), szTime, timeNow);
+						}
+					}
+
+					// 后插netmp计费信息
+					for (int ii = 0; ii < confinfo.devinfos_size(); ii++)
+					{
+						const SRMsgs::IndSyncConfInfo_DevInfo& devinfo = confinfo.devinfos(ii);
+						if (devinfo.devid() != 0
+							&& devinfo.devdtlid() != 0
+							&& devinfo.devid() != ind->deviceid())
+						{
+							char deviceid_netmpid[128] = { 0 };
+							sprintf(deviceid_netmpid, "deviceid_%d", devinfo.devid());
+							char netmpid_s[128] = { 0 };
+							sprintf(netmpid_s, "%d", devinfo.devid());
+
+							m_pRedisConnList[e_RC_TT_MainThread]->selectdb(2);
+							m_pRedisConnList[e_RC_TT_MainThread]->sethashvalue(deviceid_netmpid, netmpid_s, confid_s);
+
+							InsertDeviceConfDetail(confinfo.confid(), devinfo.devid(), confinfo.confreportid(), devinfo.devdtlid(), szTime, timeNow);
+						}
+					}
+
+					std::map<unsigned int, map<std::string, int> > mapAllComplinceneInfo;
+
+					for (int jj = 0; jj < confinfo.userinfos_size(); jj++)
+					{
+						const SRMsgs::IndSyncConfInfo_UserInfo& userinfo = confinfo.userinfos(jj);
+						if (userinfo.suid() != 0
+							&& userinfo.userdtlid() != 0)
+						{
+							AddUserConfDetail(userinfo.suid(), confinfo.confid(), confinfo.confreportid(), userinfo.userdtlid(), (char*)(userinfo.alias().c_str()), szTime, timeNow, userinfo.fromtype(), userinfo.termtype());
+							
+							GetMCSynConfTernCompLinceneInfo(mapAllComplinceneInfo, userinfo.userrelcompid(), userinfo.fromtype(), userinfo.termtype());
+						}
+					}
+
+					for (int kk = 0; kk < confinfo.recinfos_size(); kk++)
+					{
+						const SRMsgs::IndSyncConfInfo_RecInfo& recinfo = confinfo.recinfos(kk);
+						if (recinfo.recordid() != 0)
+						{
+							InsertConfRecord(confinfo.confid(), confinfo.confreportid(), recinfo.recordid(), szTime, timeNow, (char*)(confinfo.confname().c_str()));
+						}
+					}
+
+					for (int mm = 0; mm < confinfo.liveinfos_size(); mm++)
+					{
+						const SRMsgs::IndSyncConfInfo_LiveInfo& liveinfo = confinfo.liveinfos(mm);
+						if (liveinfo.liveinfoid() != 0)
+						{
+							SRMsgs::IndCRSStartLive indstartlive;
+							indstartlive.set_confid(confinfo.confid());
+							indstartlive.set_confreportid(confinfo.confreportid());
+							indstartlive.set_liveinfoid(liveinfo.liveinfoid());
+							indstartlive.set_livesvrtype(liveinfo.livesvrtype());
+							indstartlive.set_livepushurl(liveinfo.livepushurl());
+							indstartlive.set_livepullurl(liveinfo.livepullurl());
+							indstartlive.set_liveplayurl(liveinfo.liveplayurl());
+
+							SRMsgs::IndCRSStartLive_LiveSetting* paddliveset = new SRMsgs::IndCRSStartLive_LiveSetting();
+							paddliveset->set_chairman(liveinfo.livesetinfo().chairman());
+							paddliveset->set_subject(liveinfo.livesetinfo().subject());
+							paddliveset->set_abstract(liveinfo.livesetinfo().abstract());
+							paddliveset->set_ispublic(liveinfo.livesetinfo().ispublic());
+							paddliveset->set_livepwd(liveinfo.livesetinfo().livepwd());
+							paddliveset->set_isuserec(liveinfo.livesetinfo().isuserec());
+
+							indstartlive.set_allocated_livesetinfo(paddliveset);
+
+							for (int mmm = 0; mmm < liveinfo.liveaddrs_size(); mmm++)
+							{
+								const SRMsgs::IndSyncConfInfo_LiveAddr& liveaddr = liveinfo.liveaddrs(mmm);
+
+								SRMsgs::IndCRSStartLive_LiveAddr* paddliveaddr = indstartlive.add_liveaddrs();
+								paddliveaddr->set_type(liveaddr.type());
+								paddliveaddr->set_url(liveaddr.url());
+							}
+
+							InsertConfLiveInfo(liveinfo.liveinfoid(), &indstartlive, szTime, timeNow);
+						}
+					}
+				
+					CheckMCSynConfTernCompLinceneInfo(confinfo.confid(), ind->deviceid(), mapAllComplinceneInfo);
+
+					CheckMCSynConfCompLinceneInfo(confinfo.confid(), ind->deviceid(), confinfo.confrelcompid(), confinfo.liveinfos_size(), confinfo.recinfos_size());
+				}
+				else
+				{
+					// 该会议还未结束，进一步检查value是不是该mc
+					int iMcid = 0;
+					iMcid = atoi(ptrRet);
+					delete ptrRet; // 不删除会导致内存泄漏
+					sr_printf(SR_LOGLEVEL_INFO, "==CDevMgr::SyncConfInfo ===ind->deviceid()=%d has in db(2) tab:%s<confid_s=%s,iMcid=%d>--->>\n", ind->deviceid(), deviceid_devid_s, confid_s, iMcid);
+					if (iMcid != 0)
+					{
+						// 同步会议的mc与redis所存的mc不一致
+						if (ind->deviceid() != iMcid)
+						{
+							sr_printf(SR_LOGLEVEL_WARNING, "==CDevMgr::SyncConfInfo ===ind->deviceid() = %d not is redis mcid=%d--->>\n", ind->deviceid(), iMcid);
+						}
+						else
+						{
+						}
+					}
+				}
+			}
+		}
+
+		CheckMCConfLinceneInfo();
+	}
+	else
+	{
+		sr_printf(SR_LOGLEVEL_WARNING, "==CDevMgr::SyncConfInfo ===not have confinfos,so do nothing--->>\n");
 	}
 }
 
@@ -17212,6 +27766,7 @@ void CDevMgr::SyncConfInfo(const SRMsgs::ReqRegister* req, CDevice* pDevice, tim
 				// 该会议还未结束，进一步检查value是不是该mc
 				int iMcid = 0;
 				iMcid = atoi(ptrRet);
+				delete ptrRet; // 不删除会导致内存泄漏
 				sr_printf(SR_LOGLEVEL_INFO, "==CDevMgr::SyncConfInfo ===iDeviceid=%d [confid_s=%s,iMcid=%d] has in db(2) tab:%s--->>\n", iDeviceid, confid_s, iMcid, deviceid_id);
 				if (iMcid != 0)
 				{
@@ -17563,6 +28118,7 @@ SR_void CDevMgr::onTimerArrive(const SRMC::TimerData* ptd)
 		sr_printf(SR_LOGLEVEL_DEBUG, "e_write_redis2mysql_timer.\n");
 		// 定时将会议相关信息从redis写入数据库
 		CheckWriteDB();
+		CheckConfTimeoutData();
 		break;
 	}
 	case e_connect_devmgr_timer:
@@ -17667,6 +28223,7 @@ SR_void CDevMgr::onTimerArrive(const SRMC::TimerData* ptd)
 				}
 				((AcitiveConnect*)(m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr))->Close();
 
+				DeleteCompanyInfoRedis(m_uiMyDeviceid);
 				//SockErrorData devsockerro(m_devConnMgr->m_devmgrinfomanager->m_current_devmgr_sockptr);
 				//sr_printf(SR_PRINT_ERROR, "devmgr timeout\n");
 				//this->onSockError(&devsockerro);

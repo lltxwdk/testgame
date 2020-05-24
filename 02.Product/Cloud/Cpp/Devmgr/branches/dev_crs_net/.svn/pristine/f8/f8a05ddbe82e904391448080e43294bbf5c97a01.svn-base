@@ -1,0 +1,97 @@
+
+#ifndef LIST_COMPLINCENE_H
+#define LIST_COMPLINCENE_H
+
+#include <iostream>
+#include <set>
+#include "DBconnector.h"
+
+using namespace std;
+
+struct sCompLinceneInfo
+{
+	int srcnt;							//基础并发-点数
+	std::string srexptime;				//基础并发-授权截止时间
+	int stdcnt;							//标准终端-点数
+	std::string stdexptime;				//标准终端-授权截止时间
+	int monitorcnt;						//监控(包含监控实时流,监控录像)-点数
+	std::string monitorexptime;			//监控-授权截止时间
+	int voicecnt;						//语音(包含PSTN)-点数
+	std::string voiceexptime;			//语音(包含PSTN)-授权截止时间
+	int reccnt;							//录播-点数
+	std::string recexptime;				//录播-授权截止时间
+	int livecnt;						//直播-点数
+	std::string	liveexptime;			//直播-授权截止时间
+	int confcnt;						//每个企业限定最大会议数
+	
+	sCompLinceneInfo()
+	{
+		srcnt = 0;
+		srexptime = "";
+		stdcnt = 0;
+		stdexptime = "";
+		monitorcnt = 0;
+		monitorexptime = "";
+		voicecnt = 0;
+		voiceexptime = "";
+		reccnt = 0;
+		recexptime = "";
+		livecnt = 0;
+		liveexptime = "";
+		confcnt = 0;
+
+	}
+
+};
+
+//struct sLinceneInfo
+//{
+//	int type;							//授权类型
+//	int amount;							//授权点数
+//	std::string expiretime;				//授权截止时间
+//};
+
+class CCompCapLincene
+{
+public:
+	CCompCapLincene();
+	virtual ~CCompCapLincene();
+	//static CDeviceConfig* GetInstance();
+
+	bool GetCompLinceneInfo(int compid, sCompLinceneInfo* linceneInfo);
+	 
+
+	std::set<int> GetCompIdList();
+
+
+	void SetCapLinceneInfo(std::string lincene_col, sCompLinceneInfo* linceneinfo, int amount, std::string expretime);
+	void SetCapLinceneInfo(int cap_id, sCompLinceneInfo* linceneinfo, int amount, std::string expretime);
+
+	bool SelectSingleCompLinceneInfo(int compid, sCompLinceneInfo* linceneInfo);
+	//
+	bool InsertDB();
+	bool DeleteDB();
+	bool UpdateDB();
+	bool SelectLinceneIdDB();
+	bool SelectCompLinceneDB();
+
+
+private:
+	int m_compid;							//企业id
+ 
+	//t_capbility表对应值,key-capid,value-license_col
+
+	std::map<int, string> mapCapbilityInfo;
+
+	/////
+	std::map<int, sCompLinceneInfo>m_smapCompLinceneInfo;
+
+	//企业授权信息,key-compid,value-map, keys-capid,value-sLinceneInfo
+	//std::map<int, vector< map<int, sLinceneInfo> > > m_mapCompLinceneInfo;
+	//所有可用的企业id
+	std::set<int> m_sCompId;
+
+	CCriticalSection m_csCCompLincene;
+};
+
+#endif //LIST_DEVICECONFIG_H

@@ -1,0 +1,163 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{22DD2B58-A329-4DA6-BB68-2352C62C19BB}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>MC</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_LIB;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_SCL_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>true</SDLCheck>
+      <AdditionalIncludeDirectories>..\..\..\..\..\..\01.BaseLib\netlib\include;..\..\src\crypt_4_0_sdk\win\win32;..\..\..\..\..\..\00.Common\common;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\include;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output;..\..\..\..\..\..\00.Common\protobuf\proto_define;..\..\..\..\..\..\00.Common\mediacommon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\..\..\..\..\..\01.BaseLib\netlib\lib;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\lib\windows\debug;..\..\src\crypt_4_0_sdk\win\win32\debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>netlib_d.lib;libprotobuf.lib;CryptoWrapper.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_LIB;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>true</SDLCheck>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>..\..\..\..\..\..\00.Common\common;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\include;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output;..\..\..\..\..\..\01.BaseLib\netlib\include;..\..\..\..\..\..\00.Common\protobuf\proto_define;..\..\..\..\..\..\00.Common\mediacommon;..\..\src\crypt_4_0_sdk\win\win32;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalDependencies>netlib_r.lib;libprotobuf.lib;CryptoWrapper.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\..\..\..\..\01.BaseLib\netlib\lib;..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\lib\windows\release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\..\..\..\00.Common\common\Common.c" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\common\LpConfig.c" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\common\SRProtoParser.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\common\TraceLog.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\common\Utils.cpp" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\device_ser.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_crs.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_mp.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_netmp.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_gw.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_ter.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_ter_plus.pb.cc" />
+    <ClCompile Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_relayserver.pb.cc" />
+    <ClCompile Include="..\..\src\asyncthread.cpp" />
+    <ClCompile Include="..\..\src\clientConnect.cpp" />
+    <ClCompile Include="..\..\src\deviceManager.cpp" />
+    <ClCompile Include="..\..\src\devmgrConnect.cpp" />
+    <ClCompile Include="..\..\src\hardwareInfo.cpp" />
+    <ClCompile Include="..\..\src\ini_configuration.cpp" />
+    <ClCompile Include="..\..\src\MC.cpp" />
+    <ClCompile Include="..\..\src\MD5.cpp" />
+    <ClCompile Include="..\..\src\SRProtoConnBase.cpp" />
+    <ClCompile Include="..\..\src\sr_common.cpp" />
+    <ClCompile Include="..\..\src\sr_decrypt.cpp" />
+    <ClCompile Include="..\..\src\sr_mpdevprocess.cpp" />
+    <ClCompile Include="..\..\src\sr_tersmsgprocess.cpp" />
+    <ClCompile Include="..\..\src\terminalMgr.cpp" />
+    <ClCompile Include="..\..\src\thread.cpp" />
+    <ClCompile Include="..\..\src\thread_mutex.cpp" />
+    <ClCompile Include="..\..\src\timer_manager.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\..\..\..\..\00.Common\common\Common.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\common\LpConfig.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\common\SRProtoParser.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\common\TraceLog.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\device_ser.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_crs.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_mp.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_netmp.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_gw.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_ter.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_ter_plus.pb.h" />
+    <ClInclude Include="..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output\mc_relayserver.pb.h" />
+    <ClInclude Include="..\..\src\asyncthread.h" />
+    <ClInclude Include="..\..\src\clientConnect.h" />
+    <ClInclude Include="..\..\src\crypt_4_0_sdk\win\win32\CryptoWrapperAPI.h" />
+    <ClInclude Include="..\..\src\deviceManager.h" />
+    <ClInclude Include="..\..\src\devmgrConnect.h" />
+    <ClInclude Include="..\..\src\disabled.h" />
+    <ClInclude Include="..\..\src\functor.h" />
+    <ClInclude Include="..\..\src\hardwareInfo.h" />
+    <ClInclude Include="..\..\src\ini_configuration.h" />
+    <ClInclude Include="..\..\src\MD5.h" />
+    <ClInclude Include="..\..\src\SRProtoConnBase.h" />
+    <ClInclude Include="..\..\src\sr_common.h" />
+    <ClInclude Include="..\..\src\sr_decrypt.h" />
+    <ClInclude Include="..\..\src\sr_message.h" />
+    <ClInclude Include="..\..\src\sr_msgprocess.h" />
+    <ClInclude Include="..\..\src\sr_pb_codec.h" />
+    <ClInclude Include="..\..\src\sr_protomsgid.h" />
+    <ClInclude Include="..\..\src\sr_queuemsgid.h" />
+    <ClInclude Include="..\..\src\sr_tcpheader.h" />
+    <ClInclude Include="..\..\src\sr_type.h" />
+    <ClInclude Include="..\..\src\terminalMgr.h" />
+    <ClInclude Include="..\..\src\thread.h" />
+    <ClInclude Include="..\..\src\thread_mutex.h" />
+    <ClInclude Include="..\..\src\timer_manager.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

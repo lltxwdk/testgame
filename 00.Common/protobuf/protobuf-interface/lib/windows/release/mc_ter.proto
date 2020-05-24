@@ -71,7 +71,7 @@ message ReqTerJoinConf
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -85,7 +85,7 @@ message ReqTerJoinConf
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;//会议号,对应数据库conference表中的conf_id或者conf_subject
 	optional uint32 	suid 		= 2;//终端唯一标识(由终端产生)
@@ -94,12 +94,12 @@ message ReqTerJoinConf
 	optional bool   	ismuted 	= 5;//默认主音频状态
 	optional bool   	isCameraOn  = 6;//默认主摄像头状态
 	optional uint32 	termtype 	= 7;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
-	optional uint32 	fromtype 	= 8;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 	fromtype 	= 8;// 0-来自随锐平台(即随锐自有SR终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
 	optional uint32 	usertype 	= 9;//用户类型,0-临时(匿名)用户,1-正式(注册)用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端实时流,5-非本域用户,6-3288终端,7-监控前端录像,8-微信网页客户端
 	optional uint32 	groupid 	= 10;//该终端所属域分组id
 	optional string 	systemload  = 11;//当前系统所有设备(mc)负载信息(AES密文),终端入会时restful获取该密文信息透传给mc
 	optional uint32 	specialtype	= 12;//特殊类型, 0-普通终端类型,1-投屏终端类型
-	optional string 	protodefver = 13;//protobuf接口定义的版本号,12位时间日期值的字符串(格式为：YYYYMMDDHHMM),如：201808101949
+	optional string 	protodefver = 13;//protobuf接口定义的版本号(格式为：X.Y.Z,即主(大)版本.分支版本.发布版本,XYZ都为阿拉伯数字),如：2.2.7
 	optional string 	version 	= 14;//终端的版本信息
 	repeated IPPORT      selfaddrs  = 15;//终端自己的内外地址信息
 	optional string 	domainname 	= 16;//终端所属域的域名
@@ -112,6 +112,7 @@ message ReqTerJoinConf
 	repeated DeviceInfo  devinfos      = 23;//终端的设备信息,如音视频设备,如果未携带该字段就认为不支持多摄像头功能直接拒绝入会
 	repeated PresetInfo  presetinfos   = 24;//终端摄像头预置位信息,为空表示没有设置预置位
 	optional uint32 	producttype    = 25;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	optional uint32 	userrelcompid      = 26;//该终端归属的企业id,如果低版本未携带该字段拒绝入会
 }
 //会控者获取会议状态与RspConfStatus对应,H5-->ConfCtrlSvr-->MC
 message ReqConfStatus
@@ -409,7 +410,7 @@ message IndCloseCamera
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;
@@ -440,7 +441,7 @@ message IndOpenCamera
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;
@@ -798,7 +799,7 @@ message CmdSetWhitelist
 	}
 	message WhiteListInfo
 	{
-		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单、2-联席主持人白名单
 		repeated TerInfo term	 		= 2;//白名单列表
 	}
 	optional uint32 	sponsortype 	= 1;//发起者类型,1-ter、2-web
@@ -886,7 +887,7 @@ message CmdChairLockVideo
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
@@ -919,7 +920,7 @@ message CmdChairUnLockVideo
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示会议主席的terid
@@ -1179,7 +1180,7 @@ message CmdOpenCamera
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
@@ -1215,7 +1216,7 @@ message CmdCloseCamera
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//发送消息的终端，0-web、非零表示终端的terid(当sponsortype为1情况terid表示主席的terid)
@@ -1409,7 +1410,7 @@ message CmdMCSetMultiScreen
 		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 	= 7;//终端名称
-		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头		
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头		
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
 	}
 	optional uint32 			sponsortype 	= 1;//发起者类型,1-ter、2-web
@@ -2165,7 +2166,7 @@ message RspConfStatus
 	}
 	message WhiteListInfo
 	{
-		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单、2-联席主持人白名单
 		repeated uint32 terlist	 		= 2;//白名单列表,参会者suid集合
 	}
 	message LiveSetting 
@@ -2193,6 +2194,18 @@ message RspConfStatus
 	{
 		optional uint32  vastate   = 1;//视频分析功能是否开启,0-停止,1-开始
 		optional uint32	analymode  = 2;//分析的模式,0-未知、1-人脸识别模式、2-虚拟桌牌模式；
+	}
+	message SubStatusInfo
+	{
+		optional uint32 substatustype = 1;//会议中功能的子功能类型,0-共享是否暂停(开启共享的前提下)、1-共享标注(开启共享的前提下)、2-只有主持人可以发起共享
+		optional uint32 substattus = 2;//会议中功能的子功能对应状态,0-关闭、1-开启（substatustype==2时,0-代表所有人都可以发起共享,1-只有主持人可以发起共享）
+		optional uint32 assistvideotimes = 3;//会议中共享时间,单位：秒；目前只支持substatustype==2时使用,默认值是0，代表不限制时间
+	}
+	message ConfStatusInfo
+	{
+		optional uint32 statustype = 1;//会议中功能的类型,0-未知、1-双流（共享）
+		optional uint32 stattus = 2;//会议中功能的状态，0-关闭、1-开启
+		repeated SubStatusInfo substatusinfos   = 3;//会议中功能的子功能
 	}
 	optional bool 		isok				= 1;
 	optional uint64		confid 				= 2;//会议号
@@ -2226,6 +2239,7 @@ message RspConfStatus
 	optional uint32 	filternovideo 		= 30;//confmode为1时表示主席模式下各端“自动模式或轮询过滤无视频参会人”,默认0-关闭、1-开启；confmode为0时忽略该字段
 	optional uint32		  totalnums			= 31;//参会者列表里参会者的总数目
 	optional uint32		  alreadynums		= 32;//已经发送的参会者数目,若与totalnums一致则这次结束
+	repeated ConfStatusInfo confstatusinfos = 33;//会议功能信息
 }
 //回复终端列表信息给终端(包括会控者),终端列表中增加suid属性便于接收端对比地址簿终端显示用
 //MC-->Ter/MC-->ConfCtrlSvr
@@ -2255,7 +2269,7 @@ message RspConfTerLists
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -2269,7 +2283,7 @@ message RspConfTerLists
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	message TerIdAndName
 	{
@@ -2404,7 +2418,7 @@ message RspLayoutInfo
 		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 	= 7;//终端名称
-		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
 	}
 	message ConfPollInfo
@@ -2481,7 +2495,7 @@ message IndNewTerJoinedConf//MC将该消息群发到其他所有在会终端
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -2495,7 +2509,7 @@ message IndNewTerJoinedConf//MC将该消息群发到其他所有在会终端
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional string 	tername		 = 1;
 	optional uint32		jointerid    = 2;
@@ -2894,7 +2908,7 @@ message IndTersCloseCamera //MC将该消息群发到其他所有终端
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint32		closeterid = 1;
 	optional uint64	 	confid 	   = 2;
@@ -2927,7 +2941,7 @@ message IndTersOpenCamera //MC将该消息群发到其他所有终端
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint32 	openterid 	 = 1; // 被操作的终端id
 	optional uint64	 	confid 	     = 2;
@@ -2959,7 +2973,7 @@ message IndChairLock
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint32 	lockedterid  = 1;
 	optional uint64	 	confid 	     = 2;
@@ -2991,7 +3005,7 @@ message IndChairUnLock
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint32 	unlockedterid  = 1;
 	optional uint64	 	confid 	       = 2;
@@ -3489,7 +3503,7 @@ message IndLayoutInfo
 		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 	= 7;//终端名称
-		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
 	}
 	message LayoutInfo
@@ -3535,7 +3549,7 @@ message IndWhitelistInfo
 	}
 	message WhiteListInfo
 	{
-		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单、2-联席主持人白名单
 		repeated TerInfo term	 		= 2;//白名单列表
 	}
 	optional uint64		confid 			= 1;//更新的会议
@@ -3568,7 +3582,7 @@ message IndTerInWhitelistState
 	}
 	message WhiteListState
 	{
-		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单、2-联席主持人白名单
 		optional bool 	inwhitelist 	= 2;// true表示在白名单中,false表示不在白名单中;
 	}
 	optional uint64		confid 		= 1;
@@ -3811,7 +3825,7 @@ message CmdStartSendVideo
 	{
 		optional uint32 level 	= 1;// 0:不看 1:level-1 2:level-2 3:level-3.......n:level-n
 		optional uint32 count 	= 2;
-		optional uint32 vsrcid  = 3;//终端视频源编号,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid  = 3;//终端视频源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64	confid 			= 1;
 	optional uint32 terid 			= 2;
@@ -3968,7 +3982,7 @@ message CmdTerSetMultiScreen
 		optional uint32 terid 				= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid			= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 			= 7;//终端名称
-		optional sint32 vsrcid     			= 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid     			= 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空则没有轮询列表。
 	} 
 	message ConfPollInfo

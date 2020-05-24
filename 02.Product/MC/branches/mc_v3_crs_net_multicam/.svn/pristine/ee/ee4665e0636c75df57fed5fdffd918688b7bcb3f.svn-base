@@ -1,0 +1,2511 @@
+#ifndef SR_QUEUEMSGID_H
+#define SR_QUEUEMSGID_H
+#include <set>
+#include <string>
+#include <string.h>
+#include <map>
+#include <list>
+#include "sr_message.h"
+#include "sr_tcpheader.h"
+
+namespace SRMC{
+
+
+typedef enum //定时器种类
+{	
+	e_periodicity_timer = 0xcad,//默认的周期性定时器	
+	e_dispoable_timer = 0x19880824,//一次性定时器
+}E_TimerType;//定义和解释都归调用者定义
+typedef enum{
+	e_DeviceType_TER = 0x0, // TER
+	e_DeviceType_MCU = 0x1, // MCU
+	e_DeviceType_MONITOR = 0x2, // 监控
+	e_DeviceType_PSTN = 0x3, // PSTN
+	e_DeviceType_STREAM = 0x4,//流媒体
+	E_DeviceType_TRUNK = 0x5//TRUNK
+}E_DeviceType;// 设备类型,0-终端、1-MCU、2-监控、3-PSTN语音电话(包括固话、手机)、4-流媒体
+//创建和析构也由调用者负责
+class TimerData : public MessageData
+{
+public:	
+	explicit TimerData(SR_uint32 timerflag,SR_uint64 timerdata)	
+	{
+		m_timerflag = timerflag;
+		m_timerdata = timerdata;
+	}	
+	~TimerData(){}// do nothing	
+	SR_uint32 m_timerflag;//区分同一类型的不同作用的定时器	
+	SR_uint64 m_timerdata;
+};
+class TimeInfo{
+public:
+	TimeInfo()
+	{
+		m_starttime.clear();
+		m_endtime.clear();
+	}
+
+	~TimeInfo()
+	{
+		m_starttime.clear();
+		m_endtime.clear();
+	}
+	std::string 	 m_starttime;
+	std::string 	 m_endtime;
+};
+//终端信息
+class Participant
+{
+public:
+	Participant()
+	{
+		m_name.clear();
+		m_suid = 0u;
+		m_ip.clear();
+		m_protocoltype = 0;
+		m_bandwidth = 0;
+		m_usertype = 0u;
+		m_devicetype = e_DeviceType_TER;
+		m_calloption.clear();
+		m_devicecode.clear();
+		m_shortname.clear();
+		m_orderno = 0u;
+		//m_isonline = false;
+
+		m_querystate = 0u;
+		//m_playbackparm.clear();
+		m_totaltimespan.m_starttime.clear();
+		m_totaltimespan.m_endtime.clear();
+		m_subtimespans.clear();
+	}
+	~Participant()
+	{
+		m_name.clear();
+		m_suid = 0u;
+		m_ip.clear();
+		m_protocoltype = 0u;
+		m_bandwidth = 0u;
+		m_usertype = 0u;
+		m_devicetype = e_DeviceType_TER;
+		m_calloption.clear();
+		m_devicecode.clear();
+		m_shortname.clear();
+		m_orderno = 0u;
+		//m_isonline = false;
+
+		m_querystate = 0u;
+		//m_playbackparm.clear();
+		m_totaltimespan.m_starttime.clear();
+		m_totaltimespan.m_endtime.clear();
+		for (std::list<TimeInfo*>::iterator subts_itor = m_subtimespans.begin();
+			subts_itor != m_subtimespans.end(); subts_itor++)
+		{
+			TimeInfo* pti = NULL;
+			pti = (*subts_itor);
+			if (pti != NULL)
+			{
+				delete pti;
+				pti = NULL;
+			}
+		}
+		m_subtimespans.clear();
+	}
+
+	std::string 	m_name;//数据库中终端名称（初始名称）
+	SR_uint32	 	m_suid;//数据库中终端唯一标识码(suid)
+	std::string 	m_ip;//终端ip,devicetype==4时表示流媒体url
+	SR_uint32	 	m_protocoltype;//标准终端的呼叫协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-PSTN、5-RTSP
+	SR_uint32	 	m_bandwidth;// 呼叫带宽
+	SR_uint32 		m_usertype;// 终端类型,0-临时用户,1-正式用户,2-Ubox,3-标准终端(H.323/sip),4-监控前端,5-非本域用户,6-3288终端,7-监控前端录像,8-微信webrtc网页客户端
+	SR_uint32		m_devicetype; //设备类型,0-终端,1-MCU,2-监控,3-PSTN语音电话(包括固话、手机),4-流媒体
+	std::string 	m_calloption; // 呼叫选项,一般是通知给gw供devicetype==1情况分析用
+	std::string 	m_devicecode;//监控设备编码,即devicetype==2-监控时填入监控前端设备编码
+	std::string 	m_shortname;//短号,一般是usertype==3标准终端注册时短号呼叫用
+	SR_uint32	 	m_orderno;//终端排序id
+	//SR_bool         m_isonline; // 是否已经参会
+
+	SR_uint32		 m_querystate;// usertype==7,监控录像的查询结果
+	//std::string 	 m_playbackparm;// usertype==7,监控录像的播放进度参数
+	TimeInfo         m_totaltimespan;// usertype==7,监控录像的总时间段信息
+	std::list<TimeInfo*> m_subtimespans;// usertype==7,监控录像的子时间段信息
+private:
+
+};
+//轮询列表信息
+class Autopollinfo
+{
+public:
+	Autopollinfo()
+	{
+		m_name.clear();
+		m_apid = 0u;
+		m_polllist.clear();
+	}
+	~Autopollinfo()
+	{
+		m_name.clear();
+		m_apid = 0u;
+		for (std::list<Participant*>::iterator polllist_itor = m_polllist.begin();
+			polllist_itor != m_polllist.end(); polllist_itor++)
+		{
+			Participant* ppart = NULL;
+			ppart = (*polllist_itor);
+			if (ppart != NULL)
+			{
+				delete ppart;
+				ppart = NULL;
+			}
+		}
+		m_polllist.clear();
+	}
+
+	std::string 	m_name;//数据库中轮询列表名单的名称
+	SR_uint64	 	m_apid;//数据库中轮询列表名单唯一标识码(rcid)
+	std::list<Participant*> m_polllist;// 轮询列表,只填写
+private:
+
+};
+
+class LicenceInfoData : public MessageData
+{
+public:
+	explicit LicenceInfoData(SR_void* pdata, uint32_t maxsrcount, uint32_t maxstdcount, uint32_t maxreccount, uint32_t maxlivecount, uint32_t maxternumperconf, uint32_t maxconfnum, uint32_t maxmonitorcount, uint32_t maxvoicecount,char* myversion)
+	{
+		m_data_len = 0;
+		m_buf = (SR_uint8*)0;
+		m_data_len = strlen((char*)pdata);
+		if (m_data_len != 0)
+		{
+			m_buf = new SR_uint8[m_data_len];
+			memcpy(m_buf, pdata, m_data_len);
+		}
+		m_maxsrcount = maxsrcount;
+		m_maxstdcount = maxstdcount;
+		m_maxreccount = maxreccount;
+		m_maxlivecount = maxlivecount;
+		m_maxternumperconf = maxternumperconf;
+		m_maxconfnum = maxconfnum;
+		m_maxmonitorcount = maxmonitorcount;
+		m_maxvoicecount = maxvoicecount;
+		m_ver_len = 0;
+		m_ver_buf = (SR_uint8*)0;
+		m_ver_len = strlen((char*)myversion);
+		if (m_ver_len != 0)
+		{
+			m_ver_buf = new SR_uint8[m_ver_len];
+			memcpy(m_ver_buf, myversion, m_ver_len);
+		}
+	}
+	~LicenceInfoData()
+	{
+		if (m_buf != 0)
+		{
+			delete[] m_buf;
+			m_buf = (SR_uint8*)0;
+		}
+		m_data_len = 0;
+
+		if (m_ver_buf != 0)
+		{
+			delete[] m_ver_buf;
+			m_ver_buf = (SR_uint8*)0;
+		}
+		m_ver_len = 0;
+	}
+	SR_uint8* m_buf;
+	uint32_t m_data_len;
+	SR_uint32 m_maxsrcount;
+	SR_uint32 m_maxstdcount;
+	SR_uint32 m_maxreccount;
+	SR_uint32 m_maxlivecount;
+	SR_uint32 m_maxternumperconf;
+	SR_uint32 m_maxconfnum;
+	SR_uint8* m_ver_buf;
+	uint32_t m_ver_len;
+	SR_uint32 m_maxmonitorcount;
+	SR_uint32 m_maxvoicecount;
+};
+
+//e_sock_recv_data
+class SockTcpData : public MessageData
+{
+public:	
+	//explicit SockTcpData(const S_SRMsgHeader* psrmh, SR_socket fd, SR_void* pSocket, char* pbuf) // del by csh
+	explicit SockTcpData(const S_SRMsgHeader* psrmh, SR_void* pSocket, char* pbuf)
+	{		
+		m_buf = new SR_uint8[psrmh->m_data_len];		
+		memcpy(m_buf,pbuf,psrmh->m_data_len);		
+		memcpy(&m_srmh,psrmh,sizeof(S_SRMsgHeader));		
+		//m_sock = fd; // del by csh
+		m_pSocket = pSocket;
+	}	
+	~SockTcpData(){delete[] m_buf;m_buf = (SR_uint8*)0;}	
+	S_SRMsgHeader m_srmh;	
+	SR_uint8* m_buf;//不包含 S_SRMsgHeader	
+	//SR_socket m_sock;
+	SR_void* m_pSocket;
+};
+
+class SockRelateData : public MessageData
+{
+public:	
+	enum tagMsgId{
+		e_connect_error = e_sock_connect_error,		
+		e_connect_ing = e_sock_connect_ing,		
+		e_connect_ok = e_sock_connect_ok	
+	};	
+	explicit SockRelateData(SR_uint32 socktype = 0U,SR_uint32 relatedata = 0U)	
+	{		
+		m_socktype = socktype;		
+		m_relatedata= relatedata;	
+	}	
+	const SockRelateData& operator=(const SockRelateData& sd)	
+	{
+		if(this == &sd)
+			return *this;
+		this->m_socktype = sd.m_socktype;		
+		this->m_relatedata = sd.m_relatedata;		
+		//this->m_sock = sd.m_sock;	 // del by csh
+		this->m_pSocket = sd.m_pSocket;
+		return *this;	
+	}	
+	SockRelateData(const SockRelateData& sd)	
+	{		
+		this->operator=(sd);	
+	}		
+	//SR_socket m_sock;//sock句柄 --> dispatcher发送消息时填充	// del by csh
+	SR_void* m_pSocket;
+	SR_uint32 m_socktype;//socket 类型	
+	SR_uint32 m_relatedata;//socket 相关联的数据
+};
+
+//e_sock_rw_error
+class SockErrorData : public MessageData
+{
+public:	
+	//// del by csh
+	//explicit SockErrorData(SR_socket fd, SR_void* pSocket) :m_errorfd(fd),m_pErrorSocket(pSocket){}
+	//SR_socket m_errorfd;
+	explicit SockErrorData(SR_void* pSocket) :m_pErrorSocket(pSocket){}
+	SR_void* m_pErrorSocket;
+private:	
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(SockErrorData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(SockErrorData);
+};
+
+
+//e_notify_connected_netmp
+class ConnectedNetMPData : public MessageData
+{
+public:
+	//explicit ConnectedNetMPData(SR_uint32 netmpid,SR_socket netmpsockfd,SR_void* pNetmpSocket) // del by csh
+	explicit ConnectedNetMPData(SR_uint32 netmpid, SR_uint32 groupid, SR_void* pNetmpSocket, std::list<std::string>& mapinternetiplist)
+	{
+		m_netmpid = netmpid;
+		m_groupid = groupid;
+		//m_nemtpsockfd = netmpsockfd; // del by csh
+		m_pNetmpSocket = pNetmpSocket;
+		m_mapinternetips.clear();
+		for (std::list<std::string>::iterator mapip_itor = mapinternetiplist.begin();
+			mapip_itor != mapinternetiplist.end(); mapip_itor++)
+		{
+			if ((*mapip_itor).length() > 0)
+			{
+				m_mapinternetips.push_back((*mapip_itor));
+			}
+		}
+	}
+	~ConnectedNetMPData(){ m_mapinternetips.clear(); }
+	SR_uint32 m_netmpid;
+	SR_uint32 m_groupid;
+	//SR_socket m_nemtpsockfd; // del by csh
+	SR_void* m_pNetmpSocket;
+	std::list<std::string> m_mapinternetips;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(ConnectedNetMPData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ConnectedNetMPData);
+};
+
+class ConnectedMPData : public MessageData
+{
+public:
+	explicit ConnectedMPData(SR_uint32 mpid, SR_void* pMpSocket)
+	{
+		m_mpid = mpid;
+		m_pMpSocket = pMpSocket;
+	}
+	~ConnectedMPData(){}
+	SR_uint32 m_mpid;
+	SR_void* m_pMpSocket;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(ConnectedMPData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ConnectedMPData);
+};
+
+class ConnectedGWData : public MessageData
+{
+public:
+	explicit ConnectedGWData(SR_uint32 gwid, SR_void* pgwSocket)
+	{
+		m_gwid = gwid;
+		m_pGWSocket = pgwSocket;
+	}
+	~ConnectedGWData(){}
+	SR_uint32 m_gwid;
+	SR_void* m_pGWSocket;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(ConnectedGWData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ConnectedGWData);
+};
+
+class ConnectedRelayServerData : public MessageData
+{
+public:
+	explicit ConnectedRelayServerData(SR_uint32 rsid, SR_void* prsSocket)
+	{
+		m_rsid = rsid;
+		m_pRSSocket = prsSocket;
+	}
+	~ConnectedRelayServerData(){}
+	SR_uint32 m_rsid;
+	SR_void* m_pRSSocket;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(ConnectedRelayServerData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ConnectedRelayServerData);
+};
+
+class ConnectedCRSData : public MessageData
+{
+public:
+	explicit ConnectedCRSData(SR_uint32 crsid, SR_void* pcrsSocket)
+	{
+		m_crsid = crsid;
+		m_pCRSSocket = pcrsSocket;
+	}
+	~ConnectedCRSData(){}
+	SR_uint32 m_crsid;
+	SR_void* m_pCRSSocket;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(ConnectedCRSData);
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ConnectedCRSData);
+};
+
+//e_update_netmpinfo_inconf
+class NetMPInfoData : public MessageData
+{
+public:
+	NetMPInfoData(){}
+	~NetMPInfoData(){}
+	SR_uint32 m_netmpid;
+	SR_uint32 m_load;// netmp的带宽
+	SR_uint32 m_load2;// netmp上的终端个数
+	std::list<std::string> m_mapinternetips;
+	SR_uint32 m_nettype;// 用于区分该netmp是采用哪种方式注册的
+};
+
+class MPInfoData : public MessageData
+{
+public:
+	MPInfoData(){}
+	~MPInfoData(){}
+	SR_uint32 m_mpid;
+	SR_uint32 m_load;// mp:上行带宽（netmp->mp）
+	SR_uint32 m_load2;// mp:cpu负载
+};
+
+class GWInfoData : public MessageData
+{
+public:
+	GWInfoData(){}
+	~GWInfoData(){}
+	SR_uint32 m_gwid;
+	SR_uint32 m_load;// gw:上行带宽（netmp->mp）
+	SR_uint32 m_load2;// gw:终端个数
+};
+
+class CRSInfoData : public MessageData
+{
+public:
+	CRSInfoData(){}
+	~CRSInfoData(){}
+	SR_uint32 m_crsid;
+	SR_uint32 m_load;// crs:磁盘空间使用率,（高16位是总容量,低16位是剩余容量,单位：GB）
+	SR_uint32 m_load2;// crs:cpu使用率
+};
+
+class SRSInfoData : public MessageData
+{
+public:
+	SRSInfoData()
+	{
+		m_srsid = 0;
+		m_strip.clear();
+		m_port = 0;
+		m_isroot = 0;
+		m_addordel = 0;
+		m_txbw = 0;
+	}
+	~SRSInfoData()
+	{
+		m_srsid = 0;
+		m_strip.clear();
+		m_port = 0;
+		m_isroot = 0;
+		m_addordel = 0;
+		m_txbw = 0;
+	}
+	SR_uint32 m_srsid;
+	std::string m_strip;
+	SR_uint32   m_port;
+	SR_uint32 m_isroot;// 是否是根节点,0-否,1-是
+	SR_uint32 m_addordel;// 增加或者删除,1-增加,2-删除,3-更新ip+port,4-更新负载,5-由子节点变成根节点,6-由根节点变成子节点
+	SR_uint32 m_txbw;// SRS上传流的带宽 
+};
+
+class RelayServerInfoData : public MessageData
+{
+public:
+	RelayServerInfoData()
+	{
+		m_relayserverid = 0;
+		//m_strip.clear();
+		//m_port = 0;
+		m_ternum = 0;
+		m_tx = 0;
+	}
+	~RelayServerInfoData()
+	{
+		m_relayserverid = 0;
+		//m_strip.clear();
+		//m_port = 0;
+		m_ternum = 0;
+		m_tx = 0;
+	}
+	SR_uint32 m_relayserverid;
+	//std::string m_strip;
+	//SR_uint32   m_port;
+	SR_uint32   m_ternum;// relayserver:在线终端数
+	SR_uint32   m_tx;// relayserver:下行(发送)带宽
+};
+
+class RelayMcInfoData : public MessageData
+{
+public:
+	RelayMcInfoData()
+	{
+		m_relaymcid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_ternum = 0;
+		m_groupid = 0;
+		m_mapinternetips.clear();
+		m_addordel = 0;
+	}
+	~RelayMcInfoData()
+	{
+		m_relaymcid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_ternum = 0;
+		m_groupid = 0;
+		m_mapinternetips.clear();
+		m_addordel = 0;
+	}
+	SR_uint32 m_relaymcid;
+	SR_uint32 m_ip;
+	SR_uint32 m_port;
+	SR_uint32 m_ternum;// relaymc:在线终端数
+	SR_uint32 m_groupid;// relaymc所属域分组id
+	std::list<std::string> m_mapinternetips;
+	SR_uint32 m_addordel;// 增加或者删除,1-增加,2-删除,3-更新ip+port,4-更新负载,5-更新映射地址
+};
+//e_update_sys_cur_load
+class SystemCurLoadData : public MessageData
+{
+public:
+	SystemCurLoadData(){}
+	~SystemCurLoadData(){}
+	SR_uint32 m_curconfcnt;// 系统当前会议总数
+	SR_uint32 m_curreccnt;// 系统当前录制总路数
+	SR_uint32 m_curlivecnt;// 系统当前直播总路数
+};
+//e_notify_netmpsock_error
+class NetMPSockErrorData : public MessageData
+{
+public:
+	NetMPSockErrorData(){}
+	~NetMPSockErrorData(){}
+	SR_uint32 m_netmpid;
+	SR_void* m_pSocket;
+};
+
+class MPSockErrorData : public MessageData
+{
+public:
+	MPSockErrorData(){}
+	~MPSockErrorData(){}
+	SR_uint32 m_mpid;
+	SR_void* m_pSocket;
+};
+
+class GWSockErrorData : public MessageData
+{
+public:
+	GWSockErrorData(){}
+	~GWSockErrorData(){}
+	SR_uint32 m_gwid;
+	SR_void* m_pSocket;
+};
+
+class CRSSockErrorData : public MessageData
+{
+public:
+	CRSSockErrorData(){}
+	~CRSSockErrorData(){}
+	SR_uint32 m_crsid;
+	SR_void* m_pSocket;
+};
+
+class RelayServerSockErrorData : public MessageData
+{
+public:
+	RelayServerSockErrorData(){}
+	~RelayServerSockErrorData(){}
+	SR_uint32 m_relayserverid;
+	SR_void* m_pSocket;
+};
+class IPPortInfo
+{
+public:
+	IPPortInfo()
+	{
+		m_nettype = 0u;
+		m_ip.clear();
+		m_port = 0u;
+	}
+	~IPPortInfo()
+	{
+		m_nettype = 0u;
+		m_ip.clear();
+		m_port = 0u;
+	}
+	SR_uint32     m_nettype;// 网络类型,0-内网、1-外网
+	std::string   m_ip;//
+	SR_uint32     m_port;// 
+protected:
+private:
+};
+
+class AddrInfo
+{
+public:
+	AddrInfo()
+	{
+		m_svrtype = 0u;
+		m_level = 0u;
+		m_ipports.clear();
+	}
+	~AddrInfo()
+	{
+		m_svrtype = 0u;
+		m_level = 0u;
+		for (std::map<int, IPPortInfo*>::iterator ip_itor = m_ipports.begin();
+			ip_itor != m_ipports.end(); ip_itor++)
+		{
+			IPPortInfo* pIPPortInfo = NULL;
+			pIPPortInfo = ip_itor->second;
+			if (pIPPortInfo)
+			{
+				delete pIPPortInfo;
+				pIPPortInfo = NULL;
+			}
+		}
+		m_ipports.clear();
+	}
+	SR_uint32     m_svrtype;// 服务类型, MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、Ddevmgr=7、CRS=9、stunserver=11等 
+	SR_uint32     m_level;// relaymc=3层级关系
+	std::map<int, IPPortInfo*> m_ipports; // key:<-->value:IPPortInfo*
+protected:
+private:
+};
+
+class DomainInfo
+{
+public:
+	DomainInfo()
+	{
+		m_dlevel = 0u;
+		m_dname.clear();
+	}
+	~DomainInfo()
+	{
+		m_dlevel = 0u;
+		m_dname.clear();
+	}
+	std::string   m_dname;// 域名名称
+	SR_uint32     m_dlevel;// 域名层级关系
+protected:
+private:
+};
+//update from mc_netmp.proto
+class NetMPCreateConfRsp{
+public:
+	NetMPCreateConfRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_netmpid = 0u;
+		m_ip.clear();
+		m_audiodatarecvport = 0u;
+		m_audioctrlrecvport = 0u;
+		m_videodatarecvport = 0u;
+		m_videoctrlrecvport = 0u;
+		m_video2datarecvport = 0u;
+		m_video2ctrlrecvport = 0u;
+		m_video3datarecvport = 0u;
+		m_video3ctrlrecvport = 0u;
+		m_desktopdatarecvport = 0u;
+		m_desktopctrlrecvport = 0u;
+		
+		m_failreason.clear();
+		m_localip.clear();
+		m_netmpno = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+		m_netmp_conf_detail_id = 0ull;
+		m_nettype = 0u;
+		m_edgeipports.clear();
+	}
+	~NetMPCreateConfRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_netmpid = 0u;
+		m_ip.clear();
+		m_audiodatarecvport = 0u;
+		m_audioctrlrecvport = 0u;
+		m_videodatarecvport = 0u;
+		m_videoctrlrecvport = 0u;
+		m_video2datarecvport = 0u;
+		m_video2ctrlrecvport = 0u;
+		m_video3datarecvport = 0u;
+		m_video3ctrlrecvport = 0u;
+		m_desktopdatarecvport = 0u;
+		m_desktopctrlrecvport = 0u;
+
+		m_failreason.clear();
+		m_localip.clear();
+		m_netmpno = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+		m_netmp_conf_detail_id = 0ull;
+		m_nettype = 0u;
+		for (std::list<IPPortInfo*>::iterator edge_itor = m_edgeipports.begin();
+			edge_itor != m_edgeipports.end(); /*edge_itor++*/)
+		{
+			IPPortInfo* pEdgeIPPort = NULL;
+			pEdgeIPPort = (*edge_itor);
+			if (pEdgeIPPort != NULL)
+			{
+				delete pEdgeIPPort;
+				pEdgeIPPort = NULL;
+			}
+			edge_itor = m_edgeipports.erase(edge_itor);
+		}
+		m_edgeipports.clear();
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;//冗余定义,自解释数据
+	SR_uint32		 m_netmpid;//冗余定义,自解释数据
+	std::string      m_ip;//外网ip,netmp创建会议RspMCConfCreate携带过来的ip
+	SR_int32         m_audiodatarecvport;
+	SR_int32         m_audioctrlrecvport;
+	SR_int32         m_videodatarecvport;
+	SR_int32         m_videoctrlrecvport;
+	SR_int32         m_video2datarecvport;
+	SR_int32         m_video2ctrlrecvport;
+	SR_int32		 m_video3datarecvport;
+	SR_int32 		 m_video3ctrlrecvport;
+	SR_int32		 m_desktopdatarecvport;
+	SR_int32		 m_desktopctrlrecvport;	
+	std::string 	 m_failreason;
+	std::string      m_localip;//内网ip,netmp向devmgr注册时携带的ip
+	SR_uint32        m_netmpno; //mc给会议netmp预分配的编号
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+	SR_uint64        m_netmp_conf_detail_id;// 本netmp参会计费id
+	SR_uint32        m_nettype;// 用于区分该netmp是采用哪种方式注册的
+	std::list<IPPortInfo*> m_edgeipports;// 存放netmp回复的边缘地址信息
+};
+
+class MPCreateMPIRsp{
+public:
+	MPCreateMPIRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_relatednetmpid = 0u;
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_small_video_tersnum = 0u;
+		m_middle_video_tersnum = 0u;
+		m_big_video_tersnum = 0u;
+		m_bWaitNetmpReopen = false;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~MPCreateMPIRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_relatednetmpid = 0u;
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_small_video_tersnum = 0u;
+		m_middle_video_tersnum = 0u;
+		m_big_video_tersnum = 0u;
+		m_bWaitNetmpReopen = false;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_mpid;
+	SR_uint32		 m_channelid; //MC为会议媒体处理实例分配的通道id
+	SR_uint32		 m_relatednetmpid;
+	std::string 	 m_failreason;
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize
+	//该终端的大中小流被选看的次数
+	SR_uint32		m_small_video_tersnum;
+	SR_uint32		m_middle_video_tersnum;
+	SR_uint32		m_big_video_tersnum;
+	SR_bool         m_bWaitNetmpReopen; // 以会议为单位（同一个会议）的mpi分配到一个netmp下
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class MPDestoryMPIRsp{
+public:
+	MPDestoryMPIRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+	}
+
+	~MPDestoryMPIRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+	}
+
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_mpid;
+	SR_uint32		 m_channelid; //MC为会议媒体处理实例分配的通道id
+	std::string 	 m_failreason;
+	std::string      m_ip;//外网ip
+	std::string      m_localip;//内网ip,devmgr获取的ip
+};
+
+class MPCreateScreenRsp{
+public:
+	MPCreateScreenRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_seqnum = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_relatednetmpid = 0u;
+		m_screentype = 0x1; // e_Screen_Type_Mixed = 0x1
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_small_video_tersnum = 0u;
+		m_middle_video_tersnum = 0u;
+		m_big_video_tersnum = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~MPCreateScreenRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_seqnum = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_relatednetmpid = 0u;
+		m_screentype = 0x1; // e_Screen_Type_Mixed = 0x1
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_small_video_tersnum = 0u;
+		m_middle_video_tersnum = 0u;
+		m_big_video_tersnum = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_mpid;
+	SR_uint32        m_seqnum;
+	SR_uint32		 m_channelid; //MC为会议媒体处理实例分配的通道id
+	SR_uint32        m_screenid; //返回m_channelid下创建的屏幕id
+	SR_uint32		 m_relatednetmpid;
+	SR_uint32		 m_screentype;
+	std::string 	 m_failreason;
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize
+	//该终端的大中小流被选看的次数
+	SR_uint32		m_small_video_tersnum;
+	SR_uint32		m_middle_video_tersnum;
+	SR_uint32		m_big_video_tersnum;
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class MPDestoryScreenRsp{
+public:
+	MPDestoryScreenRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_mpid;
+	SR_uint32		 m_channelid; //MC为会议媒体处理实例分配的通道id
+	SR_uint32        m_screenid; //返回m_channelid下创建的屏幕id
+	std::string 	 m_failreason;
+	std::string      m_ip;//外网ip
+	std::string      m_localip;//内网ip,devmgr获取的ip
+};
+
+class SourceInfo
+{
+public:
+	SourceInfo()
+	{
+		m_srcid = 0u;
+		m_name.clear();
+		m_isOn = false;
+		m_priority = 0u;
+		m_select_video.clear();
+		m_be_selected.clear();
+		m_be_scr_selected.clear();
+		m_last_send_level_count.clear();
+		m_last_recvfps = 0u;		
+	}
+	~SourceInfo()
+	{
+		m_srcid = 0u;
+		m_name.clear();
+		m_isOn = false;
+		m_priority = 0u;
+		m_select_video.clear();
+		m_be_selected.clear();
+		m_be_scr_selected.clear();
+		m_last_send_level_count.clear();
+		m_last_recvfps = 0u;			
+	}
+	SR_uint32     m_srcid;	//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	std::string   m_name;   //源名称
+	SR_bool 	  m_isOn;	//源是否打开
+	SR_uint32     m_priority; //源的优先级级别(决定srcid谁将是主源)
+	std::map<SR_uint32,SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形	
+	std::map<SR_uint32,SR_uint32> m_be_selected;//terid <-> videosize 0:不看 1:小流 2:中流 3:大流  2019/5/5 移至 
+	std::map<SR_uint32, SR_uint32> m_be_scr_selected;//screenid <-> videosize	
+	std::map<SR_uint32, SR_uint32> m_last_send_level_count;//videosize <-> count	
+	SR_uint32 m_last_recvfps; //上一次接收帧率 0:0 1:8 2:16 3:24 4:30 5:60.如果终端/屏幕选看没填该选项，强制使用默认3:24
+protected:
+private:
+};
+
+class DeviceInfo
+{
+public:
+	DeviceInfo()
+	{
+		m_type = 0u;
+		m_srcinfos.clear();
+	}
+	~DeviceInfo()
+	{
+		m_type = 0u;
+		for (std::map<SR_uint32, SourceInfo*>::iterator srcinfo_itor = m_srcinfos.begin();
+			srcinfo_itor != m_srcinfos.end(); srcinfo_itor++)
+		{
+			SourceInfo* pSourceInfo = NULL;
+			pSourceInfo = srcinfo_itor->second;
+			if (pSourceInfo)
+			{
+				delete pSourceInfo;
+				pSourceInfo = NULL;
+			}
+		}
+		m_srcinfos.clear();
+	}
+	SR_uint32     m_type;// 设备类型,0-音频设备、1-视频设备 
+	std::map<SR_uint32, SourceInfo*> m_srcinfos; // key:m_srcid<-->value:SourceInfo*
+	
+protected:
+private:
+};
+
+class PresetInfo
+{
+public:
+	PresetInfo()
+	{
+		m_presetid = 0u;
+		m_presetname.clear();
+		m_relatedvsrcid = 0u;
+	}
+	~PresetInfo()
+	{
+		m_presetid = 0u;
+		m_presetname.clear();
+		m_relatedvsrcid = 0u;		
+	}
+	SR_uint32     m_presetid;// 预置位编号
+	std::string   m_presetname;// 预置位名称
+	SR_uint32     m_relatedvsrcid;
+protected:
+private:
+};
+
+class SeleteTermInfo
+{
+public:
+	SeleteTermInfo()
+	{
+		m_terid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_videosize = 0u;
+		m_recvfps = 3;		
+		m_srcid = 0u;
+	}
+	~SeleteTermInfo()
+	{
+		m_terid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_videosize = 0u;
+		m_recvfps = 3;
+		m_srcid = 0u;
+	}
+	SR_uint32 m_terid;// 被选看的终端id或者mp媒体处理实例的通道id
+	SR_uint32 m_channelid;// 被选看的终端通道id或者mp媒体处理实例的通道id
+	SR_uint32 m_screenid;// 被选看的是终端则填入0,被选看的是mp媒体处理实例则填入具体的屏幕id（即非0-代表选看对应的屏幕）
+	SR_uint32 m_videosize; // 期望流的大小，0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+	SR_uint32 m_recvfps; // 期望的帧率大小，0:0 1:8 2:16 3:24 4:30 5:60.如果终端/屏幕选看没填该选项，透传给netmp强制使用默认3:24.
+	SR_uint32 m_srcid;   // 终端视频源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+protected:
+private:
+};
+
+class MPSeleteVideoCmd{
+public:
+	MPSeleteVideoCmd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_mapSeleteTermInfo.clear();
+	}
+
+	~MPSeleteVideoCmd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_mapSeleteTermInfo.clear();
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;//接收消息的mc_deviceid
+	SR_uint32		 m_mpid;//（语音激励）发起选看所在mp deviceid
+	SR_uint32		 m_channelid;//（语音激励）发起选看所在会议媒体处理实例通道id
+	SR_uint32        m_screenid;//（语音激励）发起选看者所在屏幕id
+	std::map<SR_uint32, SeleteTermInfo> m_mapSeleteTermInfo;
+
+	//message CmdMPSeleteVideo
+	//{
+	//	message TermInfo
+	//	{
+	//		optional uint32 terid = 1;
+	//		optional uint32 channelid = 2;// 终端通道id
+	//		optional uint32 videosize = 3; // 0:停止选看 1:小流 2:中流 3:大流 
+	//	}
+	//	optional uint64		confid = 1;
+	//	optional uint32		mcid = 2;//接收消息的mc_deviceid
+	//	optional uint32     mpid = 3;//发起语音激励终端所在mp deviceid
+	//	optional uint32 	channelid = 4;//语音激励终端所在媒体处理实例通道id
+	//	optional uint32 	screenid = 5;//语音激励终端所在屏幕id 
+	//	repeated TermInfo  	seleteterinfo = 6;
+	//}
+};
+
+class PaneInfo
+{
+public:
+	PaneInfo()
+	{
+		m_paneindex = 0u;
+		m_contenttype = 0u;
+		m_optype = 1u; // 废弃 0:自动;改用默认值1:指定终端;
+		m_polltime = 10u;
+		m_terid = 0u;
+		m_terchannelid = 0u;
+		m_tername.clear();
+		m_autopollinfo.clear();
+		m_vsrcid = -1;
+	}
+
+	~PaneInfo()
+	{
+		m_paneindex = 0u;
+		m_contenttype = 0u;
+		m_optype = 1u; // 废弃 0:自动;改用默认值1:指定终端;
+		m_polltime = 10u;
+		m_terid = 0u;
+		m_terchannelid = 0u;
+		m_tername.clear();
+		for (std::map<SR_uint32, Autopollinfo*>::iterator itor = m_autopollinfo.begin();
+			itor != m_autopollinfo.end(); itor++)
+		{
+			Autopollinfo* autopllinfo = NULL;
+			autopllinfo = itor->second;
+			if (autopllinfo != NULL)
+			{
+				delete autopllinfo;
+				autopllinfo = NULL;
+			}
+		}
+		m_autopollinfo.clear();
+		m_vsrcid = -1;
+	}
+
+	SR_uint32 m_paneindex;//分屏id
+	SR_uint32 m_contenttype;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+	SR_uint32 m_optype;//分屏中操作类型，0:自动; 1:指定终端; 2:语音激励;3:自动轮巡.
+	SR_uint32 m_polltime;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+	SR_uint32 m_terid;//分屏中所设置终端对应的id 
+	SR_uint32 m_terchannelid;//分屏中所设置终端对应的通道id
+	std::string m_tername;//分屏中所设置终端对应的名称
+	std::map<SR_uint32, Autopollinfo*> m_autopollinfo;//自动轮询列表信息 apid<--->Autopollinfo
+	SR_int32  m_vsrcid;
+
+protected:
+private:
+};
+
+class LayoutInfo
+{
+public:
+	LayoutInfo()
+	{
+		m_screenid = 0u;
+		//m_screentype = e_Screen_Type_Mixed;
+		//m_layoutmode = e_Layout_Mode_Auto;
+		m_screentype = 1;
+		m_layoutmode = 0;
+		m_chairfollow = 1;
+		m_paneinfos.clear();
+	}
+	~LayoutInfo()
+	{
+		m_screenid = 0u;
+		//m_screentype = e_Screen_Type_Mixed;
+		//m_layoutmode = e_Layout_Mode_Auto;
+		m_screentype = 1;
+		m_layoutmode = 0;
+		m_chairfollow = 1;
+		for (std::map<SR_uint32, PaneInfo*>::iterator itor = m_paneinfos.begin();
+			itor != m_paneinfos.end(); itor++)
+		{
+			PaneInfo* ppinfo = NULL;
+			ppinfo = itor->second;
+			if (ppinfo != NULL)
+			{
+				delete ppinfo;
+			}
+			ppinfo = NULL;
+		}
+
+		//for (std::set<PaneInfo*>::iterator itor = m_paneinfos.begin();
+		//	itor != m_paneinfos.end(); itor++)
+		//{
+		//	PaneInfo* ppinfo = NULL;
+		//	ppinfo = *itor;
+		//	if (ppinfo != NULL)
+		//	{
+		//		delete ppinfo;
+		//	}
+		//	ppinfo = NULL;
+		//}
+		m_paneinfos.clear();
+	}
+
+	SR_uint32 m_screenid;// 该混屏布局对应屏幕id
+	SR_uint32 m_screentype;// 该混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕
+	SR_uint32 m_layoutmode; // 分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏
+	std::map<SR_uint32, PaneInfo*> m_paneinfos;// paneindex<-->PaneInfo
+	SR_uint32 m_chairfollow;
+	//std::set<PaneInfo*> m_paneinfos;
+
+protected:
+private:
+};
+
+class MPLayoutinfoInd{
+public:
+	MPLayoutinfoInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_layoutinfos.clear();
+	}
+
+	~MPLayoutinfoInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		for (std::set<LayoutInfo*>::iterator itor = m_layoutinfos.begin();
+			itor != m_layoutinfos.end(); itor++)
+		{
+			LayoutInfo* pliinfo = NULL;
+			pliinfo = *itor;
+			if (pliinfo != NULL)
+			{
+				delete pliinfo;
+			}
+			pliinfo = NULL;
+		}
+		m_layoutinfos.clear();
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;//接收消息的mc_deviceid
+	SR_uint32		 m_mpid;//（语音激励）发起选看所在mp deviceid
+	SR_uint32		 m_channelid;//（语音激励）发起选看所在会议媒体处理实例通道id
+	//std::set<SR_uint32, LayoutInfo> m_layoutinfos;
+	std::set<LayoutInfo*> m_layoutinfos;
+
+	////分屏信息更新,MP-->MC
+	//message IndMPLayoutInfo
+	//{
+	//	message PaneInfo
+	//	{
+	//		optional uint32 paneindex = 1;//分屏id,从0开始
+	//		optional uint32 contenttype = 2;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空
+	//		optional uint32 optype = 3;//分屏中操作类型，0:自动; 1:指定终端; 2:语音激励;3:自动轮巡.
+	//		optional uint32 polltime = 4;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+	//		optional uint32 terid = 5;
+	//		optional uint32 channelid = 6;
+	//		optional string tername = 7;//终端名称
+	//	}
+	//	message LayoutInfo
+	//	{
+	//		optional uint32 	screenid = 1;//混屏布局对应屏幕id
+	//		optional uint32		screentype = 2;//混屏布局对应屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕
+	//		optional uint32 	layoutmode = 3;//分屏布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏
+	//		repeated PaneInfo 	panes = 4;//分屏信息
+	//	}
+	//	optional uint64		confid = 1;//更新的会议
+	//	optional uint32		mcid = 2;//接收消息的mc_deviceid
+	//	optional uint32     mpid = 3;//发起消息的mp deviceid
+	//	optional uint32 	channelid = 4;//混屏布局对应屏幕所属媒体处理实例通道
+	//	repeated LayoutInfo layoutinfos = 5;//分屏布局信息
+	//}
+};
+
+class CRSCreateConfRsp{
+public:
+	CRSCreateConfRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_seqnum = 0u;
+		m_crschannelid = 0u;
+		m_relatednetmpid = 0u;
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~CRSCreateConfRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_seqnum = 0u;
+		m_crschannelid = 0u;
+		m_relatednetmpid = 0u;
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32        m_seqnum;
+	SR_uint32		 m_crschannelid; //MC为CRS分配的通道id
+	SR_uint32		 m_relatednetmpid;
+	std::string 	 m_failreason;
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+class CompLicenceInfo
+{
+public:
+	CompLicenceInfo()
+	{
+		m_licencetype = 0u;
+		m_licencenum = 0u;
+		m_starttime.clear();
+		m_exptime.clear();
+	}
+	~CompLicenceInfo()
+	{
+		m_licencetype = 0u;
+		m_licencenum = 0u;
+		m_starttime.clear();
+		m_exptime.clear();
+	}
+	SR_uint32 m_licencetype;//授权类型，0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+	SR_int32 m_licencenum;//授权数
+	std::string m_starttime;//授权开始时间
+	std::string m_exptime;//授权结束时间
+};
+class CompanyInfo
+{
+public:
+	CompanyInfo()
+	{
+		m_compid = 0u;
+		m_compname.clear();
+		m_complicenceinfos.clear();
+	}
+	~CompanyInfo()
+	{
+		m_compid = 0u;
+		m_compname.clear();
+		for (std::map<SR_uint32, CompLicenceInfo*>::iterator itor_complic = m_complicenceinfos.begin();
+			itor_complic != m_complicenceinfos.end(); ++itor_complic)
+		{
+			CompLicenceInfo* pcomplicenceinfo = itor_complic->second;
+			if (pcomplicenceinfo)
+				delete pcomplicenceinfo;
+		}
+		m_complicenceinfos.clear();
+	}
+	SR_uint32 m_compid;
+	std::string m_compname;
+	std::map<SR_uint32, CompLicenceInfo*> m_complicenceinfos;
+};
+class LicenseToMCRsp
+{
+public:
+	LicenseToMCRsp()
+	{
+		m_isok = false;
+		m_seqnumrsp = 0u;
+		m_confid = 0u;
+		m_rspcompinfos.clear();
+	};
+	~LicenseToMCRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_seqnumrsp = 0u;
+		for (std::map<SR_uint32, CompanyInfo*>::iterator itor_comp = m_rspcompinfos.begin();
+			itor_comp != m_rspcompinfos.end(); ++itor_comp)
+		{
+			CompanyInfo* pcompinfo = itor_comp->second;
+			if (pcompinfo)
+				delete pcompinfo;
+		}
+		m_rspcompinfos.clear();
+	};
+	SR_bool m_isok;
+	SR_uint32 m_seqnumrsp;
+	SR_uint64 m_confid;//会议号
+	std::map<SR_uint32, CompanyInfo*> m_rspcompinfos;
+};
+class CompLicenceInfoData : public MessageData
+{
+public:
+	explicit CompLicenceInfoData(LicenseToMCRsp* cfdm)
+	{
+		m_complicenceinfo = cfdm;
+	}
+	~CompLicenceInfoData(){}//do not delete m_confinfo here!!!
+	LicenseToMCRsp* m_complicenceinfo;//LicenseToMCRsp*
+};
+class TotalCompLicenceInfoData : public MessageData
+{
+public:
+	explicit TotalCompLicenceInfoData(CompanyInfo* cfdm)
+	{
+		m_complicenceinfo = cfdm;
+	}
+	~TotalCompLicenceInfoData(){}//do not delete m_confinfo here!!!
+	CompanyInfo* m_complicenceinfo;//CompanyInfo*
+};
+class CRSStartRecRsp{
+public:
+	CRSStartRecRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_failreason.clear();
+		m_filerootpath.clear();
+		m_seqnum = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~CRSStartRecRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_failreason.clear();
+		m_filerootpath.clear();
+		m_seqnum = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //开始录制crs通道id
+	SR_uint32		 m_channelid;//CRS录制的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_screenid; //CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_screentype;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕,如果channelid是终端通道id,该选项可以忽略
+	std::string 	 m_filestorsvrip;//CRS录制文件存放服务的ip
+	std::string 	 m_filestoragepath; //CRS录制文件存放相对路径
+	std::string 	 m_sdefilepath; //CRS录制的加密文件存放相对路径
+	std::string 	 m_failreason;
+	std::string 	 m_filerootpath; //CRS录制的加密文件存放根路径
+	SR_uint32		 m_seqnum;
+	
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class CRSStopRecRsp{
+public:
+	CRSStopRecRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_failreason.clear();
+		m_filerootpath.clear();
+		m_seqnum = 0u;
+		m_filesize = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~CRSStopRecRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_failreason.clear();
+		m_filerootpath.clear();
+		m_seqnum = 0u;
+		m_filesize = 0u;
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //开始录制crs通道id
+	SR_uint32		 m_channelid;//CRS录制的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_screenid; //CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_screentype;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕,如果channelid是终端通道id,该选项可以忽略
+	std::string 	 m_filestorsvrip;//CRS录制文件存放服务的ip
+	std::string 	 m_filestoragepath; //CRS录制文件存放相对路径
+	std::string 	 m_sdefilepath; //CRS录制的加密文件存放相对路径
+	std::string 	 m_failreason;
+	std::string 	 m_filerootpath; //CRS录制的加密文件存放根路径
+	SR_uint32		 m_seqnum;
+	SR_uint64		 m_filesize;
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class CRSSeleteVideoCmd{
+public:
+	CRSSeleteVideoCmd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_mapSeleteTermInfo.clear();
+	}
+
+	~CRSSeleteVideoCmd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_mapSeleteTermInfo.clear();
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;//接收消息的mc_deviceid
+	SR_uint32		 m_crsid;//发起选看CRS的crs_deviceid
+	SR_uint32		 m_crschannelid;//发起选看CRS的通道id
+	std::map<SR_uint32, SeleteTermInfo> m_mapSeleteTermInfo;
+};
+
+class CRSFileStorPathInd{
+public:
+	CRSFileStorPathInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_filerootpath.clear();
+
+		m_recordstate = 0u;
+		m_filesize = 0u;
+	}
+
+	~CRSFileStorPathInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_filestorsvrip.clear();
+		m_filestoragepath.clear();
+		m_sdefilepath.clear();
+		m_filerootpath.clear();
+
+		m_recordstate = 0u;
+		m_filesize = 0u;
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //开始录制crs通道id
+	SR_uint32		 m_channelid;//CRS录制的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_screenid; //CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_screentype;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕,如果channelid是终端通道id,该选项可以忽略
+	std::string 	 m_filestorsvrip;//CRS录制文件存放服务的ip
+	std::string 	 m_filestoragepath; //CRS录制文件存放相对路径
+	std::string 	 m_sdefilepath; //CRS录制的加密文件存放相对路径
+	std::string 	 m_filerootpath; //CRS录制的加密文件存放根路径
+	SR_uint32		 m_recordstate;
+	SR_uint64		 m_filesize;
+};
+
+class CRSStartLiveRsp{
+public:
+	CRSStartLiveRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_relatedsrsid = 0u;
+		m_failreason.clear();
+		m_seqnum = 0u;
+		m_liveurl.clear();
+		m_livesvrtype = 0u;
+		m_liveaddrs.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~CRSStartLiveRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_relatedsrsid = 0u;
+		m_failreason.clear();
+		m_seqnum = 0u;
+		m_liveurl.clear();
+		m_livesvrtype = 0u;
+		m_liveaddrs.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //开始录制crs通道id
+	SR_uint32		 m_channelid;//CRS录制的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_screenid; //CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_screentype;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_relatedsrsid;
+	std::string 	 m_failreason;
+	SR_uint32		 m_seqnum;
+	std::string 	 m_liveurl;
+	SR_uint32		 m_livesvrtype;
+	std::map<SR_uint32, std::string> m_liveaddrs;
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class CRSLiveStateInd{
+public:
+	CRSLiveStateInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_livestate = 0u;
+		m_statecont.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~CRSLiveStateInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_livestate = 0u;
+		m_statecont.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //开始直播crs通道id
+	SR_uint32		 m_channelid;//CRS直播的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_screenid; //CRS直播的屏幕id,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_screentype;//CRS直播的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕,如果channelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_livestate;//直播状态,1-直播成功、2-直播失败
+	std::string 	 m_statecont; //若直播失败，则填入失败内容
+
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+//class CRSStopLiveRsp{
+//public:
+//	CRSStopLiveRsp()
+//	{
+//		m_isok = false;
+//		m_confid = 0u;
+//		m_mcid = 0u;
+//		m_crsid = 0u;
+//		m_crschannelid = 0u;
+//		m_channelid = 0u;
+//		m_screenid = 0u;
+//		m_screentype = 0u;
+//		m_failreason.clear();
+//		m_seqnum = 0u;
+//		m_liveurl.clear();
+//	}
+//
+//	~CRSStopLiveRsp()
+//	{
+//		m_isok = false;
+//		m_confid = 0u;
+//		m_mcid = 0u;
+//		m_crsid = 0u;
+//		m_crschannelid = 0u;
+//		m_channelid = 0u;
+//		m_screenid = 0u;
+//		m_screentype = 0u;
+//		m_failreason.clear();
+//		m_seqnum = 0u;
+//		m_liveurl.clear();
+//	}
+//	SR_bool          m_isok;
+//	SR_uint64        m_confid;
+//	SR_uint32		 m_mcid;
+//	SR_uint32		 m_crsid;
+//	SR_uint32		 m_crschannelid; //开始录制crs通道id
+//	SR_uint32		 m_channelid;//CRS录制的MPI对应通道id或者终端对应的通道id
+//	SR_uint32		 m_screenid; //CRS录制的屏幕id,如果channelid是终端通道id,该选项可以忽略
+//	SR_uint32		 m_screentype;//CRS录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕,如果channelid是终端通道id,该选项可以忽略
+//	std::string 	 m_failreason;
+//	SR_uint32		 m_seqnum;
+//	std::string 	 m_liveurl;
+//};
+
+class MonitorInfo{
+public:
+	MonitorInfo()
+	{
+		m_suid = 0u;
+		m_nickname.clear();
+		m_ip.clear();
+		m_devicecode.clear();
+		m_querystate = 0u;
+		m_playbackparm.clear();
+		m_totaltimespan.m_starttime.clear();
+		m_totaltimespan.m_endtime.clear();
+		m_subtimespans.clear();
+	}
+
+	~MonitorInfo()
+	{
+		m_suid = 0u;
+		m_nickname.clear();
+		m_ip.clear();
+		m_devicecode.clear();
+		m_querystate = 0u;
+		m_playbackparm.clear();
+		m_totaltimespan.m_starttime.clear();
+		m_totaltimespan.m_endtime.clear();
+		for (std::list<TimeInfo*>::iterator subts_itor = m_subtimespans.begin();
+			subts_itor != m_subtimespans.end(); subts_itor++)
+		{
+			TimeInfo* pti = NULL;
+			pti = (*subts_itor);
+			if (pti != NULL)
+			{
+				delete pti;
+				pti = NULL;
+			}
+		}
+		m_subtimespans.clear();
+	}
+	SR_uint32		 m_suid;
+	std::string 	 m_nickname;
+	std::string 	 m_ip;
+	std::string 	 m_devicecode;
+	SR_uint32		 m_querystate;// 查询结果
+	std::string 	 m_playbackparm;// 播放进度参数
+	TimeInfo         m_totaltimespan;// 总时间段信息
+	std::list<TimeInfo*> m_subtimespans;// 子时间段信息
+};
+
+class GWQueryMonitorRecInd{
+public:
+	GWQueryMonitorRecInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_gwid = 0u;
+		m_queryinfos.clear();
+	}
+
+	~GWQueryMonitorRecInd()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_gwid = 0u;
+		for (std::list<MonitorInfo*>::iterator monitor_itor = m_queryinfos.begin();
+			monitor_itor != m_queryinfos.end(); monitor_itor++)
+		{
+			MonitorInfo* pmonitor = NULL;
+			pmonitor = (*monitor_itor);
+			if (pmonitor != NULL)
+			{
+				delete pmonitor;
+				pmonitor = NULL;
+			}
+		}
+		m_queryinfos.clear();
+	}
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_gwid;
+	std::list<MonitorInfo*> m_queryinfos;
+};
+
+class RelaySvrTJCRsp{
+public:
+	RelaySvrTJCRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_relaysvrid = 0u;
+		m_suid = 0u;
+		m_failreason.clear();
+		//m_mapSvrAddrInfo.clear();
+		
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+
+	~RelaySvrTJCRsp()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_relaysvrid = 0u;
+		m_suid = 0u;
+		m_failreason.clear();
+
+		//for (std::map<SR_uint32, AddrInfo*>::iterator svr_addr_itor = m_mapSvrAddrInfo.begin();
+		//	svr_addr_itor != m_mapSvrAddrInfo.end(); svr_addr_itor++)
+		//{
+		//	AddrInfo* pAddrinfo = NULL;
+		//	pAddrinfo = svr_addr_itor->second;
+		//	if (pAddrinfo)
+		//	{
+		//		delete pAddrinfo;
+		//		pAddrinfo = NULL;
+		//	}
+		//}
+		//m_mapSvrAddrInfo.clear();
+
+		m_haserrorcode = false;
+		m_errorcode = 0u;
+	}
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_relaysvrid;
+	SR_uint32		 m_suid;
+	std::string 	 m_failreason;
+	//std::map<SR_uint32, AddrInfo*> m_mapSvrAddrInfo;
+	IPPortInfo m_relaysvraddr;// relayserver的外网地址
+	
+	SR_bool          m_haserrorcode;// 是否有错误码
+	SR_uint32        m_errorcode;// 有错误码时存放错误码
+};
+
+class TSFrameInfo
+{
+public:
+	TSFrameInfo()
+	{
+		m_fsw = 0u;
+		m_fsh = 0u;
+		m_fps = 0u;
+	}
+	~TSFrameInfo()
+	{
+		m_fsw = 0u;
+		m_fsh = 0u;
+		m_fps = 0u;
+	}
+
+	SR_uint32 m_fsw;// 分辨率 宽 frame size width
+	SR_uint32 m_fsh;// 分辨率 高 frame size height
+	SR_uint32 m_fps;// 帧率
+
+private:
+
+};
+
+class TSAdvanceInfo
+{
+public:
+	TSAdvanceInfo()
+	{
+		m_delay = 0u;
+		m_jitter = 0u;
+		m_loss = 0u;
+	}
+	~TSAdvanceInfo()
+	{
+		m_delay = 0u;
+		m_jitter = 0u;
+		m_loss = 0u;
+	}
+
+	SR_uint32 m_delay; // 延时,单位ms
+	SR_uint32 m_jitter;// 抖动,单位ms
+	SR_uint32 m_loss;// 丢包率
+
+private:
+
+};
+
+class TSBaseInfo
+{
+public:
+	TSBaseInfo()
+	{
+		m_format = 0u;
+		m_bitrate = 0u;
+	}
+	~TSBaseInfo()
+	{
+		m_format = 0u;
+		m_bitrate = 0u;
+	}
+
+	SR_uint32 m_format;// 媒体格式,参考SRMediaCommon.h的音视频格式定义
+	SR_uint32 m_bitrate; // 码率,单位kbps
+
+private:
+
+};
+
+class TSAudioInfo
+{
+public:
+	TSAudioInfo()
+	{
+		m_atype = 0u;
+		m_aterid = 0u;
+		m_baseinfo.m_format = 0u;
+		m_baseinfo.m_bitrate = 0u;
+		m_advinfo.m_delay = 0u;
+		m_advinfo.m_jitter = 0u;
+		m_advinfo.m_loss = 0u;
+	}
+	~TSAudioInfo()
+	{
+		m_atype = 0u;
+		m_aterid = 0u;
+		m_baseinfo.m_format = 0u;
+		m_baseinfo.m_bitrate = 0u;
+		m_advinfo.m_delay = 0u;
+		m_advinfo.m_jitter = 0u;
+		m_advinfo.m_loss = 0u;
+	}
+
+	SR_uint32 m_atype;//音频类型,0-主音频、1-共享音频(目前复用在主音频通道,待独立通道时再加)
+	SR_uint32 m_aterid;//相关终端terid
+	TSBaseInfo  m_baseinfo;//音频基本信息
+	TSAdvanceInfo  m_advinfo;//音频高级信息
+
+private:
+
+};
+class TSVideoInfo
+{
+public:
+	TSVideoInfo()
+	{
+		m_vtype = 0u;
+		m_vterid = 0u;
+		m_baseinfo.m_format = 0u;
+		m_baseinfo.m_bitrate = 0u;
+		m_advinfo.m_delay = 0u;
+		m_advinfo.m_jitter = 0u;
+		m_advinfo.m_loss = 0u;
+		m_frameinfo.clear();
+	}
+	~TSVideoInfo()
+	{
+		m_vtype = 0u;
+		m_vterid = 0u;
+		m_baseinfo.m_format = 0u;
+		m_baseinfo.m_bitrate = 0u;
+		m_advinfo.m_delay = 0u;
+		m_advinfo.m_jitter = 0u;
+		m_advinfo.m_loss = 0u;
+
+		for (std::list<TSFrameInfo*>::iterator fi_itor = m_frameinfo.begin();
+			fi_itor != m_frameinfo.end(); fi_itor++)
+		{
+			TSFrameInfo* ptsfi = NULL;
+			ptsfi = (*fi_itor);
+			if (ptsfi != NULL)
+			{
+				delete ptsfi;
+				ptsfi = NULL;
+			}
+		}
+		m_frameinfo.clear();
+	}
+
+	SR_uint32 m_vtype;//视频类型,0-主流、1-辅流(双流共享)
+	SR_uint32 m_vterid;//相关终端terid
+	TSBaseInfo  m_baseinfo;//视频基本信息
+	TSAdvanceInfo  m_advinfo;//视频高级信息
+	std::list<TSFrameInfo*> m_frameinfo;//多层分辨率和帧率的信息(目前只填最大分辨率那层)
+
+private:
+
+};
+class TSXfeInfo
+{
+public:
+	TSXfeInfo()
+	{
+		m_ainfo.clear();
+		m_vinfo.clear();
+	}
+	~TSXfeInfo()
+	{
+		for (std::list<TSAudioInfo*>::iterator ai_itor = m_ainfo.begin();
+			ai_itor != m_ainfo.end(); ai_itor++)
+		{
+			TSAudioInfo* ptsai = NULL;
+			ptsai = (*ai_itor);
+			if (ptsai != NULL)
+			{
+				delete ptsai;
+				ptsai = NULL;
+			}
+		}
+		m_ainfo.clear();
+		for (std::list<TSVideoInfo*>::iterator vi_itor = m_vinfo.begin();
+			vi_itor != m_vinfo.end(); vi_itor++)
+		{
+			TSVideoInfo* ptsai = NULL;
+			ptsai = (*vi_itor);
+			if (ptsai != NULL)
+			{
+				delete ptsai;
+				ptsai = NULL;
+			}
+		}
+		m_vinfo.clear();
+	}
+
+	std::list<TSAudioInfo*> m_ainfo;//音频信息
+	std::list<TSVideoInfo*> m_vinfo;//视频信息
+
+private:
+
+};
+class TerStatisticsInfo
+{
+public:
+	TerStatisticsInfo()
+	{
+		m_terid = 0u;
+		m_txbweresult = 0u;
+		m_txinfo.clear();
+		m_rxinfo.clear();
+	}
+	~TerStatisticsInfo()
+	{
+		m_terid = 0u;
+		m_txbweresult = 0u;
+		for (std::list<TSXfeInfo*>::iterator txi_itor = m_txinfo.begin();
+			txi_itor != m_txinfo.end(); txi_itor++)
+		{
+			TSXfeInfo* ptsxfei = NULL;
+			ptsxfei = (*txi_itor);
+			if (ptsxfei != NULL)
+			{
+				delete ptsxfei;
+				ptsxfei = NULL;
+			}
+		}
+		m_txinfo.clear();
+		for (std::list<TSXfeInfo*>::iterator rxi_itor = m_rxinfo.begin();
+			rxi_itor != m_rxinfo.end(); rxi_itor++)
+		{
+			TSXfeInfo* ptsxfei = NULL;
+			ptsxfei = (*rxi_itor);
+			if (ptsxfei != NULL)
+			{
+				delete ptsxfei;
+				ptsxfei = NULL;
+			}
+		}
+		m_rxinfo.clear();
+	}
+
+	SR_uint32 m_terid;//被统计终端terid
+	std::list<TSXfeInfo*> m_txinfo;//服务端给被统计终端发送的统计信息(可支持多路多层)
+	std::list<TSXfeInfo*> m_rxinfo;//服务端接收被统计终端的统计信息
+	SR_uint32 m_txbweresult;//服务端给被统计终端发送的带宽评估结果,0-unknown、1-较差、2-一般、3-良好
+
+private:
+
+};
+
+class NetmpIndTerStatisticsInfo{
+public:
+	NetmpIndTerStatisticsInfo()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_netmpid = 0u;
+		m_tsinfos.clear();
+	}
+
+	~NetmpIndTerStatisticsInfo()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_netmpid = 0u;
+		for (std::list<TerStatisticsInfo*>::iterator tsi_itor = m_tsinfos.begin();
+			tsi_itor != m_tsinfos.end(); tsi_itor++)
+		{
+			TerStatisticsInfo* ptsi = NULL;
+			ptsi = (*tsi_itor);
+			if (ptsi != NULL)
+			{
+				delete ptsi;
+				ptsi = NULL;
+			}
+		}
+		m_tsinfos.clear();
+	}
+	SR_uint64 m_confid;
+	SR_uint32 m_mcid;
+	SR_uint32 m_netmpid;
+	std::list<TerStatisticsInfo*> m_tsinfos;
+};
+
+class GWIndTerStatisticsInfo{
+public:
+	GWIndTerStatisticsInfo()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_gwid = 0u;
+		m_tsinfos.clear();
+	}
+
+	~GWIndTerStatisticsInfo()
+	{
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_gwid = 0u;
+		for (std::list<TerStatisticsInfo*>::iterator tsi_itor = m_tsinfos.begin();
+			tsi_itor != m_tsinfos.end(); tsi_itor++)
+		{
+			TerStatisticsInfo* ptsi = NULL;
+			ptsi = (*tsi_itor);
+			if (ptsi != NULL)
+			{
+				delete ptsi;
+				ptsi = NULL;
+			}
+		}
+		m_tsinfos.clear();
+	}
+	SR_uint64 m_confid;
+	SR_uint32 m_mcid;
+	SR_uint32 m_gwid;
+	std::list<TerStatisticsInfo*> m_tsinfos;
+};
+
+//e_rspnetmpcreateconf
+class NetMPCreateConfInfoData : public MessageData
+{
+public:
+	explicit NetMPCreateConfInfoData(NetMPCreateConfRsp* pnccr)
+	{
+		m_netmpcreateconfrsp = pnccr;
+	}
+	~NetMPCreateConfInfoData(){}//do not delete m_netmpcreateconfrsp here!!!
+	NetMPCreateConfRsp* m_netmpcreateconfrsp;
+};
+
+class MPCreateMPIInfoData : public MessageData
+{
+public:
+	explicit MPCreateMPIInfoData(MPCreateMPIRsp* pmcmr)
+	{
+		m_mpcreatempirsp = pmcmr;
+	}
+	~MPCreateMPIInfoData(){}
+	MPCreateMPIRsp* m_mpcreatempirsp;
+};
+
+class MPDestoryMPIInfoData : public MessageData
+{
+public:
+	explicit MPDestoryMPIInfoData(MPDestoryMPIRsp* pmdmr)
+	{
+		m_mpdestroympirsp = pmdmr;
+	}
+	~MPDestoryMPIInfoData(){}
+	MPDestoryMPIRsp* m_mpdestroympirsp;
+};
+
+class MPCreateScreenInfoData : public MessageData
+{
+public:
+	explicit MPCreateScreenInfoData(MPCreateScreenRsp* pmcsr)
+	{
+		m_mpcreatescreenrsp = pmcsr;
+	}
+	~MPCreateScreenInfoData(){}
+	MPCreateScreenRsp* m_mpcreatescreenrsp;
+};
+
+
+class MPDestoryScreenInfoData : public MessageData
+{
+public:
+	explicit MPDestoryScreenInfoData(MPDestoryScreenRsp* pmdsr)
+	{
+		m_mpdestroyscrrsp = pmdsr;
+	}
+	~MPDestoryScreenInfoData(){}
+	MPDestoryScreenRsp* m_mpdestroyscrrsp;
+};
+
+class MPSeleteVideoCmdData : public MessageData
+{
+public:
+	explicit MPSeleteVideoCmdData(MPSeleteVideoCmd* pmpsvcmd)
+	{
+		m_mpseletevideocmd = pmpsvcmd;
+	}
+	~MPSeleteVideoCmdData(){}
+	MPSeleteVideoCmd* m_mpseletevideocmd;
+};
+
+class MPLayoutinfoIndData : public MessageData
+{
+public:
+	explicit MPLayoutinfoIndData(MPLayoutinfoInd* pmpliind)
+	{
+		m_mplayoutinfoind = pmpliind;
+	}
+	~MPLayoutinfoIndData(){}
+	MPLayoutinfoInd* m_mplayoutinfoind;
+};
+
+class CRSCreateConfInfoData : public MessageData
+{
+public:
+	explicit CRSCreateConfInfoData(CRSCreateConfRsp* pcsrrsp)
+	{
+		m_crscreateconfrsp = pcsrrsp;
+	}
+	~CRSCreateConfInfoData(){}
+	CRSCreateConfRsp* m_crscreateconfrsp;
+};
+
+class CRSStartRecInfoData : public MessageData
+{
+public:
+	explicit CRSStartRecInfoData(CRSStartRecRsp* pcsrrsp)
+	{
+		m_crsstartrecrsp = pcsrrsp;
+	}
+	~CRSStartRecInfoData(){}
+	CRSStartRecRsp* m_crsstartrecrsp;
+};
+
+class CRSStopRecInfoData : public MessageData
+{
+public:
+	explicit CRSStopRecInfoData(CRSStopRecRsp* pcsrrsp)
+	{
+		m_crsstoprecrsp = pcsrrsp;
+	}
+	~CRSStopRecInfoData(){}
+	CRSStopRecRsp* m_crsstoprecrsp;
+};
+
+class CRSSeleteVideoCmdData : public MessageData
+{
+public:
+	explicit CRSSeleteVideoCmdData(CRSSeleteVideoCmd* pcrssvcmd)
+	{
+		m_crsseletevideocmd = pcrssvcmd;
+	}
+	~CRSSeleteVideoCmdData(){}
+	CRSSeleteVideoCmd* m_crsseletevideocmd;
+};
+
+class CRSFileStorPathInfoData : public MessageData
+{
+public:
+	explicit CRSFileStorPathInfoData(CRSFileStorPathInd* pcsrind)
+	{
+		m_crsfilestorpathind = pcsrind;
+	}
+	~CRSFileStorPathInfoData(){}
+	CRSFileStorPathInd* m_crsfilestorpathind;
+};
+
+class CRSStartLiveInfoData : public MessageData
+{
+public:
+	explicit CRSStartLiveInfoData(CRSStartLiveRsp* pcsrrsp)
+	{
+		m_crsstartliversp = pcsrrsp;
+	}
+	~CRSStartLiveInfoData(){}
+	CRSStartLiveRsp* m_crsstartliversp;
+};
+
+class CRSLiveStateInfoData : public MessageData
+{
+public:
+	explicit CRSLiveStateInfoData(CRSLiveStateInd* pcsrind)
+	{
+		m_crslivestateind = pcsrind;
+	}
+	~CRSLiveStateInfoData(){}
+	CRSLiveStateInd* m_crslivestateind;
+};
+
+//class CRSStopLiveInfoData : public MessageData
+//{
+//public:
+//	explicit CRSStopLiveInfoData(CRSStopLiveRsp* pcsrrsp)
+//	{
+//		m_crsstopliversp = pcsrrsp;
+//	}
+//	~CRSStopLiveInfoData(){}
+//	CRSStopLiveRsp* m_crsstopliversp;
+//};
+
+class GWQueryMonitorRecInfoData : public MessageData
+{
+public:
+	explicit GWQueryMonitorRecInfoData(GWQueryMonitorRecInd* pgwind)
+	{
+		m_gwquerymrind = pgwind;
+	}
+	~GWQueryMonitorRecInfoData(){}
+	GWQueryMonitorRecInd* m_gwquerymrind;
+};
+
+//e_netmpindterstatisticsinfo
+class NetMPIndTerStatisticsInfoData : public MessageData
+{
+public:
+	explicit NetMPIndTerStatisticsInfoData(NetmpIndTerStatisticsInfo* ptsi)
+	{
+		m_netmpindtsi = ptsi;
+	}
+	~NetMPIndTerStatisticsInfoData(){}//do not delete m_netmpcreateconfrsp here!!!
+	NetmpIndTerStatisticsInfo* m_netmpindtsi;
+};
+
+//e_gwindterstatisticsinfo
+class GWIndTerStatisticsInfoData : public MessageData
+{
+public:
+	explicit GWIndTerStatisticsInfoData(GWIndTerStatisticsInfo* ptsi)
+	{
+		m_gwindtsi = ptsi;
+	}
+	~GWIndTerStatisticsInfoData(){}//do not delete m_netmpcreateconfrsp here!!!
+	GWIndTerStatisticsInfo* m_gwindtsi;
+};
+
+class RelaySvrRspTJCInfoData : public MessageData
+{
+public:
+	explicit RelaySvrRspTJCInfoData(RelaySvrTJCRsp* prsvrrsp)
+	{
+		m_relaysvrrsptjc = prsvrrsp;
+	}
+	~RelaySvrRspTJCInfoData(){}
+	RelaySvrTJCRsp* m_relaysvrrsptjc;
+};
+
+//e_notify_terjoinconf
+//e_notify_terexitconf
+class NotifyTerJoinOrExitConfToDevMgrThreadData : public MessageData
+{
+public:
+	explicit NotifyTerJoinOrExitConfToDevMgrThreadData(SR_uint64 confid,SR_uint32 terid,SR_uint32 netmpid)
+	{
+		m_confid = confid;
+		m_terid = terid;
+		m_netmpid = netmpid;
+	}
+	~NotifyTerJoinOrExitConfToDevMgrThreadData(){}
+	SR_uint64 m_confid;
+	SR_uint32 m_terid;
+	SR_uint32 m_netmpid;
+private:
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(NotifyTerJoinOrExitConfToDevMgrThreadData);
+};
+
+//e_notify_confexit
+class NotifyConfExitToDevMgrThreadData : public MessageData
+{
+public:
+	NotifyConfExitToDevMgrThreadData(){}//m_netmps.clear();}
+	~NotifyConfExitToDevMgrThreadData(){}//m_netmps.clear();}
+	SR_uint64 m_confid;
+	SR_uint32 m_ternums;
+};
+
+class DevMgrSockErrorData : public MessageData
+{
+public:
+	explicit DevMgrSockErrorData(/*SR_socket devmgrsockfd, */SR_void* pDevmgrSocket)
+	{
+		//m_devmgrsockfd = devmgrsockfd;
+		m_pDevmgrSocket = pDevmgrSocket;
+	}
+	~DevMgrSockErrorData(){}
+	//SR_socket m_devmgrsockfd;
+	SR_void* m_pDevmgrSocket;
+};
+
+//e_rspconfinfotomc
+class ConfInfoData : public MessageData
+{
+public:
+	explicit ConfInfoData(SR_void* cfdm)
+	{
+		m_confinfo = cfdm;
+	}
+	~ConfInfoData(){}//do not delete m_confinfo here!!!
+	SR_void* m_confinfo;//SRMsgs::RspConfInfoToMC*
+};
+
+//自动删除 MessageData的智能指针
+class Simple_ScopedPtr
+{
+public:
+	explicit Simple_ScopedPtr(MessageData* ptr){m_ptr = ptr;}
+	~Simple_ScopedPtr(){delete m_ptr;}
+private:
+	MessageData* m_ptr;
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(Simple_ScopedPtr);
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(Simple_ScopedPtr);
+};
+
+
+} //namespace SRMC
+
+#endif //#ifndef SR_QUEUEMSGID_H

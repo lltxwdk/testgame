@@ -4,9 +4,12 @@
 workdir=$(cd $(dirname $0); pwd)
 
 echo "workdir is:$workdir"
-
+#数据库默认编译mysql
 dbtype="MYSQL_DB_DEF"
 #dbtype="SHENTONG_DB_DEF"
+#操作性系统默认编译centos
+ostype="centos"
+#ostype="kylin"
 configfile="devmgr.conf"
 devmgrbin="devmgr"
 packetname=""
@@ -35,14 +38,29 @@ sredisdllshell="build_sredisdll.sh"
 sredisdlllib="../../build/linux/sredisdll/lib/64/libsredisdll.a"
 
 #相对build_devmgr.sh脚本的路径
-if [ -n "`uname -a | grep kylin`" ];then
-	if [ -n "`uname -a | grep aarch64`" ];then
-		libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/kylin-aarch64/"
-	elif [ -n "`uname -a | grep x86_64`" ];then
+jsoncppbuild="../../../../../src/json/jsoncpp/"
+jsoncppshell="build_jsoncpp.sh"
+#相对jsoncppbuild的路径
+jsoncpplib="../../../build/linux/third-party/jsoncpp-0.10.7/lib/64/libjsoncpp.a"
+
+if [ -n "`uname -a | grep kylin`"  ];then
+	ostype="kylin"
+fi
+
+
+#相对build_devmgr.sh脚本的路径
+if [ $ostype == "centos" ];then
+	if [ -n "`uname -a | grep x86_64`" ];then
 		libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/64/"
+	elif [ -n "`uname -a | grep aarch64`" ];then
+		libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/centos-aarch64/"
 	fi
-elif [ -n "`uname -a | grep x86_64`" ];then
-	libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/64/"
+elif [ $ostype == "kylin" ];then
+	if [ -n "`uname -a | grep x86_64`" ];then
+		libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/64/"
+	elif [ -n "`uname -a | grep aarch64`" ];then
+		libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/kylin-aarch64/"
+	fi
 fi
 #libevent_sdk_path="../../../third-party/libevent-2.1.8-stable/linux/64/"
 prelibeventshell="pre_libevent.sh"
@@ -66,7 +84,7 @@ buildmode="debug"
 versionname=""
 major_v="1"
 minor_v="2"
-release_v="31"
+release_v="41"
 
 killall ntpd
 ntpdate cn.ntp.org.cn
@@ -302,7 +320,25 @@ fi
 #cd -
 cd $workdir
 
-if [ -n "`uname -a | grep kylin`" ];then
+#build libjsoncpp.a
+cd $jsoncppbuild
+chmod 777 $jsoncppshell
+source $jsoncppshell
+if [ -f $jsoncpplib ];
+then
+echo "$jsoncpplib ok"
+else
+echo "build error... "
+exit
+fi
+
+#切换到build_devmgr.sh脚本所在目录
+#cd -
+cd $workdir
+
+if [ $ostype == "kylin" ];then
+
+
 	if [ -n "`uname -a | grep aarch64`" ];then
 		archtype="kylin-aarch64"
 		if [ $dbtype == "SHENTONG_DB_DEF" ];then
@@ -316,11 +352,19 @@ if [ -n "`uname -a | grep kylin`" ];then
 			cp -f ../../../third-party/shentong/linux64/libacci.so ./
 		fi
 	fi
-elif [ -n "`uname -a | grep x86_64`" ];then
-	archtype="centos64"
-	if [ $dbtype == "SHENTONG_DB_DEF" ];then
-		cp -f ../../../third-party/shentong/linux64/libaci.so ./
-		cp -f ../../../third-party/shentong/linux64/libacci.so ./
+elif [ $ostype == "centos" ];then
+	if [ -n "`uname -a | grep aarch64`" ];then
+		archtype="centos-aarch64"
+		if [ $dbtype == "SHENTONG_DB_DEF" ];then
+			cp -f ../../../third-party/shentong/arm64/libaci.so ./
+			cp -f ../../../third-party/shentong/arm64/libacci.so ./
+		fi
+	elif [ -n "`uname -a | grep x86_64`" ];then
+		archtype="centos-x86_64"
+		if [ $dbtype == "SHENTONG_DB_DEF" ];then
+			cp -f ../../../third-party/shentong/linux64/libaci.so ./
+			cp -f ../../../third-party/shentong/linux64/libacci.so ./
+		fi
 	fi
 fi
 

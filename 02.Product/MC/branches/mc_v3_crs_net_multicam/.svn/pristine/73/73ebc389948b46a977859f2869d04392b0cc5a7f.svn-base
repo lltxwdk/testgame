@@ -1,0 +1,2620 @@
+#ifndef SRMCPROCESS_H
+#define SRMCPROCESS_H
+
+#include <set>
+#include <map>
+#include <string>
+#include "mc_ter.pb.h"
+#include "mc_ter_plus.pb.h"
+#include "mc_netmp.pb.h"
+#include "device_ser.pb.h"
+#include "mc_mp.pb.h"
+#include "mc_crs.pb.h"
+#include "mc_relayserver.pb.h"
+#include "asyncthread.h"
+#include "sr_message.h"
+#include "sr_queuemsgid.h"
+#include "ini_configuration.h"
+#include "sr_tcpheader.h"
+
+#include "SRMediaCommon.h"
+//#include "srDES.h"
+
+#define MAX_BUFFER_MSG_SIZE (50u)
+#define MAX_BUFFER_MSG_SIZE_DEVICE (200)
+
+class DeviceManager;
+class TimerManager;
+namespace SRMC{
+
+class MeetingRoom;
+class ConfInfoData;
+class NetMPCreateConfInfoData;
+class MPCreateMPIInfoData;
+class MPCreateScreenInfoData;
+class SRTer;
+class TerJoinConfReq;
+class NetMPCreateConfRsp;
+class BufferedProtoMsgPair;
+
+#define POLL_NUM 5
+#define MAX_PANNE_INDEX 25
+
+typedef enum{
+	e_Media_EA_UNKNOWN = 0x0,
+	e_Media_EA_AES_128 = 0x1,
+	e_Media_EA_SM4 = 0x2
+}E_MediaEAType;
+
+#define ENCRYPTION_KEY_LEN 16
+
+
+typedef std::set<SR_uint32> TeridSet_t;
+typedef std::map<SR_uint32, SR_uint32> TeridNetmpidMap_t;
+typedef std::map<SR_uint32, SR_uint32> MPiChannelidMPidMap_t;
+typedef std::map<SR_uint32, SR_uint32> ScridMPiChannelidMap_t;
+
+typedef std::map<SR_uint32, MPCreateScreenRsp*> ScreenidMPcsrspMap_t;
+
+typedef std::map<SR_uint32, SR_uint32> TeridSeqnumMap_t;
+
+
+class ConnectedNetMPInfo
+{
+public:
+	ConnectedNetMPInfo()
+	{
+		m_ters.clear();
+		m_terswaitrsp.clear();
+		m_terswaitreopenrsp.clear();
+		m_portsinfo.clear();		
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+		m_netmpdeviceid = 0u;
+		m_netmpgroupid = 0u;
+		m_mapinternetips.clear();
+		m_nettype = 0u;
+		m_max_bandwidth = 0;
+		m_max_terms = 0;
+		m_ip.clear();
+		m_ipandport.clear();
+	}
+
+	//~ConnectedNetMPInfo()
+	//{
+	//	m_ters.clear();
+	//	m_terswaitrsp.clear();
+	//	m_terswaitreopenrsp.clear();
+	//	m_portsinfo.clear();
+	//	m_pSocket = NULL;
+	//	m_load2 = 0u;// 默认的设置为0
+	//	m_load = 0u;
+	//}
+
+	SR_uint32   m_netmpdeviceid;
+	SR_uint32   m_load;
+	SR_uint32   m_load2;//该 netmp 上已经召开的终端个数
+	SR_uint32   m_netmpgroupid;
+	SR_void*    m_pSocket;
+	std::list<std::string> m_mapinternetips;
+	SR_uint32   m_nettype;// 用于区分该netmp是采用哪种方式注册的
+	SR_uint32   m_max_bandwidth;//netmp可承载的最大带宽
+	SR_uint32   m_max_terms;//netmp可承载的最大终端数
+	std::string   m_ip;
+	std::string   m_ipandport;
+	//TODO: map 里 value 改为 指针
+	std::map<SR_uint64,TeridSet_t> m_ters;//key：confid，在该netmp上开会的终端
+	std::map<SR_uint64,TeridSet_t> m_terswaitrsp;//key：confid，等待该netmp返回端口资源的终端,suid
+	std::map<SR_uint64,TeridSet_t> m_terswaitreopenrsp;//key：confid，故障迁移等待该netmp返回端口资源的终端
+	std::map<SR_uint64,NetMPCreateConfRsp*> m_portsinfo; // key：confid
+
+	SR_uint32 getAllTersNumInConf(SR_uint64 confid) const ;
+	SR_uint32 getAllTersNum() const ;
+	SR_uint32 getNetmpAlreadyTersNum() const; // 返回netmp上的所有终端个数 load2 (+MC分配的还未返回?)
+};
+
+class ConnectedMPInfo
+{
+public:
+	ConnectedMPInfo()
+	{
+		m_terms.clear();
+		m_terswaitmprsp.clear();
+		m_waitmpreopenrspters.clear();
+		m_mpiinfo.clear();
+		m_screeninfo.clear();
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+	}
+
+	~ConnectedMPInfo()
+	{
+		for (std::map<SR_uint64, TeridNetmpidMap_t>::iterator ter_itor = m_terms.begin(); ter_itor != m_terms.end(); ter_itor++)
+		{
+			TeridNetmpidMap_t* pternetmppairmap = NULL;
+			pternetmppairmap = &(ter_itor->second);
+			if (pternetmppairmap != NULL)
+			{
+				pternetmppairmap->clear();
+			}
+		}
+		m_terms.clear();
+
+		for (std::map<SR_uint64, TeridNetmpidMap_t>::iterator waitmprsp_ter_itor = m_terswaitmprsp.begin(); waitmprsp_ter_itor != m_terswaitmprsp.end(); waitmprsp_ter_itor++)
+		{
+			TeridNetmpidMap_t* pternetmppairmap = NULL;
+			pternetmppairmap = &(waitmprsp_ter_itor->second);
+			if (pternetmppairmap != NULL)
+			{
+				pternetmppairmap->clear();
+			}
+		}
+		m_terswaitmprsp.clear();
+
+		for (std::map<SR_uint64, TeridNetmpidMap_t>::iterator waitmpreopenrsp_ter_itor = m_waitmpreopenrspters.begin();
+			waitmpreopenrsp_ter_itor != m_waitmpreopenrspters.end(); waitmpreopenrsp_ter_itor++)
+		{
+			TeridNetmpidMap_t* pternetmppairmap = NULL;
+			pternetmppairmap = &(waitmpreopenrsp_ter_itor->second);
+			if (pternetmppairmap != NULL)
+			{
+				pternetmppairmap->clear();
+			}
+		}
+		m_waitmpreopenrspters.clear();
+
+		for (std::map<SR_uint64, MPCreateMPIRsp*>::iterator mpcrtmpirsp_itor = m_mpiinfo.begin();
+			mpcrtmpirsp_itor != m_mpiinfo.end(); mpcrtmpirsp_itor++)
+		{
+			MPCreateMPIRsp* pmpcrtmpirsp = NULL;
+			pmpcrtmpirsp = mpcrtmpirsp_itor->second;
+			if (pmpcrtmpirsp != NULL)
+			{
+				delete pmpcrtmpirsp;
+				pmpcrtmpirsp = NULL;
+			}
+		}
+		m_mpiinfo.clear();
+
+		for (std::map<SR_uint64, ScreenidMPcsrspMap_t>::iterator mpcrtscrrsp_itor = m_screeninfo.begin();
+			mpcrtscrrsp_itor != m_screeninfo.end(); mpcrtscrrsp_itor++)
+		{
+			for (ScreenidMPcsrspMap_t::iterator scrid_mpcrtrsp_itor = mpcrtscrrsp_itor->second.begin();
+				scrid_mpcrtrsp_itor != mpcrtscrrsp_itor->second.end(); scrid_mpcrtrsp_itor++)
+			{
+				MPCreateScreenRsp* pmpcrtrsp = NULL;
+				pmpcrtrsp = scrid_mpcrtrsp_itor->second;
+				if (pmpcrtrsp != NULL)
+				{
+					delete pmpcrtrsp;
+					pmpcrtrsp = NULL;
+				}
+			}
+			mpcrtscrrsp_itor->second.clear();
+		}
+		m_screeninfo.clear();
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+	}
+	SR_uint32   m_mpdeviceid;
+	SR_uint32   m_load;// mp:上行带宽（netmp->mp）
+	SR_uint32   m_load2;// mp:cpu负载
+	SR_void*    m_pSocket;
+	//TODO: map 里 value 改为 指针
+	std::map<SR_uint64, TeridNetmpidMap_t> m_terms;//key：confid，在该mp上开会的终端
+	//std::map<SR_uint64, TeridSet_t> m_terswaitmprsp;//key：confid，等待该mp返回媒体实例通道的终端
+	std::map<SR_uint64, TeridNetmpidMap_t> m_terswaitmprsp;//key：confid，等待该mp返回媒体实例通道的终端
+	std::map<SR_uint64, TeridNetmpidMap_t> m_waitmpreopenrspters;//key：confid，故障迁移等待该mp返回mpi资源的终端
+	std::map<SR_uint64, MPCreateMPIRsp*> m_mpiinfo; // key：confid，暂时不考虑一个会议多个MPI(如果多个MPI时，需考虑将MPCreateMPIRsp*指针封装成map结构<key：mpichannelid,value:MPCreateMPIRsp*>)
+	std::map<SR_uint64, ScreenidMPcsrspMap_t> m_screeninfo; // key：confid , <key：screenid,value:MPCreateMPIRsp*>
+
+	SR_uint32 getAllTersNumInMPConf(SR_uint64 confid) const;
+	SR_uint32 getAllTersNumInMP() const;
+	SR_uint32 getMPAlreadyTersNum() const; // 返回mp上的所有终端个数 load2 (+MC分配的还未返回?)
+	SR_uint32 getMPCurrentCpuLoad() const; // 返回mp上cpu负载
+};
+
+class ConnectedGWInfo
+{
+public:
+	ConnectedGWInfo()
+	{
+		//m_terms.clear();
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+	}
+
+	~ConnectedGWInfo()
+	{
+		//for (std::map<SR_uint64, TeridNetmpidMap_t>::iterator ter_itor = m_terms.begin(); ter_itor != m_terms.end(); ter_itor++)
+		//{
+		//	TeridNetmpidMap_t* pternetmppairmap = NULL;
+		//	pternetmppairmap = &(ter_itor->second);
+		//	if (pternetmppairmap != NULL)
+		//	{
+		//		pternetmppairmap->clear();
+		//	}
+		//}
+		//m_terms.clear();
+
+		
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+	}
+	SR_uint32   m_gwdeviceid;
+	SR_uint32   m_load;// gw:终端数
+	SR_uint32   m_load2;// gw:cpu负载
+	SR_void*    m_pSocket;
+	////TODO: map 里 value 改为 指针
+	//std::map<SR_uint64, TeridNetmpidMap_t> m_terms;//key：confid，在该mp上开会的终端
+
+	//SR_uint32 getAllTersNumInGWConf(SR_uint64 confid) const;
+	//SR_uint32 getAllTersNumInMP() const;
+	//SR_uint32 getGWAlreadyTersNum() const; // 返回mp上的所有终端个数 load2 (+MC分配的还未返回?)
+	////SR_uint32 getGWCurrentCpuLoad() const; // 返回mp上cpu负载
+};
+
+class ConnectedCRSInfo
+{
+public:
+	ConnectedCRSInfo()
+	{
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+		m_disktotalcapacity = 0u;
+		m_diskremaincapacity = 0u;
+	}
+
+	~ConnectedCRSInfo()
+	{
+		m_pSocket = NULL;
+		m_load2 = 0u;// 默认的设置为0
+		m_load = 0u;
+		m_disktotalcapacity = 0u;
+		m_diskremaincapacity = 0u;
+	}
+	SR_uint32   m_crsdeviceid;
+	SR_uint32   m_load;// crs:磁盘空间使用率,（高16位是总容量,低16位是剩余容量,单位：GB）
+	SR_uint32   m_load2;// crs:cpu使用率
+	SR_void*    m_pSocket;
+	SR_uint32 	m_disktotalcapacity;// 磁盘总容量
+	SR_uint32 	m_diskremaincapacity;// 磁盘剩余容量
+};
+
+class ConnectedSRSInfo
+{
+public:
+	ConnectedSRSInfo()
+	{
+		m_srsdeviceid = 0u;
+		m_strip.clear();
+		m_port = 0u;
+		m_isroot = 0u;
+		m_txbw = 0u;
+	}
+
+	~ConnectedSRSInfo()
+	{
+		m_srsdeviceid = 0u;
+		m_strip.clear();
+		m_port = 0u;
+		m_isroot = 0u;
+		m_txbw = 0u;
+	}
+	SR_uint32   m_srsdeviceid;
+	std::string m_strip;
+	SR_uint32   m_port;
+	SR_uint32   m_isroot;// 是否是根节点,0-否,1-是
+	SR_uint32   m_txbw;
+};
+
+class ConnectedRelaySvrInfo
+{
+public:
+	ConnectedRelaySvrInfo()
+	{
+		m_pSocket = NULL;
+		m_ternum = 0u;// 默认的设置为0
+		m_tx = 0u;
+	}
+
+	~ConnectedRelaySvrInfo()
+	{
+		m_pSocket = NULL;
+		m_ternum = 0u;// 默认的设置为0
+		m_tx = 0u;
+	}
+	SR_uint32   m_relaysvrdevid;
+	SR_uint32   m_ternum;// relayserver:在线终端数
+	SR_uint32   m_tx;// relayserver:下行(发送)带宽
+	SR_void*    m_pSocket;
+
+	std::map<SR_uint64, TeridSet_t> m_ters;//key：confid，在该relaysvr上预分配的终端suid
+	std::map<SR_uint64, TeridSet_t> m_terswaitrsp;//key：confid，等待该relaysvr返回端口资源的终端,suid
+	std::map<SR_uint64, TeridSet_t> m_terswaitreopenrsp;//key：confid，故障迁移等待该relaysvr返回端口资源的终端
+};
+
+class ConnectedRelayMcInfo
+{
+public:
+	ConnectedRelayMcInfo()
+	{
+		m_relaymcid = 0u;// 默认的设置为0
+		m_groupid = 0u;// 默认的设置为0
+		m_strip.clear();
+		m_ip = 0u;// 默认的设置为0
+		m_port = 0u;// 默认的设置为0
+		m_ternum = 0u;// 默认的设置为0
+		m_mapinternetips.clear();
+	}
+
+	~ConnectedRelayMcInfo()
+	{
+		m_relaymcid = 0u;// 默认的设置为0
+		m_groupid = 0u;// 默认的设置为0
+		m_strip.clear();
+		m_ip = 0u;// 默认的设置为0
+		m_port = 0u;// 默认的设置为0
+		m_ternum = 0u;// 默认的设置为0
+		m_mapinternetips.clear();
+	}
+	SR_uint32 m_relaymcid;
+	SR_uint32 m_groupid;
+	std::string m_strip;
+	SR_uint32 m_ip;
+	SR_uint32 m_port;
+	SR_uint32 m_ternum;// relayserver:在线终端数
+	std::list<std::string> m_mapinternetips;
+};
+class NetMPCreateConfRsp;
+
+typedef std::map<SR_uint64,TeridSet_t> Confid_Ters_t;
+//索引
+typedef std::set<SR_uint32> TerSuidSet;
+typedef std::map<SR_uint64,TerSuidSet*> Confid_Suid_t;
+typedef std::set<SR_uint32> terid_set_t;
+typedef std::set<SR_uint32> crschanid_set_t;
+
+typedef enum{
+	e_DevMgr_sock_init = 8,
+	e_DevMgr_sock_connecting = 16,
+	e_DevMgr_sock_connect_ok = 32,
+	e_DevMgr_sock_error = 64,
+	e_DevMgr_sock_closed = 128
+}E_DevSockStat;
+
+class DevSockInfo
+{
+public:
+	DevSockInfo(){
+		m_ip.clear();
+		m_port = (SR_uint16)0;
+		m_devsockstat = e_DevMgr_sock_init;
+		m_sockptr = (SR_void*)0;
+	}
+	SR_void* getSockPtr(){ return m_sockptr; }//TODO:mutex lock
+	std::string   m_ip;//"192.168.1.1"左->右
+	int     m_port;//主机序
+	E_DevSockStat m_devsockstat;
+	SR_void*	  m_sockptr;
+};
+
+class ThreadMessgeHandler
+{
+public:
+	ThreadMessgeHandler(){}
+	~ThreadMessgeHandler(){}
+	virtual SR_void OnMessage(Message* msg) = 0;
+	virtual CAsyncThread* GetSelfThread() = 0;
+private:
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(ThreadMessgeHandler);
+};
+class TerMsgProcessThread : public ThreadMessgeHandler
+{
+public:
+	enum tag_timerflag{
+		e_detecters_timer = 0xcccc,
+		e_heartbeattoters_timer = 0xbbbb,
+		e_waitConfInfo_timeout_timer = 0xdddd,
+		e_waitNetCreatRsp_timeout_timer = 0xeeee,
+		e_waitMPCreatMPIRsp_timeout_timer = 0xeabe,
+		e_waitMPCreatScrRsp_timeout_timer = 0xcabd,
+		e_waitMPCreatDuoVideoScrRsp_timeout_timer = 0xabfd,
+		e_waitCRSCreatConfRsp_timeout_timer = 0xabce,
+		e_waitCRSStartRecRsp_timeout_timer = 0xabdc,
+		e_waitCRSStopRecRsp_timeout_timer = 0xadbc,
+		e_waitCRSStartLiveRsp_timeout_timer = 0xbabc,
+		//e_waitCRSStopLiveRsp_timeout_timer = 0xbabd,
+		e_waitRelaySvrRspTerJoinConf_timeout_timer = 0xeabc,
+		e_conf_keepalive_timeout_timer = 0x1009,
+		e_waitsecondvideorsp_timeout_timer = 0x0831,
+		e_waitRCIreconnection_timeout_timer = 0x0832,// rollcallinitiator
+		e_detecccsters_timer = 0x0438,
+		e_heartbeattoccss_timer = 0x0530,
+		e_sendlayouttoter_timer = 0x0531,
+		e_waitLicenseInfotRsp_timeout_timer = 0x0532
+	};
+	TerMsgProcessThread();
+	bool Init();
+	virtual CAsyncThread* GetSelfThread(){ return m_selfThread; }
+	virtual SR_void OnMessage(Message* msg);
+	CAsyncThread* m_selfThread;
+	TimerManager* m_timermanger;
+	//srDES* m_pDesDec;
+
+	//std::set<DevSockInfo*> m_confctrlsvrinfos;
+	void* m_current_ccs_sockptr;
+#ifdef LINUX	
+	long       		m_ccs_recvheartbeart_clock;//从启动操作系统到现在经历的毫秒数
+#else
+	DWORD           m_ccs_recvheartbeart_clock;//从启动操作系统到现在经历的毫秒数 
+#endif
+
+	SR_char m_ccsheadcontex[HeaderContext_Size];
+	std::map<SR_uint32, CompanyInfo*>m_compmaxlicences;
+private:
+	SR_char m_expringdata[30];// 系统授权时间
+	SR_uint32 m_maxsrcount; // 系统授权最大SR终端数
+	SR_uint32 m_maxstdcount;// 系统授权最大标准终端数
+	SR_uint32 m_maxreccount;// 系统授权最大录制路数
+	SR_uint32 m_maxlivecount;// 系统授权最大直播路数
+	SR_uint32 m_maxternumperconf; // 系统授权单会议最大终端数
+	SR_uint32 m_maxconfnum; // 系统授权最大会议数
+	SR_uint32 m_maxmonitorcount;//系统授权最大监控数
+	SR_uint32 m_maxvoicecount;//系统授权最大语音终端数
+	SR_char m_myversion[256];// 本服务软件版本号
+	SR_char m_stdsystime[256];//系统授权标准终端的时间
+	SR_char m_recsystime[256];//系统授权录制的时间
+	SR_char m_livesystime[256];//系统授权直播的时间
+	SR_char m_monitorsystime[256];//系统授权监控的时间
+	SR_char m_voicesystime[256];//系统授权语音的时间
+	SR_uint32 m_cursrcount; // 当前系统SR终端总数
+	SR_uint32 m_curstdcount;// 当前系统标准终端总数
+	SR_uint32 m_curreccount;// 当前系统录制总路数
+	SR_uint32 m_curlivecount;// 当前系统直播总路数
+	SR_uint32 m_curmonitorcount;//当前系统监控数
+	SR_uint32 m_curvoicecount;//当前系统语音终端数
+	//理想状态: uint64 confid = 1; -->整个会议只编码一次 uint32 terid = 2; -->每个终端只编码一次
+	SR_bool parseAndSendTerMsgEx(SR_void* sockptr,const SR_char (&hcarr_raw)[HeaderContext_Size], SR_uint32 proto_msguid, const google::protobuf::Message* msg);
+	inline MeetingRoom* getMeetRoom(SR_uint64 confid);//判断会议知否在召开获取会议数据
+
+	//SR_uint32 getLayoutModeByTerNum(SR_uint32 uiTerNum);
+	
+	// uiMaxPaneNum只能取值（1~10、13、16、20、25）
+	SR_uint32 getPaneNumByTerNum(SR_uint32 uiLayoutMode, SR_uint32 uiTerNum, SR_uint32 uiMaxPaneNum);
+	SR_uint32 getLayoutModeByPaneNum(SR_uint32 uiPaneNum);
+	//SR_uint32 getPaneNumByLayoutMode(SR_uint32 uiLayoutMode);
+	//SR_uint32 getPaneNumByLayoutMode(SR_uint32 uiLayoutMode, SR_uint32 uiTerNum, SR_uint32 uiMaxPaneNum);
+
+	// terJoinConfSuccess的处理
+	// 前提:密码验证正确,并且已经获取到可用的netmp
+	// 分配terid和channelid 初始化主席id
+	//1) 保存 terid <-> teruid 对应关系
+	//2) 通知devmgr线程
+	//3) 通知会议中所有其他终端
+	//4) 是否需要更改主席,判断当前入会的终端是否为创建者,更改主席通知其他所有终端
+	//5) 判断是否需要启动p2p
+	//6) 通知DevMgr模块
+	//7) 通知该会议使用的所有netmp
+	//8) 增加m_netmpid_ternums数目-- delete
+	SR_void terJoinConfSuccess(MeetingRoom* pmr, SR_uint32 netmpid, SR_uint32 mpid, SR_uint32 relatedmpichannelid, TerJoinConfReq* tjcf);
+	SR_void updatevideoselectonterexit(MeetingRoom* pconftmp,SRMC::SRTer* pter);
+	SR_void updatevideoselectonrepeat(MeetingRoom* pconftmp, SRMC::SRTer* pter);
+	SR_void processTerRepeatJoinConf(const SRMsgs::ReqTerJoinConf* pReqJoinConf, const SRMsgs::IndTerExitConf *s, const SR_char(&pHeaderContexbuf)[HeaderContext_Size], SR_void* psockptr, SR_bool bneedrelaysvrstun);
+	
+	//一级message处理
+	SR_void onSaveLicenceInfo(const LicenceInfoData* plid);//e_notify_to_save_licenceinfo
+	SR_void onSaveCompLicenceInfo(const TotalCompLicenceInfoData* plid);//e_notify_to_save_licenceinfo
+	SR_void onEndConf();
+	SR_void onRegisterToDevmgr();
+	SR_void onCheckConfCRSInfo();
+	SR_void onRelaySockError(const SockErrorData* sed); //e_sock_error ter or relaymc
+	SR_void onUpdateNetMPInfo(const NetMPInfoData* pnid);//e_update_netmpinfo_inconf
+	SR_void onUpdateSystemCurLoad(const SystemCurLoadData* pscld);//e_update_sys_cur_load
+	SR_void onTcpDataRecv(const SockTcpData* pstd);//e_sock_data
+	SR_void onConfInfoFromDevmgr(const ConfInfoData* pcifd);//e_rspconfinfotomc
+	SR_void onLicenceInfoFromDevmgr(const CompLicenceInfoData* plicd);//e_rsplicensetomc
+	SR_void onNetMPCreateRsp(const NetMPCreateConfInfoData* pnccid);//e_rspnetmpcreateconf
+	SR_void onMPCreateMPIRsp(const MPCreateMPIInfoData* pmpcmpiid);//e_rspmpcreatempi
+	//SR_void onMPDestoryMPIRsp(const MPDestoryMPIInfoData* pmpdmpiid);//e_rspmpdestroympi	
+	SR_void onMPCreateScreenRsp(const MPCreateScreenInfoData* pmpcsid);//e_rspmpcreatescreen
+	//SR_void onMPDestoryScreenRsp(const MPDestoryScreenInfoData* pmdsid);//e_rspmpdestroyscreen
+	SR_void onMPSeleteVideoCmd(const MPSeleteVideoCmdData* pmpsvcd);//e_cmdmpseletevideo
+	SR_void onMPLayoutinfoInd(const MPLayoutinfoIndData* pmpliindd);//e_indmplayoutinfo
+	SR_void onCRSCreateConfRsp(const CRSCreateConfInfoData* pcrsccid);//e_rspcrscreateconf
+	SR_void onCRSStartRecRsp(const CRSStartRecInfoData* pcrssrid);//e_rspcrsstartrec
+	SR_void onCRSStopRecRsp(const CRSStopRecInfoData* pcrssrid);//e_rspcrsstoprec
+	SR_void onCRSSeleteVideoCmd(const CRSSeleteVideoCmdData* pcrssvcd);//e_cmdcrsseletevideo
+	SR_void onCRSFileStorPathInd(const CRSFileStorPathInfoData* pcrsfspid);//e_indcrsfilestorpath
+	SR_void onCRSStartLiveRsp(const CRSStartLiveInfoData* pcrsslid);//e_rspcrsstartlive
+	SR_void onCRSLiveStateInd(const CRSLiveStateInfoData* pcrslsid);//e_indcrslivestate
+	SR_void onGWQueryMonitorRecInd(const GWQueryMonitorRecInfoData* pgwqmrid);//e_indgwquerymonitorrec
+	SR_void onNetMPIndTerStatisticsInfo(const NetMPIndTerStatisticsInfoData* pnitsid);//e_netmpindterstatisticsinfo
+	SR_void onGWIndTerStatisticsInfo(const GWIndTerStatisticsInfoData* pgwitsid);//e_gwindterstatisticsinfo
+	//SR_void onCRSStopLiveRsp(const CRSStopLiveInfoData* pcrsslid);//e_rspcrsstoplive
+	SR_void onRelaysvrRspTerJoinConf(const RelaySvrRspTJCInfoData* prsvrrspid);//e_relaysvr_rsp_terjoinconf
+	SR_void oneConfErrorTransferToSingleNetmp(MeetingRoom* pmr, terid_set_t* pterset, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);
+	SR_uint32 haveMpWaitNetmpReopen(MeetingRoom* prm);
+	SR_uint32 haveCRSWaitNetmpReopen(MeetingRoom* prm);
+	SR_void onNetMPSockErrorTransferToExsitConfSameTypeNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);
+	SR_void onNetMPSockErrorTransferToNewSameTypeNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype, std::string errornetmpip);
+	SR_void onNetMPSockErrorTransferToOtherSameTypeNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype, std::string errornetmpip);
+	SR_void onNetMPSockErrorTransferToExsitConfOtherNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);
+	SR_void onNetMPSockErrorTransferToOtherNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype, std::string errornetmpip);
+	SR_void onNetMPSockErrorTransferToNewNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);
+	SR_void onNetMPSockErrorTransferToOtherNetMP(MeetingRoom* prm, terid_set_t* pterset, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);
+	SR_void onNetMPSockError(const NetMPSockErrorData* pnsed);
+	SR_void onDevMgrSockError(const DevMgrSockErrorData* pdsed);
+	SR_void onNetMPConnected(const ConnectedNetMPData* pcnd);
+	SR_void onMPConnected(const ConnectedMPData* pcnd);
+	SR_void onUpdateMPInfo(const MPInfoData* pnid);
+	SR_void onMPSockError(const MPSockErrorData* pnsed);
+	SR_void onGWConnected(const ConnectedGWData* pcnd);
+	SR_void onUpdateGWInfo(const GWInfoData* pgwid);
+	SR_void onGWSockError(const GWSockErrorData* pnsed);
+	SR_void onCRSConnected(const ConnectedCRSData* pccrsd);
+	SR_void onUpdateCRSInfo(const CRSInfoData* pcrsid);
+	SR_void onCRSSockError(const CRSSockErrorData* pcrssed);
+	SR_void onUpdateSRSInfo(const SRSInfoData* psrsid);
+
+	SR_void onRelayServerConnected(const ConnectedRelayServerData* pcrsd);
+	SR_void onUpdateRelayServerInfo(const RelayServerInfoData* prsid);
+	SR_void onRelayServerSockError(const RelayServerSockErrorData* prssed);
+
+	SR_void onUpdateRelayMcInfo(const RelayMcInfoData* prmid);
+	SR_bool oneConfErrorTransferToNewMP(MeetingRoom* pmr, SR_uint32 errormpid, TeridNetmpidMap_t* pterset);
+	SR_void onMPSockErrorTransferToExsitConfMP(MeetingRoom* pmr, SR_uint32 errormpid, TeridNetmpidMap_t* pterset);
+	SR_bool onMPSockErrorTransferToNewMP(MeetingRoom* pmr, SR_uint32 errormpid, TeridNetmpidMap_t* pterset);
+	SR_void onMPSockErrorTransferToOtherMP(MeetingRoom* pmr, SR_uint32 errormpid, TeridNetmpidMap_t* pterset);
+
+	SR_bool oneConfErrorTransferToNewCRS(MeetingRoom* pmr, SR_uint32 errorcrsid/*, TeridNetmpidMap_t* pterset*/);
+	SR_void onCompanyUseLicenceACK(MeetingRoom* pmr, TerJoinConfReq* s,SR_uint32 uilicencetype = 0);
+	SR_uint32 onCompareComptimes(SR_uint32 compid, SR_uint32 licencetype);
+	//二级message处理 protobuf消息处理
+	SR_void processReqTerJoinConf(const SRMsgs::ReqTerJoinConf* s, const SR_char(&hcarr_raw)[HeaderContext_Size], SR_void* psockptr, SR_uint32 iCurconfcnt, SR_uint32 iCurreccnt, SR_uint32 iCurlivecnt,
+		SR_bool bneedrelaysvrstun, SR_bool isSimulateReq = false);
+	SR_void processReqSendAssistVideo(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::ReqSendAssistVideo *s);
+	//SR_void processReqMCCreateScreen(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::ReqMCCreateScreen *s);
+	SR_void processReqMCCreateScreen(MeetingRoom* pconftmp, SRTer* pter, SRMsgs::ReqMCCreateScreen *s);
+	SR_void processCmdMCDestoryScreen(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCDestoryScreen *s);
+	SR_void processIndTerExitConf(const SRMsgs::IndTerExitConf *s);
+	SR_void processIndTerExitConfEx(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::IndTerExitConf *s);
+	SR_void processIndAssistVideoStart(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::IndAssistVideoStart *s);
+	SR_void processIndAssistVideoClose(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::IndAssistVideoClose *s);
+	SR_void processIndStdTerSendMediaFormat(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndStdTerSendMediaFormat *s);
+	SR_void processIndStdTerRecvMediaFormat(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndStdTerRecvMediaFormat *s);
+
+	SR_void processCmdMCUpdateParticipantsOrder(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCUpdateParticipantsOrder *s, SR_uint32 uisponsortype);////更新参会者终端suid以及终端排序order_no
+
+	SR_void processCmdMCUpdateAutoPollInfo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCUpdateAutoPollInfo *s, SR_uint32 uisponsortype);//更新轮询列表
+
+	SR_void processReqConfTerLists(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::ReqConfTerLists *s, SR_uint32 uisponsortype);
+	SR_void processReqLayoutInfo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::ReqLayoutInfo *s, SR_uint32 uisponsortype);
+
+	SR_void processCmdMCAddParticipants(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCAddParticipants *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCDelParticipants(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCDelParticipants *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCInvitParticipants(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCInvitParticipants *s, SR_uint32 uisponsortype);
+
+	SR_void processCmdSetWhitelist(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdSetWhitelist *s, SR_uint32 uisponsortype);
+
+	//SR_void processCmdChairDropTer(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairDropTer *s);
+	SR_void processCmdChairDropTer(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairDropTer *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairMuteAll(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairMuteAll *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairMixSoundAll(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairMixSoundAll *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairLockConf(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairLockConf *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairUnLockConf(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairUnLockConf *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairLockVideo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairLockVideo *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairUnLockVideo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairUnLockVideo *s, SR_uint32 uisponsortype);
+	SR_void processCmdForceMute(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdForceMute *s, SR_uint32 uisponsortype);
+	SR_void processCmdChangeConfMode(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChangeConfMode *s, SR_uint32 uisponsortype);
+	SR_void processCmdSetStdTerSeeingStyle(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdSetStdTerSeeingStyle *s, SR_uint32 uisponsortype);
+	SR_void processCmdSetChairman(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdSetChairman *s, SR_uint32 uisponsortype);
+	SR_void processCmdTextToOtherTer(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdTextToOtherTer *s, SR_uint32 uisponsortype);
+	SR_void processCmdPermissionRaiseHand(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdPermissionRaiseHand *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCPutAllHandDown(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCPutAllHandDown *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCTransferSpecialtype(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCTransferSpecialtype *s);
+	SR_void processCmdMsgToOtherTer(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMsgToOtherTer *s);// 临时IM功能接口
+	SR_void processCmdSetCallWaitingState(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdSetCallWaitingState *s, SR_uint32 uisponsortype);// 设置呼叫等待状态
+	SR_void processReqConfGroupMeetingRoomTerLists(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::ReqConfGroupMeetingRoomTerLists *s, SR_uint32 uisponsortype);// 获取等候区分组和分会场分组的终端列表
+	SR_void processCmdTerJoinGroupMeetingRoom(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdTerJoinGroupMeetingRoom *s, SR_uint32 uisponsortype);// 获取等候区分组和分会场分组的终端列表
+	SR_void processCmdTerExitGroupMeetingRoom(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdTerExitGroupMeetingRoom *s, SR_uint32 uisponsortype);
+	SR_void processIndExitGroupMeetingRoom(const SRMsgs::IndExitGroupMeetingRoom *s);
+	SR_void processIndExitGroupMeetingRoomEx(MeetingRoom* pconftmp, const SRMsgs::IndExitGroupMeetingRoom *s);
+	SR_void processReqConfRollCallInfo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::ReqConfRollCallInfo *s, SR_uint32 uisponsortype);// 获取点名信息
+	SR_void processCmdMCSetConfRollCallList(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSetConfRollCallList *s, SR_uint32 uisponsortype);// 设置点名名单
+	SR_void processCmdMCSetConfRollCallState(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSetConfRollCallState *s, SR_uint32 uisponsortype);// 设置点名状态
+	SR_void processCmdMCRollCallTer(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCRollCallTer *s, SR_uint32 uisponsortype);// 点名某终端
+	SR_void processCmdMCRollCallTerResult(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCRollCallTerResult *s, SR_uint32 uisponsortype);// 点名某终端	
+	SR_void processCmdChangePreset(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChangePreset *s);// 终端更改预置位
+	SR_void processCmdFilterNoVideo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdFilterNoVideo *s, SR_uint32 uisponsortype);// 设置过滤无视频终端
+
+	SR_void processCmdTerSelectAssistVideo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdTerSelectAssistVideo *s);
+	SR_void processCmdTerSelectVideo(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::CmdTerSelectVideo *s);
+	//SR_void processCmdMCSetMultiScreen(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSetMultiScreen *s);
+	SR_void processCmdMCSetMultiScreen(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSetMultiScreen *s, SR_uint32 uisponsortype);
+	//SR_void processCmdMCSetMultiScreen(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSetMultiScreen *s, SR_uint32 uisponsortype, SR_uint32 simulatescreentype);
+	SR_void processCmdMCAddSubtitle(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCAddSubtitle *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCStopSubtitle(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCStopSubtitle *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCDisplayTername(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCDisplayTername *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCHideTername(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCHideTername *s, SR_uint32 uisponsortype);
+	SR_void processCmdChairEndConf(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChairEndConf* s, SR_uint32 uisponsortype);
+	SR_void processRspSendAssistVideoProxy(MeetingRoom* pconftmp,SRTer* pter,const SRMsgs::RspSendAssistVideoProxy *s);
+	SR_void processCmdMCStartRec(MeetingRoom* pconftmp, SRTer* pter, SRMsgs::CmdMCStartRec *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCStopRec(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCStopRec *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCStartLive(MeetingRoom* pconftmp, SRTer* pter,SRMsgs::CmdMCStartLive *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCStopLive(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCStopLive *s, SR_uint32 uisponsortype);
+	SR_void processIndLiveSettingToMC(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndLiveSettingToMC *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCSyncMonitorInfo(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCSyncMonitorInfo *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCQueryMonitorRec(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCQueryMonitorRec *s, SR_uint32 uisponsortype);
+	SR_void processCmdMCPlaybackMonitorRec(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdMCPlaybackMonitorRec *s, SR_uint32 uisponsortype);
+	SR_void processIndTerPlaybackMonitorRecStateToMC(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndTerPlaybackMonitorRecStateToMC *s);
+	SR_void OnCmdMCStartLive(MeetingRoom* pconftmp, const SRMsgs::CmdMCStartLive *s);
+	SR_void OnCmdMCStartRec(MeetingRoom* pconftmp, const SRMsgs::CmdMCStartRec *s);
+	SR_void processCmdMPSelectVideo(SR_uint64 confid, SR_uint32 mpichannelid, const MPSeleteVideoCmdData* pmpsvcd);
+	SR_void processIndMPLayoutInfo(SR_uint64 confid, SR_uint32 mpichannelid, const MPLayoutinfoIndData* pmpliindd);
+	//SR_void processCmdCRSSeleteVideo(SR_uint64 confid, SR_uint32 crschannelid, const CRSSeleteVideoCmdData* pcrssvcd);
+	SR_void processCmdCRSSeleteVideo(SR_uint64 confid, SR_uint32 crschannelid, CRSSeleteVideoCmd* pcrssvcd);
+	SR_void  processNetMPErrorTerExitConf(const SRMsgs::IndTerExitConf *s,SR_uint32 erronetmpid);
+	SR_void processIndNewAudioSourceJoined(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndNewAudioSourceJoined *s);
+	SR_void processIndAudioSourceLeave(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndAudioSourceLeave *s);
+	SR_void processIndNewVideoSourceJoined(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndNewVideoSourceJoined *s);
+	SR_void processIndVideoSourceLeave(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::IndVideoSourceLeave *s);
+	SR_void processCmdChangeVideoSourceName(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChangeVideoSourceName *s);
+	SR_void processCmdChangeVideoSourcePriority(MeetingRoom* pconftmp, SRTer* pter, const SRMsgs::CmdChangeVideoSourcePriority* s);
+	
+	SR_void  startP2P(MeetingRoom* pmr);
+	SR_void  isWaitConfInfoTimeout(SR_uint64 confid);
+	SR_void* createTimer(SR_uint32 millisecond, SR_int32 timertype, SR_uint32 timerflag, SR_uint64 timerdata);
+	SR_void* createDispoableTimer(SR_uint64 millisecond, SR_uint32 timerflag, SR_uint64 timerdata);
+	SR_bool deleteTimer(SR_void* timerid);
+	SR_void  detecTersHeartBeat();
+	SR_void  sendHeartBeatToTers();
+	SR_void  syncConfinfoToDevmgr();
+	SR_void  sendHeartBeatToDevmgr();
+	SR_void* m_sendLayoutToTerTime;
+	SR_void* m_periodtimer_detecTersHeart;
+	SR_void* m_periodtimer_sendHeartBeat;
+	SR_void* m_periodtimer_detecCCSHeart;
+	SR_void* m_periodtimer_sendHeartBeatToCCS;
+	SR_void sendLayoutToTers(MeetingRoom* pconftmp);
+	SR_void  detecCCSsHeartBeat();
+	SR_void  sendHeartBeatToCCSs();
+	std::map<SR_uint64,MeetingRoom*> m_rooms;//confid ->:key,没有该key表示该会议不存在
+	std::map< SR_uint64,std::set<SR_uint32> > m_wait_reopen_ters;//等待reopen队列
+	//std::map< SR_uint64, TeridNetmpidMap_t > m_wait_mp_reopen_ters;//会议故障迁移等待reopen mp的终端队列
+	std::map<SR_uint32,ConnectedNetMPInfo*> m_connectednetmpinfos;// netmpid ->:key
+	std::map<SR_uint32, ConnectedMPInfo*> m_connectedmpinfos;// mpid ->:key
+	std::map<SR_uint32, ConnectedGWInfo*> m_connectedgwinfos;// gwid ->:key
+	std::map<SR_uint32, ConnectedCRSInfo*> m_connectedcrsinfos;// crsid ->:key
+	std::map<SR_uint32, ConnectedSRSInfo*> m_connectedsrsinfos;// srsid ->:key
+	std::map<SR_uint32, ConnectedRelaySvrInfo*> m_connectedrelaysvrinfos;// relayserverid ->:key
+	std::map<SR_uint32, ConnectedRelayMcInfo*> m_connectedrelaymcinfos;// relaymcid ->:key
+	std::map<std::string, SR_uint32> m_connectnetmpiplevels;
+	std::map<std::string, SR_uint32> m_connectnetmpipandportlevels;
+	SR_uint32 getLightestNetMPByTermGroupid(SR_uint32 tergroupid);
+	SR_uint32 getLightestNetMPByTermGroupidList(std::list<SR_uint32> &tergroupidlist);
+	SR_bool CheckIPInRealymcMapips(SR_uint32 tergroupid, std::string& strterip);
+	SR_uint32 getLightestRealymcidByTerip(SR_uint32 tergroupid, std::string& strterip);
+	SR_bool CheckRealymcHaveMapips(SR_uint32 relaymcid);
+	SR_uint32 CheckRealymcHaveAgeMapips(SR_uint32 relaymcid);
+	SR_uint32 getLightestNetMPByTermGroupidandIP(SR_uint32 tergroupid, std::string& strterip);
+	SR_uint32 getLightestHaveMapipsNetMPByTermGroupidandRelaymcid(MeetingRoom* pmr,SR_uint32 tergroupid, SR_uint32 relaymcid);
+	SR_uint32 getLightestNetMPByTermGroupidset(std::map<SR_uint32, SR_uint32> &tergroupidmap);
+	SR_uint32 getLightestNetMP(SR_uint32 currenterrornetmpid = 0);
+	SR_uint32 getLightestNetMPExcludeConf(SR_uint64 confid);// 排除在该会议上已经创建会议的netmp
+	SR_void netmpInfOnTerExitConf(SR_uint32 netmpid,SR_uint64 confid,SR_uint32 terid);
+	SR_uint32 getTerNumsOnNet(SR_uint32 netmpid);
+	SR_uint32 getTerNumsOnConfidNetMP(SR_uint32 netmpid,SR_uint64 confid);
+
+	SR_uint32 getTerNumsOnMP(SR_uint32 mpid);
+	SR_uint32 getTerNumsOnConfidMP(SR_uint32 mpid, SR_uint64 confid);
+
+	SR_void netmpInfoOnConfExit(SR_uint64 confid);
+	SR_void mpInfoOnConfExit(SR_uint64 confid);
+	SR_void mpInfoOnTerExitConf(SR_uint32 mpid, SR_uint64 confid, SR_uint32 terid);
+	//清空前更新 m_connectednetmpinfos 信息(在上会成功里更新)
+	SR_void removeWaitNetmpRspter(SR_uint32 netmpid, SR_uint64 confid, SR_uint32 suid);//将suid终端从m_connectednetmpinfos保存的等待队列中移除掉
+	SR_void emptyWaitRspSet(SR_uint32 netmpid,SR_uint64 confid);//清空 m_connectednetmpinfos保存的等待队列
+	SR_void emptyWaitReopen(SR_uint32 netmpid,SR_uint64 confid);
+	SR_uint32 getTerJoniWaitNetMPRsp(SR_uint64 confid);//返回会议等待netmp 的第一个netmpid
+	SR_uint32 chooseMapipsNewNetMP(SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid);//选择一空闲的netmp(有设置映射地址列表),上面没有召开任何会议
+	SR_uint32 chooseMapipsSameTypeNewNetMP(SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype);//选择一空闲的相同nettype的netmp(有设置映射地址列表),上面没有召开任何会议
+	SR_uint32 chooseNonMapipsNewNetMP(SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid);//选择一空闲的netmp(没有设置映射地址列表),上面没有召开任何会议
+	SR_uint32 chooseNonMapipsSameTypeNewNetMP(SR_uint32 errornetmpid, SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype, std::string errornetmpip);//选择一空闲的相同nettype的netmp(没有设置映射地址列表),上面没有召开任何会议
+	SR_uint32 chooseNewNetMP(SR_uint32 errornetmpgroupid);//选择一空闲的netmp,上面没有召开任何会议
+	SR_uint32 chooseNewSameTypeNetMP(SR_uint32 errornetmpgroupid, SR_uint32 errornetmpnettype); //选择一空闲的相同nettype的netmp, 上面没有召开任何会议
+	SR_uint32 chooseSameGroupMinipLevelNewNetMP(MeetingRoom* pmr, SR_uint32 tergroupid, SR_uint32 bTerRelatedRelaymcHaveAgeMapips, SR_uint32 ter_related_relaymcid, std::set<std::string> confnetmpips);
+	SR_void* getNetMPsocketptr(SR_uint32 netmpid);
+	SR_bool isConfEmpty(SR_uint64 confid);//该会议是否处于空闲状态,上面没有终端(包括正在加入会议的终端),会议不存在返回true
+
+	SR_uint32 getLightestMPExcludeConf(SR_uint64 confid, SR_uint32 currenterrormpid = 0);// 排除在该会议上已经创建会议的mp
+	SR_uint32 chooseNewMP(SR_uint32 currenterrormpid = 0);//选择一空闲的mp,上面没有召开任何会议
+	SR_void* getMPsocketptr(SR_uint32 mpid);
+	SR_void ClearWaitMPRspSet(SR_uint32 mpid, SR_uint64 confid);//清空 m_connectednetmpinfos保存的等待队列
+
+	SR_uint32 getLightestGW(SR_uint32 currenterrorgwid = 0);
+	//SR_uint32 chooseNewGW(SR_uint32 currenterrorgwid = 0);//选择一空闲的gw,上面没有召开任何会议
+	SR_void* getGWsocketptr(SR_uint32 gwid);
+
+	//SR_uint32 getLightestCRS(SR_uint32 currenterrorcrsid = 0);
+	SR_uint32 getLightestCRSExcludeConf(SR_uint64 confid, SR_uint32 currenterrorcrsid = 0);// 排除在该会议上已经创建会议的crs
+	SR_void* getCRSsocketptr(SR_uint32 crsid);
+
+	SR_uint32 getLightestSRS(SR_uint32 currenterrorsrsid = 0);
+
+	SR_uint32 getLightestRelaySvr(SR_uint32 currenterrorrelaysvrid = 0);
+	SR_void* getRelaySvrsocketptr(SR_uint32 relaysvrid);
+	SR_void removeWaitRelayserverRspter(SR_uint32 relaysvrid, SR_uint64 confid, SR_uint32 suid);//将suid终端从m_connectedrelaysvrinfos保存的等待队列中移除掉
+
+	SR_void SaveTerJoinConfReq(const SRMsgs::ReqTerJoinConf* s, const SR_char(&hcarr_raw)[HeaderContext_Size], SR_void* psockptr, std::list<TerJoinConfReq*> *savelist, SR_uint32 savetype, SR_uint32 netmpid, SR_uint32 mpid, SR_uint32 relaysvrid, SR_bool bneedrelaysvrstun, SR_uint32 groupid);
+	
+	SR_uint32  CheckCRSState(SR_uint64 confid);
+	SR_uint32  CheckCRSChannelState(SR_uint64 confid, SR_uint32 crschannelid);
+
+	SR_void SyncGWMixScreenToRecAndLiveScreen(MeetingRoom* pmr, SR_bool bdefault = false);
+	// 请求CRS为某会议创建对应的通道
+	SR_void ReqCRSCreateConfChannel(MeetingRoom* pmr, SR_uint32 choosenetmpid, SR_bool bstartrec = false, SR_uint32 bstartlive = false);
+};
+
+//#define NETMP_SOCK_STATE_INITE      (2)
+//#define NETMP_SOCK_STATE_CONNECTING (4)
+//#define NETMP_SOCK_STATE_CONNECTED  (8)
+//#define NETMP_SOCK_STATE_CLOSED     (16)
+
+typedef enum{
+	e_Netmp_sock_inite = 0x1,
+	e_Netmp_sock_connecting = 0x2,
+	e_Netmp_sock_connect_ok = 0x3,
+	e_Netmp_sock_closed = 0x4,
+}E_NetMPSockStat;
+
+typedef enum{
+	e_Mp_sock_inite = 0x1,
+	e_Mp_sock_connecting = 0x2,
+	e_Mp_sock_connect_ok = 0x3,
+	e_Mp_sock_closed = 0x4,
+}E_MPSockStat;
+
+typedef enum{
+	e_GW_sock_inite = 0x1,
+	e_GW_sock_connecting = 0x2,
+	e_GW_sock_connect_ok = 0x3,
+	e_GW_sock_closed = 0x4,
+}E_GWSockStat;
+
+typedef enum{
+	e_dev_sock_inite = 0x1,
+	e_dev_sock_connecting = 0x2,
+	e_dev_sock_connect_ok = 0x3,
+	e_dev_sock_closed = 0x4,
+}E_DEVSockStat;
+
+typedef enum{
+	e_Seeing_Style_FollowCtrller = 0x0,
+	e_Seeing_Style_OnlyChairman = 0x1,
+	e_Seeing_Style_MixScreen = 0x2
+}E_STDTERSEESINGSTYLE;
+
+typedef enum{
+	e_Conf_Mode_Free = 0x0,
+	e_Conf_Mode_ChairMan = 0x1
+}E_ConfMode;
+
+typedef enum{
+	e_Layout_Type_Transfer = 0x0,
+	e_Layout_Type_Mixed = 0x1
+}E_LayoutType;
+
+typedef enum{
+	e_Layout_Mode_Auto = 0,
+	e_Layout_Mode_1 = 1,
+	e_Layout_Mode_2 = 2,
+	e_Layout_Mode_3 = 3,
+	e_Layout_Mode_4 = 4,
+	e_Layout_Mode_5 = 5,
+	e_Layout_Mode_6 = 6,
+	e_Layout_Mode_7 = 7,
+	e_Layout_Mode_8 = 8,
+	e_Layout_Mode_9 = 9,
+	e_Layout_Mode_10 = 10,
+	e_Layout_Mode_13 = 11,
+	e_Layout_Mode_16 = 12,
+	e_Layout_Mode_REC = 13,
+	e_Layout_Mode_20 = 14,
+	e_Layout_Mode_25 = 15,
+	e_Layout_Mode_Speech_4_1 = 16, // 演讲者模式4+1布局
+	e_Layout_Mode_PIP_RD = 17 // 画中画,小图像在右下布局,PIP_RightDown、PIP_LeftDown、PIP_LeftUp、PIP_RightUp
+}E_LayoutMode;
+
+typedef enum{
+	e_Licence_Type_CONF = 0x1,//会议
+	e_Licence_Type_SR = 0x2,//SR客户端
+	e_Licence_Type_STD = 0x3,//包含标准终端的TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk)
+	e_Licence_Type_MONITOR = 0x4,//包含监控实时流,监控录像
+	e_Licence_Type_PSTN = 0x5,//语音终端
+	e_Licence_Type_LIVE = 0x6,//直播
+	e_Licence_Type_REC = 0x7,//录制
+	e_Licence_Type_ANALY = 0x8,//人脸识别
+	e_Licence_Type_ASR = 0x9//语音识别
+}E_LicenceType;
+
+typedef enum{
+	e_Screen_Type_Mixed = 0x1,
+	e_Screen_Type_Transcode = 0x2,
+	e_Screen_Type_Duovideo = 0x3,
+	e_Screen_Type_RecAndLive = 0x4,
+	e_Screen_Type_ChairLock = 0x5
+}E_ScreenType;
+
+//typedef enum{
+//	e_Screen_State_Init = 0x0,
+//	e_Screen_State_OK = 0x1,
+//	e_Screen_State_Transfer = 0x2,
+//	e_Screen_State_Failover = 0x3
+//}E_ScreenState;
+
+typedef enum{
+	e_Creat_Sponsor_TER = 0x1,
+	e_Creat_Sponsor_WEB = 0x2,
+	e_Creat_Sponsor_MC = 0x3
+}E_CreatSponsorType;
+
+//typedef enum{
+//	e_Term_Type_MPI = 0x0,
+//	e_Term_Type_Mobile = 0x1,
+//	e_Term_Type_PC = 0x2,
+//	e_Term_Type_TV = 0x3
+//}E_TermType;
+
+//typedef enum{
+//	e_Audio_Fmt_G711U = 0x0,
+//	e_Audio_Fmt_G711A = 0x1,
+//	e_Audio_Fmt_G722 = 0x2,
+//	e_Audio_Fmt_G7221 = 0x3,
+//	e_Audio_Fmt_G723 = 0x4,
+//	e_Audio_Fmt_G728 = 0x5,
+//	e_Audio_Fmt_G729 = 0x6,
+//	e_Audio_Fmt_G729A = 0x7,
+//	e_Audio_Fmt_AAC_LC = 0x8,
+//	e_Audio_Fmt_AAC_LD = 0x9,
+//	e_Audio_Fmt_OPUS = 0xA
+//}E_AUDIO_FMT;
+//
+//typedef enum{
+//	e_Audio_Sampl_Freq_8000 = 8000,
+//	e_Audio_Sampl_Freq_11025 = 11025,
+//	e_Audio_Sampl_Freq_12000 = 12000,
+//	e_Audio_Sampl_Freq_16000 = 16000,
+//	e_Audio_Sampl_Freq_22050 = 22050,
+//	e_Audio_Sampl_Freq_24000 = 24000,
+//	e_Audio_Sampl_Freq_32000 = 32000,
+//	e_Audio_Sampl_Freq_44100 = 44100,
+//	e_Audio_Sampl_Freq_48000 = 48000,
+//	e_Audio_Sampl_Freq_64000 = 64000,
+//	e_Audio_Sampl_Freq_88200 = 88200,
+//	e_Audio_Sampl_Freq_96000 = 96000
+//}E_AUDIO_SAMPL_FREQ;
+//
+//typedef enum{
+//	e_Audio_Channel_Num_1 = 0x1,
+//	e_Audio_Channel_Num_2 = 0x2
+//}E_AUDIO_CHAN_NUM;
+//
+//typedef enum{
+//	e_Video_Fmt_H261 = 0x0,
+//	e_Video_Fmt_H263 = 0x1,
+//	e_Video_Fmt_H263p = 0x2,
+//	e_Video_Fmt_H264 = 0x3,
+//	e_Video_Fmt_H265 = 0x4
+//}E_VIDEO_FMT;
+//
+typedef enum{
+	e_Payload_Type_0 = 0, // G711U
+	e_Payload_Type_3 = 3, // GSM
+	e_Payload_Type_4 = 4, // G723
+	e_Payload_Type_8 = 8, // G711A
+	e_Payload_Type_9 = 9, // G722
+	e_Payload_Type_15 = 15, // G728
+	e_Payload_Type_18 = 18, // G729
+	e_Payload_Type_31 = 31, // H261
+	e_Payload_Type_34 = 34, // H263
+	e_Payload_Type_SR_OPUS_96 = 96, // suirui OPUS
+	e_Payload_Type_SR_H264_98 = 98, // suirui H264
+	e_Payload_Type_SR_AAC_LC_106 = 106, // suirui AAC_LC
+	e_Payload_Type_SR_H265_108 = 108, // suirui H265
+}E_PAYLOAD_TYPE;
+
+// 终端类型编码规则，总共16bit, 0x0000保留
+// 第15bit--第8bit高8位代表操作系统,0x01~0xff,即0x01~0x3f：Windows 、0x40~0x7f：linux、0x80~0x8f：苹果、0x90~0x9f：安卓；
+// 0x01~0x3f：Windows
+//             -- 0x01:Win 10、0x02:Win 8、0x03:Win 7、0x04:Windows vista、0x05:Windows xp、(windows 2003/2000、windows server 2016/2012/2008/2005、Windows Mobile、Windows Phone括号内系统不常用用到时再加定义)
+// 0x40~0x7f：linux
+//             -- 0x40:Ubuntu、0x41:Centos、0x42:Redhat、0x43:Kylin、0x44:RedFlag、(SUSE 、OpenSUSE、Fedora、Debian、Redhat Enterprise Linux括号内系统不常用用到时再加定义)
+// 0x80~0x8f：苹果
+//             -- 0x80:Mac OS、0x81:iOS
+// 0x90~0x9f：安卓
+//             -- 0x90:Android（如果日后需要区分安卓版本，可以将范围扩大至BF或者CF，所以此处故意放在最后一段方便扩展）
+// 第7bit--第4bit中间4位代表CPU架构,0x0~0xf,即0x0：UNKNOW、0x1：X86、0x2：ARM、(0x3：MIPS、0x4：PowerPC、暂时未使用该硬件)......0xe：ARM低配、0xf：X86低配；
+// 第3bit--第0bit低4位代表产品形态,0x0~0xf,即0x0：UNKNOW、0x1：移动端（手机、平板）、0x2：PC、0x3：TV；
+
+// 举例：
+//      0x0112表示Win 10操作系统，x86架构cpu，产品形态是pc形式
+//      0x4013表示Ubuntu操作系统，x86架构cpu，产品形态是TV形式---对应公司产品Ubox
+//      0x4322表示麒麟Keylin操作系统，ARM架构cpu，产品形态是pc形式
+//      0x8121表示苹果ios操作系统，ARM架构cpu，产品形态是移动端形式
+//      0x9023表示安卓操作系统，ARM架构cpu，产品形态是TV形式---对应公司产品3288
+typedef enum{
+	e_TermType_UNKNOW = 0x0000, // 未知,保留
+	e_TermType_UNKNOW_Mobile = 0x0001, // 操作系统和处理器未知,移动端
+	e_TermType_UNKNOW_PC = 0x0002, // 操作系统和处理器未知,PC
+	e_TermType_UNKNOW_TV = 0x0003, // 操作系统和处理器未知,TV
+
+	e_TermType_Win10_x86_Mobile = 0x0111, // Win10操作系统,x86处理器,移动端
+	e_TermType_Win10_x86_PC = 0x0112, // Win10操作系统,x86处理器,PC	
+	e_TermType_Win10_x86_TV = 0x0113, // Win10操作系统,x86处理器,TV
+
+	e_TermType_Win8_x86_Mobile = 0x0211, // Win8操作系统,x86处理器,移动端
+	e_TermType_Win8_x86_PC = 0x0212, // Win8操作系统,x86处理器,PC	
+	e_TermType_Win8_x86_TV = 0x0213, // Win8操作系统,x86处理器,TV
+
+	e_TermType_Win7_x86_Mobile = 0x0311, // Win7操作系统,x86处理器,移动端
+	e_TermType_Win7_x86_PC = 0x0312, // Win7操作系统,x86处理器,PC	
+	e_TermType_Win7_x86_TV = 0x0313, // Win7操作系统,x86处理器,TV
+
+	e_TermType_WindowsXP_x86_Mobile = 0x0511, // WindowsXP操作系统,x86处理器,移动端
+	e_TermType_WindowsXP_x86_PC = 0x0512, // WindowsXP操作系统,x86处理器,PC	
+	e_TermType_WindowsXP_x86_TV = 0x0513, // WindowsXP操作系统,x86处理器,TV
+
+	e_TermType_Ubuntu_x86_Mobile = 0x4011, // Ubuntu操作系统,x86处理器,移动端
+	e_TermType_Ubuntu_x86_PC = 0x4012, // Ubuntu操作系统,x86处理器,PC	
+	e_TermType_Ubuntu_x86_TV = 0x4013, // Ubuntu操作系统,x86处理器,TV---对应公司产品第六代Ubox
+	e_TermType_Ubuntu_x86_TV_LOW = 0x40f3, // Ubuntu操作系统,低配x86处理器,TV---对应公司产品低配第四代Ubox
+
+	e_TermType_Centos_x86_Mobile = 0x4111, // Centos操作系统,x86处理器,移动端
+	e_TermType_Centos_x86_PC = 0x4112, // Centos操作系统,x86处理器,PC	
+	e_TermType_Centos_x86_TV = 0x4113, // Centos操作系统,x86处理器,TV
+
+	e_TermType_Kylin_ARM_Mobile = 0x4321, // Kylin操作系统,ARM处理器,移动端
+	e_TermType_Kylin_ARM_PC = 0x4322, // Kylin操作系统,ARM处理器,PC	
+	e_TermType_Kylin_ARM_TV = 0x4323, // Kylin操作系统,ARM处理器,TV
+
+	e_TermType_MacOS_x86_PC = 0x8012, // Mac OS操作系统,x86处理器,PC
+	e_TermType_MacOS_ARM_PC = 0x8022, // Mac OS操作系统,ARM处理器,PC
+	e_TermType_IOS_ARM_Mobile = 0x8121, // ios操作系统,ARM处理器,移动端
+
+	e_TermType_Android_ARM_Mobile = 0x9021, // Android操作系统,ARM处理器,移动端
+	e_TermType_Android_ARM_PC = 0x9022, // Android操作系统,ARM处理器,PC	
+	e_TermType_Android_ARM_TV = 0x9023, // Android操作系统,ARM处理器,TV---对应公司产品3288
+}E_TermType;
+
+// 标准终端类型编码规则，总共16bit
+// 第15bit--第8bit高8位代表对接协议类型,0-自动、1-sip、2-H.323、3-GB28181、4-为PSTN预留、5-RTSP
+// 第7bit--第0bit低8位代表产品形态,0-终端、1-MCU、2-监控实时流、3-监控录像、4-PSTN、5-微信网页客户端、6-流媒体实时(直播)流、7-TRUNK
+typedef enum{
+	e_StdTermType_AUTO_TER = 0x0000, // 协议自动,终端
+	e_StdTermType_AUTO_MCU = 0x0001, // 协议自动,MCU
+	e_StdTermType_AUTO_MONITOR_LIVE = 0x0002, // 协议自动,监控实时流
+	e_StdTermType_AUTO_MONITOR_REC = 0x0003, // 协议自动,监控录像
+	e_StdTermType_AUTO_PSTN = 0x0004, // 协议自动,95013语音网关PSTN呼叫
+	e_StdTermType_AUTO_VX = 0x0005, // 协议自动,微信网页客户端
+	e_StdTermType_AUTO_STREAM_LIVE = 0x0006, // 协议自动,流媒体实时(直播)流
+	e_StdTermType_AUTO_TRUNK = 0x0007, // 协议自动,TRUNK
+
+	e_StdTermType_SIP_TER = 0x0100, // SIP协议,终端
+	e_StdTermType_SIP_MCU = 0x0101, // SIP协议,MCU
+	e_StdTermType_SIP_PSTN = 0x0104, // SIP协议,PSTN
+	e_StdTermType_SIP_TRUNK = 0x0107, // SIP协议,TRUNK
+
+	e_StdTermType_H323_TER = 0x0200, // H323协议,终端
+	e_StdTermType_H323_MCU = 0x0201, // H323协议,MCU
+	e_StdTermType_H323_PSTN = 0x0204, // H323协议,PSTN
+	e_StdTermType_H323_TRUNK = 0x0207, // H323协议,TRUNK
+
+	e_StdTermType_GB28181_MONITOR_LIVE = 0x0302, // GB28181协议,监控实时流
+	e_StdTermType_GB28181_MONITOR_REC = 0x0303, // GB28181协议,监控录像
+	e_StdTermType_RTSP_STREAM_LIVE = 0x0506, // RTSP协议,流媒体实时(直播)流
+}E_StdTermType;
+// 产品型号，总共32bit
+// 第31bit--第16bit高16位代表厂家编码,0-未知,0x0001-SR HUIJIAN随锐会见、0x0002-SR ZOOM随锐瞩目、0x0003-Polycom宝利通、0x0004-huawei华为、0x0005-Cisco思科、0x0006-KEDA科达、0x0007-ZHONGXING中兴、0x0008-Yealink亿联
+// 第15bit--第0bit低16位代表产品型号,0-未知、其它以产品统一定义为准
+typedef enum{
+	e_ProductType_UNKNOW = 0x00000000, // 厂家未知,型号未知
+	e_ProductType_SR_HJ = 0x00010000, // SR HUIJIAN随锐会见,型号未知
+	e_ProductType_SR_HJ_3A = 0x00010001, // SR HUIJIAN随锐会见,3A
+	e_ProductType_SR_HJ_3C_PRO = 0x00010002, // SR HUIJIAN随锐会见,3C PRO
+	e_ProductType_SR_HJ_4A = 0x00010003, // SR HUIJIAN随锐会见,4A
+	e_ProductType_SR_HJ_4C = 0x00010004, // SR HUIJIAN随锐会见,4C
+	e_ProductType_SR_HJ_5E_PRO = 0x00010005, // SR HUIJIAN随锐会见,5E PRO
+	e_ProductType_SR_HJ_6A = 0x00010006, // SR HUIJIAN随锐会见,6A
+	e_ProductType_SR_HJ_6E = 0x00010007, // SR HUIJIAN随锐会见,6E
+	e_ProductType_SR_HJ_7A = 0x00010008, // SR HUIJIAN随锐会见,7A
+
+	e_ProductType_SR_ZM = 0x00020000, // SR ZOOM随锐瞩目,型号未知
+
+	e_ProductType_Polycom = 0x00030000, // Polycom宝利通,型号未知
+	e_ProductType_Polycom_RPD = 0x00030001, // Polycom宝利通,RPD
+	e_ProductType_Polycom_PVX = 0x00030002, // Polycom宝利通,PVX
+
+	e_ProductType_HUAWEI = 0x00040000, // huawei华为,型号未知
+	e_ProductType_Cisco = 0x00050000, // Cisco思科,型号未知
+	e_ProductType_KEDA = 0x00060000, // KEDA科达,型号未知
+	e_ProductType_ZHONGXING = 0x00070000, // ZHONGXING中兴,型号未知
+	e_ProductType_Yealink = 0x00080000, // Yealink亿联,型号未知
+}E_ProductType;
+
+typedef enum{
+	e_Term_From_Platform = 0x0, // 随锐平台(随锐自有RP终端)
+	e_Term_From_Gateway = 0x1 // 随锐网关(H.323终端、SIP终端)
+}E_TermFromType;
+
+typedef enum{
+	e_UserType_ANON = 0x0, // 临时(匿名)用户
+	e_UserType_REGD = 0x1, // 正式(注册)用户
+	e_UserType_UBOX = 0x2, // U-box用户
+	e_UserType_STDTER = 0x3, // 标准终端(H.323/sip)
+	e_UserType_MONITOR_REALTIME = 0x4, // 4-监控前端实时流
+	e_UserType_NON_LOCALDOMAIN = 0x5, // 5-非本域用户
+	e_UserType_3288 = 0x6, // 6-3288终端
+	e_UserType_MONITOR_PLAYBACK = 0x7, // 7-监控前端录像
+	e_UserType_VX_WEBRTC = 0x8 // 9-微信webrtc网页客户端
+}E_UserType;
+
+typedef enum{
+	e_SpecialType_NORM = 0x0, // 普通终端类型
+	e_SpecialType_SHARE = 0x1, // 投屏终端类型
+}E_SpecialType;
+
+typedef enum{
+	e_conf_state_ended = 0x0,// 初始(结束)状态
+	e_conf_state_starting = 0x1,
+	e_conf_state_waitnetmp = 0x2,
+	e_conf_state_waitmp = 0x3,
+	e_conf_state_started = 0x4,// 会议已经召开
+	e_conf_state_ending = 0x5// 会议正在结束
+}E_ConfStat;
+
+typedef enum{
+	e_gmrtype_main = 0x0,// 主会场分组
+	e_gmrtype_waitingroom = 0x1,// 等候区分组
+	e_gmrtype_venue = 0x2// 分会场分组
+}E_GroupMeetingRoomType;
+typedef enum{
+	e_conf_state_duovideo = 0x1,//共享
+}E_ConfStatusType;
+class TerInfo
+{
+public:
+	TerInfo()
+	{
+		m_domainname.clear();
+		m_tersuid = 0;
+		m_tername.clear();
+		m_termtype = e_TermType_UNKNOW;
+		m_fromtype = e_Term_From_Platform;
+		m_producttype = 0;
+	}
+
+	~TerInfo()
+	{
+		m_domainname.clear();
+		m_tersuid = 0;
+		m_tername.clear();
+		m_termtype = e_TermType_UNKNOW;
+		m_fromtype = e_Term_From_Platform;
+		m_producttype = 0;
+	}
+
+	std::string m_domainname;//终端所属的域名
+	SR_uint32 	m_tersuid;//终端的系统用户id
+	std::string m_tername;//终端名称
+	SR_uint32 	m_termtype;//终端类型，16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	SR_uint32 	m_fromtype;//终端来自哪里，0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	SR_uint32   m_producttype;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+};
+
+class GroupMeetingRoomInfo
+{
+public:
+	GroupMeetingRoomInfo()
+	{
+		m_gmrdomainname.clear();
+		m_gmrconfid = 0;
+		m_gmrid = 0;
+		m_gmrtype = 0;
+		m_gmrname.clear();
+	}
+
+	~GroupMeetingRoomInfo()
+	{
+		m_gmrdomainname.clear();
+		m_gmrconfid = 0;
+		m_gmrid = 0;
+		m_gmrtype = 0;
+		m_gmrname.clear();
+	}
+
+	std::string m_gmrdomainname;// 分组所属会议对应的域名
+	SR_uint64   m_gmrconfid;// 分组所属的会议号
+	SR_uint32 	m_gmrid;//会议的分组号,0-默认值,主会议分组、1-等候区分组、2++对应分会场分组号
+	SR_uint32	m_gmrtype;//分组会议类型,0-默认值,主会议分组、1-等候区分组、2-分会场分组
+	std::string m_gmrname;//分组会议的分组名,主会场的分组名是会议名称
+};
+
+typedef std::set<SR_uint32> TeridSet_t;
+class NetMPInfo
+{
+public:
+	NetMPInfo()
+	{
+		m_netmpdeviceid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_load = 0;
+		m_load2 = 0;
+		m_groupid = 0;
+		m_connectionstate = e_Netmp_sock_inite;
+		m_mapinternetips.clear();
+		m_nettype = 0;
+		m_max_bandwidth = 0;
+		m_max_terms = 0;
+	}
+	~NetMPInfo()
+	{
+		m_netmpdeviceid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_load = 0;
+		m_load2 = 0;
+		m_groupid = 0;
+		m_connectionstate = e_Netmp_sock_inite;
+		m_mapinternetips.clear();
+		m_nettype = 0;
+		m_max_bandwidth = 0;
+		m_max_terms = 0;
+	}
+	SR_uint32   m_netmpdeviceid;
+	SR_uint32   m_ip;// netmp的内网地址
+	SR_uint32   m_port;// netmp的内网port
+	SR_uint32 	m_load;// netmp的带宽
+	SR_uint32 	m_load2;// netmp上的终端个数
+	SR_uint32 	m_groupid;// netmp所属域分组id
+	SR_uint32   m_connectionstate;// sock连接状态
+	std::list<std::string> m_mapinternetips;
+	SR_uint32   m_nettype;// 用于区分该netmp是采用哪种方式注册的
+	SR_uint32   m_max_bandwidth;//netmp可承载的最大带宽
+	SR_uint32   m_max_terms;//netmp可承载的最大终端数
+};
+
+class MPInfo
+{
+public:
+	MPInfo(){ m_connectionstate = e_Mp_sock_inite; }
+	SR_uint32   m_mpdeviceid;
+	SR_uint32   m_ip;// mp的内网地址
+	SR_uint32   m_port;// mp的内网port
+	SR_uint32 	m_load;// mp:上行带宽（netmp->mp）
+	SR_uint32 	m_load2;// mp:cpu负载
+	SR_uint32   m_connectionstate;// sock连接状态
+};
+
+class GWInfo
+{
+public:
+	GWInfo(){ m_connectionstate = e_GW_sock_inite; }
+	SR_uint32   m_gwdeviceid;
+	SR_uint32   m_ip;// gw的内网地址
+	SR_uint32   m_port;// gw的内网port
+	SR_uint32 	m_load;// gw:终端数
+	SR_uint32 	m_load2;// gw:cpu负载
+	SR_uint32   m_connectionstate;// sock连接状态
+};
+
+class CRSInfo
+{
+public:
+	CRSInfo(){ m_connectionstate = e_dev_sock_inite; }
+	SR_uint32   m_crsdeviceid;
+	SR_uint32   m_ip;// crs的内网地址
+	SR_uint32   m_port;// crs的内网port
+	SR_uint32 	m_load;// crs:磁盘空间使用率,（高16位是总容量,低16位是剩余容量,单位：GB）
+	SR_uint32 	m_load2;// crs:cpu使用率
+	SR_uint32   m_connectionstate;// sock连接状态
+	SR_uint32 	m_disktotalcapacity;// 磁盘总容量
+	SR_uint32 	m_diskremaincapacity;// 磁盘剩余容量
+};
+
+class SRSInfo
+{
+public:
+	SRSInfo()
+	{ 
+	}
+	SR_uint32   m_srsdeviceid;
+	SR_uint32   m_ip;// srs的内网地址
+	SR_uint32   m_port;// srs的内网port
+	SR_uint32 	m_load;// srs:是否是根节点,0-否,1-是
+	SR_uint32 	m_load2;// srs:暂时不关注
+	SR_uint32   m_connectionstate;// sock连接状态
+	time_t m_srsdevtime;
+	std::string m_strip;
+};
+
+class RelayServerInfo
+{
+public:
+	RelayServerInfo(){ m_connectionstate = e_dev_sock_inite; }
+	SR_uint32   m_relaysvrdevid;
+	SR_uint32   m_ip;// relayserver的内网地址
+	SR_uint32   m_port;// relayserver的内网port
+	SR_uint32 	m_ternum;// relayserver:在线终端数
+	SR_uint32 	m_tx;// relayserver:下行(发送)带宽
+	SR_uint32   m_connectionstate;// sock连接状态
+};
+
+class RelayMcInfo
+{
+public:
+	RelayMcInfo()
+	{
+		m_relaymcdevid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_ternum = 0;
+		m_groupid = 0;
+		m_mapinternetips.clear();
+	}
+	~RelayMcInfo()
+	{
+		m_relaymcdevid = 0;
+		m_ip = 0;
+		m_port = 0;
+		m_ternum = 0;
+		m_groupid = 0;
+		m_mapinternetips.clear();
+	}
+	SR_uint32   m_relaymcdevid;
+	SR_uint32   m_ip;// relaymc的内网地址
+	SR_uint32   m_port;// relaymc的内网port
+	SR_uint32 	m_ternum;// relaymc:在线终端数
+	SR_uint32 	m_groupid;// relaymc所属域分组id
+	//SR_uint32   m_connectionstate;// sock连接状态
+	time_t m_relaymcdevtime;
+	std::list<std::string> m_mapinternetips;
+};
+//typedef enum{
+//	e_DevMgr_sock_init = 8,
+//	e_DevMgr_sock_connecting = 16,
+//	e_DevMgr_sock_connect_ok = 32,
+//	e_DevMgr_sock_error = 64,
+//	e_DevMgr_sock_closed = 128
+//}E_DevSockStat;
+
+class SubtitleInfo
+{
+public:
+	SubtitleInfo()
+	{
+		m_subtitlemsg.clear();
+		m_displaytime = 0;
+		m_msgpos = 0;
+		m_msgcolor.clear();
+		m_msgbgcolor.clear();
+		m_msgfontsize = 0;
+		m_enablemsgbg = true;
+		m_enablemsgroll = true;
+		m_rollspeed = 0;
+	}
+
+	~SubtitleInfo()
+	{
+		m_subtitlemsg.clear();
+		m_displaytime = 0;
+		m_msgpos = 0;
+		m_msgcolor.clear();
+		m_msgbgcolor.clear();
+		m_msgfontsize = 0;
+		m_enablemsgbg = true;
+		m_enablemsgroll = true;
+		m_rollspeed = 0;
+	}
+	
+	std::string m_subtitlemsg;//滚动字幕内容	
+	SR_uint32 	m_displaytime;//字幕滚动时间，单位：秒，设置为0，则永久显示
+	SR_uint32	m_msgpos;//滚动字幕的位置：1-上、2-中、3-下;会场名的位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+	std::string m_msgcolor;//消息字体颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	std::string m_msgbgcolor;//字体背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	SR_uint32 	m_msgfontsize;//字体大小：1-大、2-中、3-小
+	SR_bool 	m_enablemsgbg;//使能滚动字幕背景
+	SR_bool 	m_enablemsgroll;//字幕是否滚动显示:true-滚动显示(默认)、false-固定显示
+	SR_uint32 	m_rollspeed;//enablemsgroll为true时的滚动速度：1-缓慢、2-一般(默认)、3-稍快、4-快速
+
+};
+
+class ScreenPaneInfo
+{
+public:
+	//ScreenPaneInfo();
+	//~ScreenPaneInfo();
+
+	ScreenPaneInfo()
+	{
+		m_paneindex = 0u;
+		m_contenttype = 0u;
+		m_optype = 1u; // 废弃 0:自动;改用默认值1:指定终端;
+		m_polltime = 10u;
+		m_terid = 0u;
+		m_terchannelid = 0u;
+		m_tername.clear();
+		m_autopollinfo.clear();
+		m_vsrcid = -1;
+	}
+
+	~ScreenPaneInfo()
+	{
+		m_paneindex = 0u;
+		m_contenttype = 0u;
+		m_optype = 1u; // 废弃 0:自动;改用默认值1:指定终端;
+		m_polltime = 10u;
+		m_terid = 0u;
+		m_terchannelid = 0u;
+		m_tername.clear();
+		for (std::map<SR_uint32, Autopollinfo*>::iterator spinfo_itor = m_autopollinfo.begin();
+			spinfo_itor != m_autopollinfo.end(); spinfo_itor++)
+		{
+			Autopollinfo* autopollinfo = NULL;
+			autopollinfo = spinfo_itor->second;
+			if (autopollinfo != NULL)
+			{
+				delete autopollinfo;
+				autopollinfo = NULL;
+			}
+		}
+		m_autopollinfo.clear();
+		m_vsrcid = -1;		
+	}
+
+	SR_uint32 m_paneindex;//分屏id
+	SR_uint32 m_contenttype;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+	SR_uint32 m_optype;//分屏中操作类型，1:指定终端; 2:语音激励;3:自动轮巡.
+	SR_uint32 m_polltime;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+	SR_uint32 m_terid;//分屏中所设置终端对应的id 
+	SR_uint32 m_terchannelid;//分屏中所设置终端对应的通道id
+	std::string m_tername;//分屏中所设置终端对应的名称
+	std::map<SR_uint32, Autopollinfo*> m_autopollinfo;//自动轮询列表信息
+	SR_int32  m_vsrcid; // sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+};
+
+class ConfScreenInfo
+{
+public:
+	//ConfScreenInfo();
+	//~ConfScreenInfo();
+
+	ConfScreenInfo()
+	{
+		//m_screenstate = e_Screen_State_Init;
+
+		m_textpos = 0u;
+		m_textFontsize = 0u;
+		m_textcolor.assign("#000000"); // 黑色
+		m_enableTextBg = false;
+		m_textBgColor.assign("#FFFFFF"); // 白色
+
+		m_enableTername = false;
+
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_creatsponsortype = e_Creat_Sponsor_TER;
+		m_reqterid = 0u;
+		m_terreqseqnum = 0u;
+		m_mcreqseqnum = 0u;
+		m_chairfollow = 1;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_relatednetmpid = 0u;
+		m_voiceActiveInd = false;
+		m_voiceActiveColor.assign("#FFFF00"); // 黄色
+		m_chairFeccColor.assign("#FF0000"); // 红色
+
+		m_isok = false;
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+		m_last_send_level_count.clear();
+		m_last_recvfps = 0u;
+
+		m_isErrorTransferScreen = false;
+		m_uiTransferFromMPid = 0u;
+
+		m_layouttype = e_Layout_Type_Transfer;
+		m_layoutmode = e_Layout_Mode_Auto;
+		m_curpanenum = e_Layout_Mode_1;
+
+		for (SR_uint32 i = 0; i <MAX_PANNE_INDEX; i++)
+		{
+			if (((ScreenPaneInfo*)m_screenpaneinfo[i]) != NULL)
+			{
+				delete (((ScreenPaneInfo*)m_screenpaneinfo[i]));
+			}
+
+			m_screenpaneinfo[i] = NULL;
+			ScreenPaneInfo* pSPinfo = new ScreenPaneInfo();
+			pSPinfo->m_paneindex = i;//分屏id
+			pSPinfo->m_contenttype = 0u;//分屏中显示内容类型，0:终端; 1:voip位图; 2:空; 3:双流
+			pSPinfo->m_optype = 1;//分屏中操作类型，0:自动; 1:指定终端; 2:语音激励;3:自动轮巡.  // 废弃 0:自动;改用默认值1:指定终端;
+			pSPinfo->m_polltime = 10;//如果窗格中的显示类型为“3:自动轮巡”，则此处定义的为轮询时间间隔，单位：秒
+			pSPinfo->m_terid = 0;//分屏中所设置终端对应的id 
+			pSPinfo->m_terchannelid = 0;//分屏中所设置终端对应的通道id
+			pSPinfo->m_tername.clear();//分屏中所设置终端对应的名称
+			pSPinfo->m_vsrcid = -1;
+
+			m_screenpaneinfo[i] = pSPinfo;
+		}
+
+		//m_screenpaneinfo.clear();
+
+		//m_isNetMpErrorTransfer = false;
+		//m_uiTransferFromNetMPid = 0u;
+
+		m_bWaitNetmpReopen = false;
+		m_steplength = 1;//会议主席模式下转发布局主席的步长
+		m_confpolllist.clear();
+	}
+
+	~ConfScreenInfo()
+	{
+		//m_screenstate = e_Screen_State_Init;
+
+		m_textpos = 0u;
+		m_textFontsize = 0u;
+		m_textcolor.assign("#000000"); // 黑色
+		m_enableTextBg = false;
+		m_textBgColor.assign("#FFFFFF"); // 白色
+
+		m_enableTername = false;
+
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_creatsponsortype = e_Creat_Sponsor_TER;
+		m_reqterid = 0u;
+		m_terreqseqnum = 0u;
+		m_mcreqseqnum = 0u;
+		m_channelid = 0u;
+		m_screenid = 0u;
+		m_screentype = 0u;
+		m_relatednetmpid = 0u;
+		m_voiceActiveInd = false;
+		m_voiceActiveColor.assign("#FFFF00"); // 黄色
+		m_chairFeccColor.assign("#FF0000"); // 红色
+
+		m_isok = false;
+		m_failreason.clear();
+
+		m_select_video.clear();
+		m_be_selected.clear();
+		m_last_send_level_count.clear();
+		m_last_recvfps = 0u;
+
+		m_isErrorTransferScreen = false;
+		m_uiTransferFromMPid = 0u;
+
+		m_layouttype = e_Layout_Type_Transfer;
+		m_layoutmode = e_Layout_Mode_Auto;
+		m_curpanenum = e_Layout_Mode_1;
+		m_chairfollow = 1;
+
+		for (std::map<SR_uint32, ScreenPaneInfo*>::iterator spinfo_itor = m_screenpaneinfo.begin();
+			spinfo_itor != m_screenpaneinfo.end(); spinfo_itor++)
+		{
+			ScreenPaneInfo* pSPinfo = NULL;
+			pSPinfo = spinfo_itor->second;
+			if (pSPinfo != NULL)
+			{
+				delete pSPinfo;
+				pSPinfo = NULL;
+			}
+		}
+
+		m_screenpaneinfo.clear();
+
+		//m_isNetMpErrorTransfer = false;
+		//m_uiTransferFromNetMPid = 0u;
+
+		m_bWaitNetmpReopen = false;
+		m_steplength = 1;//会议主席模式下转发布局主席的步长
+		m_confpolllist.clear();
+	}
+
+	//SR_uint32 m_screenstate; //屏幕状态
+
+
+	SR_uint32	m_textpos;//终端名称文本位置：1-左上、2-中上、3-右上、4-左下、5-中下、6-右下
+	std::string	m_textcolor;//文本颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	SR_uint32	m_textFontsize;//文本字体大小：1-大、2-中、3-小
+	SR_bool		m_enableTextBg;//使能文本背景
+	std::string	m_textBgColor;//文本背景颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+
+	SR_bool m_enableTername; //使能会场名称
+
+	SR_uint64 m_confid;
+	SR_uint32 m_mcid;//发起请求的mc_deviceid
+	SR_uint32 m_mpid;//接收消息的mp_deviceid
+	SR_uint32 m_creatsponsortype; //请求发起者类型 
+	SR_uint32 m_reqterid;//发起请求的terid, 0-web或mc、非0-终端terid
+	SR_uint32 m_terreqseqnum;//终端或者web发起请求的序列号，若是mc发起请求填0
+	SR_uint32 m_mcreqseqnum;//发起请求的序列号，由发起请求的MC维护
+	SR_uint32 m_channelid;//请求在某会议媒体处理实例通道channelid上创建屏幕
+	SR_uint32 m_screenid;//请求创建的屏幕的screenid
+	SR_uint32 m_screentype;//请求创建的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕
+	SR_uint32 m_relatednetmpid;//请求创建的屏幕关联的netmpid
+	SR_bool	m_voiceActiveInd;//请求创建屏幕的属性：发言激活指示
+	std::string m_voiceActiveColor;//请求创建屏幕的属性：发言激活颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+	std::string m_chairFeccColor;//请求创建屏幕的属性：远程控制指示颜色:RGB颜色值,6位十六进制值,如:黑色 #000000、白色 #FFFFFF、红色 #FF0000、绿色 #00FF00、蓝色 #0000FF、黄色 #FFFF00
+
+	SR_bool m_isok;
+	std::string m_failreason;//若失败，则会有失败说明
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize
+	std::map<SR_uint32, SR_uint32> m_last_send_level_count;//videosize <-> count
+	SR_uint32 m_last_recvfps; //上一次接收帧率 0:0 1:8 2:16 3:24 4:30 5:60.如果终端/屏幕选看没填该选项，强制使用默认3:24
+
+	SR_bool m_isErrorTransferScreen;
+	SR_uint32 m_uiTransferFromMPid;//从哪个MP上迁移过来的mp_deviceid
+	SR_uint32 m_uiTransferFromNetMPid;//从哪个NetMP上迁移过来的netmp_deviceid
+
+	SR_uint32 m_layouttype;//分屏布局类型，0-转发布局、1-混屏布局
+	SR_uint32 m_layoutmode;//屏幕布局模式，0-自动、1-单屏、2-2分屏、3-3分屏、4-4分屏、、、11-13分屏、12-16分屏、13-录制屏、14-20分屏、15-25分屏、16-演讲者模式4+1布局、17-画中画,小图像在右下布局,PIP_RightDown
+	std::map<SR_uint32, ScreenPaneInfo*> m_screenpaneinfo; // key:从0开始，最大24
+	SR_uint32 m_curpanenum;// 当前布局模式实际分屏个数
+	SR_uint32  m_steplength;//会议主席模式下转发布局主席的步长
+	std::list<SR_uint32> m_confpolllist;// 主席模式下转发布局，轮询列表
+	std::list<SR_uint32> m_confterlist;//主席模式下转发布局,排除指定终端后所有的轮询终端
+	SR_uint32  m_chairfollow;
+	//SR_bool m_isNetMpErrorTransfer;
+	//SR_uint32 m_uiTransferFromNetMPid;//从哪个NETMP上迁移过来的netmp_deviceid
+
+	SR_bool m_bWaitNetmpReopen; // 以会议为单位（同一个会议）的mpi分配到一个netmp下
+
+private:
+
+};
+
+class ConfMPIInfo
+{
+public:
+	ConfMPIInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_relatednetmpid = 0u;
+
+		m_failreason.clear();
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_bWaitNetmpReopen = false;
+		m_uiTransferFromNetMpid = 0u;
+
+		m_bNeedErrorTransfer = false;
+		m_isErrorTransferMPI = false;
+		m_uiTransferFromMPid = 0u;
+	}
+	~ConfMPIInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_mpid = 0u;
+		m_channelid = 0u;
+		m_relatednetmpid = 0u;
+
+		m_failreason.clear();
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		m_bWaitNetmpReopen = false;
+		m_uiTransferFromNetMpid = 0u;
+
+		m_bNeedErrorTransfer = false;
+		m_isErrorTransferMPI = false;
+		m_uiTransferFromMPid = 0u;
+	}
+
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_mpid;
+	SR_uint32		 m_channelid; //MC为会议媒体处理实例分配的通道id
+	SR_uint32		 m_relatednetmpid;
+	std::string 	 m_failreason;
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形，保存被mpi选看的终端，即mpi的视频源
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize 保存选看该mpi的终端，即mpi的目的端
+
+	SR_bool         m_bWaitNetmpReopen; // 以会议为单位（同一个会议）的mpi分配到一个netmp下
+	SR_uint32		m_uiTransferFromNetMpid;//从哪个NetMp上迁移过来的netmp_deviceid
+
+	SR_bool			m_bNeedErrorTransfer;
+	SR_bool			m_isErrorTransferMPI;
+	SR_uint32		m_uiTransferFromMPid;//从哪个MP上迁移过来的mp_deviceid
+
+private:
+
+};
+class SubStatusInfo
+{
+public:
+	SubStatusInfo()
+	{
+		m_substatustype = 0u;
+		m_substattus = 0u;
+	}
+	~SubStatusInfo()
+	{
+		m_substatustype = 0u;
+		m_substattus = 0u;
+	}
+	SR_uint32 m_substatustype;//会议中功能的子功能类型,0-共享是否暂停(开启共享的前提下)、1-共享标注(开启共享的前提下)
+	SR_uint32 m_substattus;//会议中功能的子功能对应状态，0-关闭、1-开启
+};
+class ConfStatusInfo
+{
+public:
+	ConfStatusInfo()
+	{
+		m_statustype = 0u;
+		m_stattus = 0u;
+		m_substatusinfos.clear();
+	}
+	~ConfStatusInfo()
+	{
+		m_statustype = 0u;
+		m_stattus = 0u;
+		for (std::map<SR_uint32, SubStatusInfo*>::iterator substatus_itor = m_substatusinfos.begin();
+			substatus_itor != m_substatusinfos.end(); substatus_itor++)
+		{
+			SubStatusInfo* substatusinfos = NULL;
+			substatusinfos = substatus_itor->second;
+			if (substatusinfos != NULL)
+			{
+				delete substatusinfos;
+				substatusinfos = NULL;
+			}
+		}
+		m_substatusinfos.clear();
+	}
+	SR_uint32 m_statustype;//会议中功能的类型,0-未知、1-双流（共享）
+	SR_uint32 m_stattus;//会议中功能的状态，0-关闭、1-开启
+	std::map<SR_uint32, SubStatusInfo*> m_substatusinfos;//会议中功能的子功能
+};
+class RecordFileInfo
+{
+public:
+	RecordFileInfo()
+	{
+		m_crschannelid = 0;
+		//m_recordid = 0;
+		//m_recordfileid = 0;
+		m_filestorsvrip.clear();
+		m_filestorpath.clear();
+		m_sdefilepath.clear();
+		m_relativepath.clear();
+	}
+	~RecordFileInfo()
+	{
+		m_crschannelid = 0;
+		//m_recordid = 0;
+		//m_recordfileid = 0;
+		m_filestorsvrip.clear();
+		m_filestorpath.clear();
+		m_sdefilepath.clear();
+		m_relativepath.clear();
+	}
+	SR_uint32		 m_crschannelid;// 该录制文件归属哪个crs通道
+	//SR_uint32		 m_recordid;// mc自己维护的	
+	//SR_uint32		 m_recordfileid;// mc自己维护的
+	std::string      m_filestorsvrip;//CRS录制文件存放服务的ip
+	std::string 	 m_filestorpath;//CRS录制文件存放相对路径
+	std::string 	 m_sdefilepath;//CRS录制的加密文件存放相对路径
+	std::string 	 m_relativepath;//CRS录制文件存放根路径
+
+private:
+
+};
+
+class RecChannelInfo
+{
+public:
+	RecChannelInfo()
+	{
+		m_recchannelid = 0;
+		m_recscreenid = 0;
+		m_recscreentype = 0;
+	}
+	~RecChannelInfo()
+	{
+		m_recchannelid = 0;
+		m_recscreenid = 0;
+		m_recscreentype = 0;
+	}
+	SR_uint32		 m_recchannelid;
+	SR_uint32		 m_recscreenid;
+	SR_uint32		 m_recscreentype;
+	//SR_uint32		 m_relatedcrsid;
+	//SR_uint32		 m_relatedcrschannelid;
+
+private:
+
+};
+
+
+class ConfCRSInfo
+{
+public:
+	ConfCRSInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_relatednetmpid = 0u;
+		m_relatedrecchannelid = 0u;
+		m_relatedrecscreenid = 0u;
+		m_relatedrecscreentype = 0u;
+
+		m_relatedlivechannelid = 0u;
+		m_relatedlivescreenid = 0u;
+		m_relatedlivescreentype = 0u;
+
+		m_failreason.clear();
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		//m_recvaudiofmt = G711U; //终端接收音频格式
+		//m_recvaudiofrequency = kNbInHz; //终端接收音频采样频率
+		//m_recvaudiochannelnum = MonoChannel; //终端接收音频通道数
+		//m_recvaudioframelen = 160; //终端接收音频帧长
+		//m_recvaudiopt = 0; //终端接收音频负载类型payload type
+		//m_recvvideofmt = Video_H264_SVC; //终端接收主视频格式
+		//m_recvvideopt = 0; //终端接收主视频负载类型payload type
+		//m_recvduovideofmt = Video_H264_SVC; //终端接收辅流视频格式
+		//m_recvduovideopt = 0; //终端接收辅流负载类型payload type
+
+		m_recvaudiofmt = OPUS_48; //CRS接收音频格式
+		m_recvaudiofrequency = kFbInHz; //CRS接收音频采样频率
+		m_recvaudiochannelnum = MonoChannel; //CRS接收音频通道数
+		m_recvaudioframelen = 160; //CRS接收音频帧长
+		m_recvaudiopt = 0; //CRS接收音频负载类型payload type
+		m_recvvideofmt = Video_H264_SVC; //终端接收主视频格式
+		m_recvvideopt = 0; //CRS接收主视频负载类型payload type
+		m_recvduovideofmt = Video_H264_SVC; //终端接收辅流视频格式
+		m_recvduovideopt = 0; //CRS接收辅流负载类型payload type
+		m_recvvideobandwidth = 0; //CRS接收主流带宽
+
+		m_bWaitNetmpReopen = false;
+		m_bWaitMPReopen = false;
+		//m_uiTransferFromNetMpid = 0u;
+
+		//m_bNeedErrorTransfer = false;
+		m_isErrorTransferCrsChan = false;
+		m_isStartRec = false;
+		m_isStartLive = false;
+		//m_uiTransferFromMPid = 0u;
+
+		m_reqnumandreason.clear();
+	}
+	~ConfCRSInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_relatednetmpid = 0u;
+
+		m_relatedrecchannelid = 0u;
+		m_relatedrecscreenid = 0u;
+		m_relatedrecscreentype = 0u;
+		
+		m_relatedlivechannelid = 0u;
+		m_relatedlivescreenid = 0u;
+		m_relatedlivescreentype = 0u;
+
+		m_failreason.clear();
+		m_select_video.clear();
+		m_be_selected.clear();
+
+		//m_recvaudiofmt = G711U; //CRS接收音频格式
+		//m_recvaudiofrequency = kNbInHz; //CRS接收音频采样频率
+		//m_recvaudiochannelnum = MonoChannel; //CRS接收音频通道数
+		//m_recvaudioframelen = 160; //CRS接收音频帧长
+		//m_recvaudiopt = 0; //CRS接收音频负载类型payload type
+		//m_recvvideofmt = Video_H264_SVC; //CRS接收主视频格式
+		//m_recvvideopt = 0; //CRS接收主视频负载类型payload type
+		//m_recvduovideofmt = Video_H264_SVC; //CRS接收辅流视频格式
+		//m_recvduovideopt = 0; //CRS接收辅流负载类型payload type
+
+		m_recvaudiofmt = OPUS_48; //CRS接收音频格式
+		m_recvaudiofrequency = kFbInHz; //CRS接收音频采样频率
+		m_recvaudiochannelnum = MonoChannel; //CRS接收音频通道数
+		m_recvaudioframelen = 160; //CRS接收音频帧长
+		m_recvaudiopt = 0; //CRS接收音频负载类型payload type
+		m_recvvideofmt = Video_H264_SVC; //终端接收主视频格式
+		m_recvvideopt = 0; //CRS接收主视频负载类型payload type
+		m_recvduovideofmt = Video_H264_SVC; //终端接收辅流视频格式
+		m_recvduovideopt = 0; //CRS接收辅流负载类型payload type
+		m_recvvideobandwidth = 0; //CRS接收主流带宽
+
+		m_bWaitNetmpReopen = false;
+		m_bWaitMPReopen = false;
+		//m_uiTransferFromNetMpid = 0u;
+
+		//m_bNeedErrorTransfer = false;
+		m_isErrorTransferCrsChan = false;
+		m_isStartRec = false;
+		m_isStartLive = false;
+		//m_uiTransferFromMPid = 0u;
+
+		m_reqnumandreason.clear();
+
+		//for (std::map<SR_uint32, std::map<SR_uint32, RecordFileInfo*>>::iterator recinfo_itor = m_recordinfo.begin();
+		//	recinfo_itor != m_recordinfo.end(); recinfo_itor++)
+		//{
+		//	for (std::map<SR_uint32, RecordFileInfo*>::iterator recfile_itor = recinfo_itor->second.begin();
+		//		recfile_itor != recinfo_itor->second->end(); recfile_itor++)
+		//	{
+		//		RecordFileInfo* pRecordFileInfo = NULL;
+		//		pRecordFileInfo = recfile_itor->second;
+		//		if (pRecordFileInfo != NULL)
+		//		{
+		//			delete pRecordFileInfo;
+		//			pRecordFileInfo = NULL;
+		//		}
+		//	}
+		//	recinfo_itor->second->clear();
+		//}
+	}
+
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //MC为CRS分配的通道id
+	SR_uint32		 m_relatednetmpid;
+	std::map<SR_uint32, RecChannelInfo*> m_recinfo;//单通道录制多路 key:recchannelid <--> value:RecChannelInfo*
+	SR_uint32		 m_relatedrecchannelid;// 录制的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_relatedrecscreenid;// 录制的屏幕id,如果m_relatedchannelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_relatedrecscreentype;// 录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕,如果m_relatedchannelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_relatedlivechannelid;// 直播的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_relatedlivescreenid;// 直播的屏幕id,如果m_relatedlivechannelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_relatedlivescreentype;// 直播的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕,如果m_relatedlivechannelid是终端通道id,该选项可以忽略
+	std::string 	 m_failreason;
+
+	SR_uint32 m_recvaudiofmt; //CRS接收音频格式
+	SR_uint32 m_recvaudiofrequency; //CRS接收音频采样频率
+	SR_uint32 m_recvaudiochannelnum; //CRS接收音频通道数
+	SR_uint32 m_recvaudioframelen; //CRS接收音频帧长
+	SR_uint32 m_recvaudiopt; //CRS接收音频负载类型payload type
+	SR_uint32 m_recvvideofmt; //CRS接收主视频格式
+	SR_uint32 m_recvvideopt; //CRS接收主视频负载类型payload type
+	SR_uint32 m_recvduovideofmt; //CRS接收辅流视频格式
+	SR_uint32 m_recvduovideopt; //CRS接收辅流负载类型payload type
+	SR_uint32 m_recvvideobandwidth; //CRS接收主流带宽
+
+	//该数据由 终端选看视频,其他终端退会决定
+	std::map<SR_uint32, SR_uint32> m_select_video;//terid <-> videosize 保存最后一次选看的所有其他终端情形，保存被mpi选看的终端，即mpi的视频源
+	std::map<SR_uint32, SR_uint32> m_be_selected;//terid <-> videosize 保存选看该mpi的终端，即mpi的目的端
+
+	SR_bool         m_bWaitNetmpReopen; // 以会议为单位（同一个会议）的crs分配到一个netmp下
+	SR_bool         m_bWaitMPReopen;
+	//SR_uint32		m_uiTransferFromNetMpid;//从哪个NetMp上迁移过来的netmp_deviceid
+
+	//SR_bool			m_bNeedErrorTransfer;
+	SR_bool			m_isErrorTransferCrsChan;
+	SR_bool         m_isStartRec;
+	SR_bool         m_isStartLive;
+	//SR_uint32		m_uiTransferFromMPid;//从哪个MP上迁移过来的mp_deviceid
+
+	std::map<SR_uint32, SR_uint32> m_reqnumandreason; // reason： 0-页面会控停止录制,1-结束会议请求停止录制,2-故障迁移请求停止录制,3-会议为空请求停止录制
+
+	//std::map<SR_uint32, std::map<SR_uint32, RecordFileInfo*>> m_recordinfo; // 该录制通道所有异常录制记录 recordid <-->(recordfileid<-->RecordFileInfo)
+
+private:
+
+};
+
+class ConfRecInfo
+{
+public:
+	ConfRecInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_relatedcrsid = 0u;
+		m_relatedcrschannelid = 0u;
+
+		m_recchannelid = 0u;
+		m_recscreenid = 0u;
+		m_recscreentype = 0u;
+		m_failreason.clear();
+
+		m_isErrorTransferRec = false;
+
+		m_reqnumandreason.clear();
+		m_confrecord_id = 0ull;
+		m_recordfile_id = 0ull;
+	}
+	~ConfRecInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_relatedcrsid = 0u;
+		m_relatedcrschannelid = 0u;
+
+		m_recchannelid = 0u;
+		m_recscreenid = 0u;
+		m_recscreentype = 0u;
+		m_failreason.clear();
+
+		m_isErrorTransferRec = false;
+
+		m_reqnumandreason.clear();
+		m_confrecord_id = 0ull;
+		m_recordfile_id = 0ull;
+	}
+
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_relatedcrsid;
+	SR_uint32		 m_relatedcrschannelid; //MC为CRS分配的通道id
+
+	SR_uint32		 m_recchannelid;// 录制的通道(MPI对应通道id或者终端对应的通道id)
+	SR_uint32		 m_recscreenid;// 录制的屏幕id,如果m_recchannelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_recscreentype;// 录制的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕,如果m_recchannelid是终端通道id,该选项可以忽略
+	std::string 	 m_failreason;
+	
+	SR_bool			m_isErrorTransferRec;
+
+	std::map<SR_uint32, SR_uint32> m_reqnumandreason; // reason： 0-页面会控停止录制,1-结束会议请求停止录制,2-故障迁移请求停止录制,3-会议为空请求停止录制
+
+	SR_uint64        m_confrecord_id;// 该路录制通道计费id
+	SR_uint64        m_recordfile_id;// 该路录制通道录制文件计费id
+
+private:
+
+};
+
+class LiveSetting
+{
+public:
+	LiveSetting()
+	{
+		m_chairman.clear();
+		m_subject.clear();
+		m_abstract.clear();
+		m_ispublic = 0u;
+		m_livepwd.clear();
+		m_isuserec = 1;
+	}
+	~LiveSetting()
+	{
+		m_chairman.clear();
+		m_subject.clear();
+		m_abstract.clear();
+		m_ispublic = 0u;
+		m_livepwd.clear();
+		m_isuserec = 1;
+	}
+
+	std::string m_chairman;//直播主持人
+	std::string m_subject;//直播主题
+	std::string m_abstract;//直播摘要/简介
+	SR_uint32   m_ispublic;//是否公开,0-不公开,1-公开
+	std::string m_livepwd;//直播密码
+	SR_uint32   m_isuserec;//是否启用录制,0-不启用录制,1-启用录制（默认）
+};
+
+class ConfLiveInfo
+{
+public:
+	ConfLiveInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_relatedsrsid = 0u;
+		m_livechannelid = 0u;
+		m_livescreenid = 0u;
+		m_livescreentype = 0u;
+		m_livepushurl.clear();
+		m_livepullurl.clear();
+		m_liveplayurl.clear();
+		m_failreason.clear();
+		m_livesvrtype = 0u;
+		m_liveaddrs.clear();
+
+		m_isErrorTransferLive = false;
+		m_liveinfo_id = 0ull;
+	}
+	~ConfLiveInfo()
+	{
+		m_isok = false;
+		m_confid = 0u;
+		m_mcid = 0u;
+		m_crsid = 0u;
+		m_crschannelid = 0u;
+		m_relatedsrsid = 0u;
+		m_livechannelid = 0u;
+		m_livescreenid = 0u;
+		m_livescreentype = 0u;
+		m_livepushurl.clear();
+		m_livepullurl.clear();
+		m_liveplayurl.clear();
+		m_failreason.clear();
+		m_livesvrtype = 0u;
+		m_liveaddrs.clear();
+
+		m_isErrorTransferLive = false;
+		m_liveinfo_id = 0ull;
+	}
+
+	SR_bool          m_isok;
+	SR_uint64        m_confid;
+	SR_uint32		 m_mcid;
+	SR_uint32		 m_crsid;
+	SR_uint32		 m_crschannelid; //MC为CRS分配的通道id
+	SR_uint32		 m_relatedsrsid;
+	SR_uint32		 m_livechannelid;// 直播的MPI对应通道id或者终端对应的通道id
+	SR_uint32		 m_livescreenid;// 直播的屏幕id,如果m_relatedchannelid是终端通道id,该选项可以忽略
+	SR_uint32		 m_livescreentype;// 直播的屏幕类型，1-网关(标准终端)屏幕、2-终端转码屏幕、3-双流屏幕、4-录制直播屏幕,如果m_relatedchannelid是终端通道id,该选项可以忽略
+	std::string		 m_livepushurl;
+	std::string		 m_livepullurl;
+	std::string		 m_liveplayurl;
+	std::string 	 m_failreason;
+	SR_uint32		 m_livesvrtype;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
+	std::map<SR_uint32, std::string> m_liveaddrs;//livesvrtype大于0时的直播地址信息
+	
+	SR_bool			m_isErrorTransferLive;
+	SR_uint64       m_liveinfo_id;// 该路直播通道计费id
+
+private:
+
+};
+
+
+//
+//class DevSockInfo
+//{
+//public:
+//	DevSockInfo(){
+//		m_ip.clear();
+//		m_port = (SR_uint16)0;
+//		m_devsockstat = e_DevMgr_sock_init;
+//		m_sockptr = (SR_void*)0;
+//	}
+//	SR_void* getSockPtr(){return m_sockptr;}//TODO:mutex lock
+//	std::string   m_ip;//"192.168.1.1"左->右
+//	int     m_port;//主机序
+//	E_DevSockStat m_devsockstat;
+//	SR_void*	  m_sockptr;
+//};
+
+#define MAX_DEVMGR_NUMS (4)
+#define DEVMGR_HEART_FLAGS (0xfeed)
+class NetMPInfoManager
+{
+public:
+	NetMPInfoManager()
+	{
+		m_netmpinfo.clear();
+		m_idle_netmps.clear();
+		m_highload_netmps.clear();
+		m_netmpinconf.clear();
+		m_notuse_netmps.clear();
+		m_connected_nemtps.clear();
+		m_devmgrInfos.clear();
+		m_current_devmgr_sockptr = (void*)0;
+		m_current_dev_stat = DEVMGR_HEART_FLAGS;
+		m_current_dev_connectcnt = 0u;
+		m_connect_dev_loopcnt = 0u;
+	}
+	SR_void* getnetmpsocketptr(SR_uint32 netmpid)
+	{
+		//TODO:添加锁
+		std::map<SR_uint32,SR_void*>::const_iterator citor = m_netmpsockptr.find(netmpid);
+		if(m_netmpsockptr.end() != citor)
+			return citor->second;
+		else
+			return (SR_void*)0;
+	}
+	std::map<SR_uint32,NetMPInfo*> m_netmpinfo;//通过DevMgr获取到的所有netmp信息
+	//DevSockInfo[MAX_DEVMGR_NUMS] m_devmgrInfos;//std::array 是c++11版本
+	std::set<DevSockInfo*> m_devmgrInfos;
+	void*   m_current_devmgr_sockptr;
+	SR_int32  m_current_dev_stat;
+	SR_int32  m_current_dev_connectcnt; // 连接devmgr的次数
+	SR_int32  m_connect_dev_loopcnt; // 连接devmgr的循环次数
+	std::list<BufferedProtoMsgPair*> m_buffered_dev;
+	//以下保存的都是已经建立连接的netmp
+	std::set<SR_uint32> m_connected_nemtps;
+	std::set<SR_uint32> m_idle_netmps;//load值较小的netmp,共用 m_netmpinfo的 NetMPInfo
+	std::set<SR_uint32> m_highload_netmps;//load值较大的netmp
+	std::set<SR_uint32> m_notuse_netmps;//超过最大阈值的netmp
+	std::set<SR_uint32> m_netmpinconf;//已经召开会议的netmp
+	std::map<SR_uint32,SR_void*> m_netmpsockptr;//0606 将之前的全局sockfd移到此处
+};
+
+
+class MPInfoManager
+{
+public:
+	MPInfoManager()
+	{
+		m_mpinfo.clear();
+		m_idle_mps.clear();
+		m_highload_mps.clear();
+		m_mpinconf.clear();
+		m_notuse_mps.clear();
+		m_connected_mps.clear();
+		//m_devmgrInfos.clear();
+		//m_current_devmgr_sockptr = (void*)0;
+		//m_current_dev_stat = DEVMGR_HEART_FLAGS;
+	}
+	SR_void* getmpsocketptr(SR_uint32 mpid)
+	{
+		//TODO:添加锁
+		std::map<SR_uint32, SR_void*>::const_iterator citor = m_mpsockptr.find(mpid);
+		if (m_mpsockptr.end() != citor)
+			return citor->second;
+		else
+			return (SR_void*)0;
+	}
+	std::map<SR_uint32, MPInfo*> m_mpinfo;//通过DevMgr获取到的所有netmp信息
+	////DevSockInfo[MAX_DEVMGR_NUMS] m_devmgrInfos;//std::array 是c++11版本
+	//std::set<DevSockInfo*> m_devmgrInfos;
+	//void*   m_current_devmgr_sockptr;
+	//SR_int32  m_current_dev_stat;
+	//std::list<BufferedProtoMsgPair*> m_buffered_dev;
+	//以下保存的都是已经建立连接的mp
+	std::set<SR_uint32> m_connected_mps;
+	std::set<SR_uint32> m_idle_mps;//load值较小的netmp,共用 m_mpinfo的 MPInfo
+	std::set<SR_uint32> m_highload_mps;//load值较大的mp
+	std::set<SR_uint32> m_notuse_mps;//超过最大阈值的mp
+	std::set<SR_uint32> m_mpinconf;//已经召开会议的mp
+	std::map<SR_uint32, SR_void*> m_mpsockptr;//0606 将之前的全局sockfd移到此处
+};
+
+class GWInfoManager
+{
+public:
+	GWInfoManager()
+	{
+		m_gwinfo.clear();
+		m_idle_gws.clear();
+		m_highload_gws.clear();
+		m_gwinconf.clear();
+		m_notuse_gws.clear();
+		m_connected_gws.clear();
+	}
+	SR_void* getgwsocketptr(SR_uint32 gwid)
+	{
+		//TODO:添加锁
+		std::map<SR_uint32, SR_void*>::const_iterator citor = m_gwsockptr.find(gwid);
+		if (m_gwsockptr.end() != citor)
+			return citor->second;
+		else
+			return (SR_void*)0;
+	}
+	std::map<SR_uint32, GWInfo*> m_gwinfo;//通过DevMgr获取到的所有gw信息
+	//以下保存的都是已经建立连接的gw
+	std::set<SR_uint32> m_connected_gws;
+	std::set<SR_uint32> m_idle_gws;//load值较小的gw,共用 m_gwinfo的 GWInfo
+	std::set<SR_uint32> m_highload_gws;//load值较大的gw
+	std::set<SR_uint32> m_notuse_gws;//超过最大阈值的gw
+	std::set<SR_uint32> m_gwinconf;//已经召开会议的mp
+	std::map<SR_uint32, SR_void*> m_gwsockptr;//0606 将之前的全局sockfd移到此处
+};
+
+class CRSInfoManager
+{
+public:
+	CRSInfoManager()
+	{
+		m_crsinfo.clear();
+		m_idle_crss.clear();
+		//m_highload_crss.clear();
+		//m_crsinconf.clear();
+		//m_notuse_crss.clear();
+		m_connected_crss.clear();
+	}
+	SR_void* getcrssocketptr(SR_uint32 crsid)
+	{
+		//TODO:添加锁
+		std::map<SR_uint32, SR_void*>::const_iterator citor = m_crssockptr.find(crsid);
+		if (m_crssockptr.end() != citor)
+			return citor->second;
+		else
+			return (SR_void*)0;
+	}
+	std::map<SR_uint32, CRSInfo*> m_crsinfo;//通过DevMgr获取到的所有crs信息
+	//以下保存的都是已经建立连接的crs
+	std::set<SR_uint32> m_connected_crss;
+	std::set<SR_uint32> m_idle_crss;//load值较小的crs,共用 m_crsinfo的 CRSInfo
+	//std::set<SR_uint32> m_highload_crss;//load值较大的crs
+	//std::set<SR_uint32> m_notuse_crss;//超过最大阈值的crs
+	//std::set<SR_uint32> m_crsinconf;//已经召开会议的crs
+	std::map<SR_uint32, SR_void*> m_crssockptr;//0606 将之前的全局sockfd移到此处
+};
+
+class SRSInfoManager
+{
+public:
+	SRSInfoManager()
+	{
+		m_srsinfo.clear();
+	}
+	std::map<SR_uint32, SRSInfo*> m_srsinfo;//通过DevMgr获取到的所有srs信息
+};
+
+class RelayServerInfoManager
+{
+public:
+	RelayServerInfoManager()
+	{
+		m_relaysvrinfo.clear();
+		m_idle_relaysvrs.clear();
+		m_highload_relaysvrs.clear();
+		m_relaysvrinconf.clear();
+		m_notuse_relaysvrs.clear();
+		m_connected_relaysvrs.clear();
+	}
+	SR_void* getrelayserversocketptr(SR_uint32 relayserverid)
+	{
+		//TODO:添加锁
+		std::map<SR_uint32, SR_void*>::const_iterator citor = m_relaysvrsockptr.find(relayserverid);
+		if (m_relaysvrsockptr.end() != citor)
+			return citor->second;
+		else
+			return (SR_void*)0;
+	}
+	std::map<SR_uint32, RelayServerInfo*> m_relaysvrinfo;//通过DevMgr获取到的所有relayserver信息
+	//以下保存的都是已经建立连接的relayserver
+	std::set<SR_uint32> m_connected_relaysvrs;
+	std::set<SR_uint32> m_idle_relaysvrs;//load值较小的relayserver,共用 m_relaysvrinfo的 RelayServerInfo
+	std::set<SR_uint32> m_highload_relaysvrs;//load值较大的relayserver
+	std::set<SR_uint32> m_notuse_relaysvrs;//超过最大阈值的relayserver
+	std::set<SR_uint32> m_relaysvrinconf;//已经召开会议的mp
+	std::map<SR_uint32, SR_void*> m_relaysvrsockptr;//0606 将之前的全局sockfd移到此处
+};
+
+class RelayMcInfoManager
+{
+public:
+	RelayMcInfoManager()
+	{
+		m_relaymcinfo.clear();
+	}
+	~RelayMcInfoManager()
+	{
+		m_relaymcinfo.clear();
+	}
+	std::map<SR_uint32, RelayMcInfo*> m_relaymcinfo;//通过DevMgr获取到的所有relaymc信息
+};
+class DevMgrNetMPProcessThread  : public ThreadMessgeHandler
+{
+public:
+	enum tag_timerflag{
+		e_waitConfInfo_timer = 0xa,
+		e_waitNetCreatRsp_timer = 0xb,
+		e_hearttodevmgr_timer = 0xc,
+		e_hearttonetmp_timer = 0xd,
+		e_check_netmp_timer = 0xe,
+		e_check_devmgr_timer = 0xf,
+		e_update_netmp_timer = 0x1a,
+		e_hearttomp_timer = 0x1b,
+		e_update_mp_timer = 0x1c,
+		e_hearttogw_timer = 0x1d,
+		e_update_gw_timer = 0x1e,
+		e_update_crs_timer = 0x1f,
+		e_hearttocrs_timer = 0x20,
+		e_update_srs_timer = 0x21,
+		e_update_sys_load_timer = 0x22,
+		e_update_relayserver_timer = 0x23,
+		e_hearttorelaysvr_timer = 0x24,
+		e_update_relaymc_timer = 0x25,
+		e_checkrelaymc_timeout = 0x26,
+		e_connect_devmgr_timer = 0x615,
+		e_re_register_timer = 0x616
+	};
+	DevMgrNetMPProcessThread();
+	SR_void startUp();
+	virtual SR_void OnMessage(Message* msg);
+	virtual CAsyncThread* GetSelfThread() { return m_selfThread; }
+	void* createTimer(SR_uint64 millisecond,SR_int32 timertype,SR_uint32 timerflag, SR_uint64 timerdata);
+	SR_bool deleteTimer(SR_void* timerid);
+	TimerManager* m_timermanger;
+	CAsyncThread* m_terthreadhandle;
+	CAsyncThread* m_selfThread;
+	TerMsgProcessThread* m_terprocess;
+	DeviceManager* m_deviceMan;
+	void PostToTerThread(unsigned int id, SRMC::MessageData *pdata = NULL)
+	{
+		if (m_terthreadhandle && m_terprocess)
+			m_terthreadhandle->Post(m_terprocess, id, pdata);
+	}
+	static NetMPInfoManager* m_netmpinfomanager;
+	static MPInfoManager* m_mpinfomanager;
+	static GWInfoManager* m_gwinfomanager;
+	static CRSInfoManager* m_crsinfomanager;
+	static SRSInfoManager* m_srsinfomanager;
+	static RelayServerInfoManager* m_relaysvrinfomgr;
+	static RelayMcInfoManager* m_relaymcinfomgr;
+private:
+	SR_void updateNetmpInfoPeric();
+	SR_void updateMPInfoPeric();
+	SR_void updateGWInfoPeric();
+	SR_void updateCRSInfoPeric();
+	SR_void updateSRSInfoPeric();
+	SR_void updateRelayServerInfoPeric();
+	SR_void updateRelayMCInfoPeric();
+	SR_void updateSystemCurLoadPeric();
+
+	//连接中的 socket 读写异常
+	SR_void onSockError(const SockErrorData* psed);//e_sock_error
+	SR_void onTimerArrive(const TimerData* ptd);//e_timerid
+	SR_void onConnectSuccess(const SockRelateData* psrd);//e_connector_connect_ok
+	SR_void onTcpDataRecv(const SockTcpData* pstd);//e_sock_data
+
+	//netmp->MC devMgr->MC protobuf msg
+	SR_void processRspMCConfCreate(const SRMsgs::RspMCConfCreate* s);
+	SR_void processIndMCHeartBeatOfNetMP(const SRMsgs::IndMCHeartBeatOfNetMP* s);
+	SR_void processRspRegister(const SRMsgs::RspRegister* s);
+	
+	//SRTcpConnector* m_pconnector;//连接工具,连接之后处理相应的sock事件
+	void* m_periodtimer_updatenetmp;
+	void* m_periodtimer_hearttodevmgr;
+	void* m_periodtimer_hearttonetmp;
+	void* m_check_devmgr_heart_timer;
+
+	void* m_periodtimer_updatemp;
+	void* m_periodtimer_hearttomp;
+
+	void* m_periodtimer_updategw;
+	void* m_periodtimer_hearttogw;
+
+	void* m_periodtimer_updatecrs;
+	void* m_periodtimer_hearttocrs;
+
+	void* m_periodtimer_updatesrs;
+	void* m_periodtimer_updatesyscurload;
+
+	void* m_periodtimer_updaterelayserver;
+	void* m_periodtimer_hearttorelayserver;
+	void* m_periodtimer_updaterelaymc;
+	void* m_periodtimer_checkrelaymctimeout;
+	
+	std::list<SR_void*> m_re_register_timer_list;// 重新注册定时器列表
+	std::list<SR_void*> m_connect_devmgr_timer_list;// 连接设备管理器定时器列表
+	//SR_bool m_isRegisterOK;
+};
+
+typedef struct
+{
+	SR_uint64 m_msgid;
+	void*    m_ptimer;
+}Msgid_Timerid_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_tersuid;
+
+	SR_void*  m_ptimer;
+}Confid_Tersuid_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_relaysvrid;
+	SR_uint32 m_tersuid;
+
+	SR_void*  m_ptimer;
+}RelaySvrid_Confid_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_netmpid;
+	SR_uint32 m_netmpno;
+	SR_uint32 m_netmpgroupid;
+
+	SR_void*  m_ptimer;
+}NetMPid_Confid_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+
+	SR_uint32 m_mpid;
+	SR_uint32 m_channelid;
+	SR_uint32 m_relatednetmpid;
+	SR_bool m_isErrorTransfer;
+
+	SR_void*  m_ptimer;
+}Confid_ReqCrtMPI_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_terid;
+	void*    m_deskshare_timer;
+}Confid_Terid_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+
+	SR_uint32 m_mpid;
+	SR_uint32 m_channelid;
+	SR_uint32 m_screenid;
+	SR_uint32 m_screentype;
+	SR_uint32 m_reqseqnum;
+	SR_bool m_isErrorTransferScr;
+
+	SR_void*  m_ptimer;
+}Confid_ReqCrtScr_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+
+	SR_uint32 m_crsid;
+	SR_uint32 m_crschannelid;
+	SR_uint32 m_relatednetmpid;
+	//SR_uint32 m_reqseqnum;
+	//SR_bool m_isErrorTransfer;
+
+	SR_void*  m_ptimer;
+}Confid_ReqCRSCrtConf_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_crsid;
+	SR_uint32 m_crschannelid;
+	SR_uint32 m_channelid;
+	SR_uint32 m_screenid;
+	SR_uint32 m_screentype;
+	SR_uint32 m_reqseqnum;
+
+	SR_void*  m_ptimer;
+}Confid_ReqCRSStartRec_Pair;
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_reqlicnum;
+	SR_void*  m_ptimer;
+}Confid_ReqLicenseFromDevMgr_Pair;
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_crsid;
+	SR_uint32 m_crschannelid;
+	SR_uint32 m_channelid;
+	SR_uint32 m_screenid;
+	SR_uint32 m_screentype;
+	SR_uint32 m_reqseqnum;
+	SR_uint32 m_reqreason; // 0-页面会控停止录制,1-结束会议请求停止录制,2-故障迁移请求停止录制
+
+	SR_void*  m_ptimer;
+}Confid_ReqCRSStopRec_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_uint32 m_crsid;
+	SR_uint32 m_crschannelid;
+	SR_uint32 m_livechannelid;
+	SR_uint32 m_livescreenid;
+	SR_uint32 m_livescreentype;
+	SR_uint32 m_relatedsrsid;
+	SR_uint32 m_reqseqnum;
+
+	SR_void*  m_ptimer;
+}Confid_ReqCRSStartLive_Pair;
+
+typedef struct
+{
+	SR_uint64 m_confid;
+	SR_void*  m_ptimer;
+}Confid_LayoutPoll_Pair;
+//typedef struct
+//{
+//	SR_uint64 m_confid;
+//	SR_uint32 m_crsid;
+//	SR_uint32 m_crschannelid;
+//	SR_uint32 m_livechannelid;
+//	SR_uint32 m_livescreenid;
+//	SR_uint32 m_livescreentype;
+//	SR_uint32 m_reqseqnum;
+//	SR_uint32 m_reqreason; // 0-页面会控停止录制,1-结束会议请求停止录制,2-故障迁移请求停止录制
+//}Confid_ReqCRSStopLive_Pair;
+
+class BufferedProtoMsgPair{
+public:
+	explicit BufferedProtoMsgPair(SR_uint32 msguid,
+					google::protobuf::Message* pmsg):m_msguid(msguid),m_pmsg(pmsg){}
+	~BufferedProtoMsgPair(){
+		if(m_pmsg)
+			delete m_pmsg;
+		m_pmsg = (google::protobuf::Message*)0;
+	}
+	SR_uint32 m_msguid;
+	google::protobuf::Message* m_pmsg;
+private:
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(BufferedProtoMsgPair);
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(BufferedProtoMsgPair);
+};
+
+class GlobalVars
+{
+public:
+	static SR_int32 getAllTerNums(){
+	#ifdef USE_LOCK_RW_ALL_TERSNUM	
+		CThreadMutexGuard crit(m_lock);//此处锁无意义
+	#endif
+		return ters_in_mc;
+	}
+	static SR_void addOrSubTerNums(SR_int32 addOrSub){//多线程调用addOrSubTerNums时
+	#ifdef USE_LOCK_RW_ALL_TERSNUM
+		GlobalVars::m_lock.Lock();
+	#endif	
+		ters_in_mc += addOrSub;
+	#ifdef USE_LOCK_RW_ALL_TERSNUM
+		GlobalVars::m_lock.Unlock();
+	#endif
+	}
+private:
+	static volatile SR_int32 ters_in_mc;
+	#ifdef USE_LOCK_RW_ALL_TERSNUM
+	static CThreadMutex	m_lock;
+	#endif
+	SUIRUI_DISALLOW_COPY_AND_ASSIGN(GlobalVars);
+	SUIRUI_DISALLOW_DEFAULT_CONSTRUCTOR(GlobalVars);
+};
+
+#define GET_CURRENT_DEVMGR() (DevMgrNetMPProcessThread::m_netmpinfomanager->m_current_devmgr_sockptr)
+#define IS_DEVMGR_UNREGISTER() ((NULL == DevMgrNetMPProcessThread::m_netmpinfomanager->m_current_devmgr_sockptr) || (0u == MCCfgInfo::instance()->get_mcdeviceid()))
+// 编码发送给 netmp 或 devmgr
+SR_void SerialAndSend(SR_void* sockptr,SR_uint32 proto_msguid,const google::protobuf::Message* msg);
+SR_void SerialAndSendDevmgr_nobuf(SR_uint32 proto_msguid,const google::protobuf::Message* msg);
+//单线程,只在终端线程调用
+SR_void SerialAndSendDevmgr_buffered(SR_uint32 proto_msguid,const google::protobuf::Message* msg);
+
+//SR_void SerialAndSendToCCS_nobuf(SR_uint32 proto_msguid, const google::protobuf::Message* msg);
+//SR_void SerialAndSendToCCS_buffered(SR_uint32 proto_msguid, const google::protobuf::Message* msg);
+
+}// namespace SRMC
+#endif //#ifndef SRMCPROCESS_H

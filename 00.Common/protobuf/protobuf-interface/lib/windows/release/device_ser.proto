@@ -47,14 +47,15 @@ message ReqRegister
 	optional string auth_password = 3; // 序列码（含媒体集群信息）
 	optional uint32 svr_type = 4; // MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、Ddevmgr=7、CRS=9、stunserver=11、VAS=12等 
 	optional uint32 cpunums=5;// cpu几核 
-	optional uint32 max_bandwidth=6;// 最大带宽 netmp设值
-	repeated ConfInfo conflist = 7;//会议列表
+	optional uint32 max_bandwidth=6;// 最大带宽 netmp设值,单位Mb
+	repeated ConfInfo conflist = 7;//会议列表(此结构作废,会议信息同步单独放到IndSyncConfInfo消息)
 	optional string systemlicence = 8;//系统授权信息,由mc解密各自的系统授权文件拼接字符串携带过来
 	optional uint32 nettype = 9 ; // ip地址类型,0-私(内)网,1-公(外)网,2-VPN地址
 	optional string version = 10;// 该服务软件版本号
 	optional string domainname = 11;// svr_type==7时下级设备管理对应域名
 	optional uint32 httpport = 12 ; // svr_type==12时对应的图片上传的端口
-	repeated MapIPInfo mapinternetips = 13;//单一会见系统mc、devmgr部署外网,svr_type为2(netmp)、3(relaymc)部署内网时映射的外网ip列表(若服务本身在外网不必关注)
+	repeated MapIPInfo mapinternetips = 13;//单一会见系统mc、devmgr部署外网,svr_type为2(netmp)、3(relaymc)部署内网时映射的外网ip列表(若服务本身在外网不必关注)	
+	optional uint32 max_terms=14;// 该服务支持最大终端数,目前仅netmp使用
 }
 
 message ReqUnRegister{			//MC netmp通用
@@ -64,11 +65,58 @@ message ReqUnRegister{			//MC netmp通用
 //MC专用
 message ReqConfInfoFromDevMgr
 {
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//请求当前会议对应授权类型的授权数
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		repeated LicenceInfo getlicinfos = 2;//授权信息(会中不必获取licencetype==1会议授权)
+	}
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token=2;//token组成自定义，唯一即可
 	optional uint64 confid = 3;//会议ID
+	repeated CompanyInfo complicinfos = 4;//企业授权信息
 }
-
+// 向devmgr请求获取企业某些授权
+message ReqLicenseFromDevMgr
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//请求授权数
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		repeated LicenceInfo getlicinfos = 2;//授权信息(会中不必获取licencetype==1会议授权)
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//设备序列号
+	optional uint64	 confid = 3;// 按照会议为单位获取
+	repeated CompanyInfo complicinfos = 4;//企业授权信息
+	optional uint32		seqnum		  = 5;
+}
+// 异常情况(授权不成功)时企业使用授权情况的确认
+message IndCompanyUseLicenceACK
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//请求授权数
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		repeated LicenceInfo surplicinfos = 2;//授权剩余情况(会中ReqLicenseFromDevMgr请求获取企业授权使用过后剩余情况,方便devmgr回收剩余授权)
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;// 设备序列号
+	optional uint64 confid = 3;//会议ID
+	repeated CompanyInfo complicinfos = 4;//企业授权信息
+}
 //获取指定数量的设备信息
 // mc、relayserver、relaymc、suiruigw通用
 // mc、relayserver获取netmp信息mc->netmp、relayserver->netmp;
@@ -118,8 +166,71 @@ message ReqUpdateDeviceInfo{
 /////////end////////////
 
 ////////Indication////
-
-message IndNewTermJoinConf {		//MC专用
+//MC专用
+message IndSyncConfInfo
+{
+	message UserInfo
+	{
+		optional uint32 suid = 1;// 加入者ID
+		optional string ip = 2;//标准终端
+		optional string alias = 3;//别名
+		optional uint32 netmpid = 4;//该终端使用的netmpid
+		optional uint32 fromtype = 5;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	    optional uint32 termtype = 6;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+		optional uint32 producttype = 7;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+		optional uint64 userdtlid = 8;
+		optional uint32 userrelcompid  = 9;//该终端归属的企业id
+	}
+	message DevInfo
+	{
+		optional uint32 devid = 1;//设备id
+		optional uint64 devdtlid = 2;
+	}
+	message RecInfo
+	{
+		optional uint64 recordid = 1;// 录制通道id
+	}
+	message LiveAddr
+	{ 		
+		optional uint32 type  = 1;//0-未知,1-RTMP,2-FLV,3-HLS
+		optional string url	  = 2;//对应type的直播地址
+	} 
+	message LiveSetting 
+	{ 
+		optional string 	chairman 		= 1;//直播主持人
+		optional string 	subject 		= 2;//直播主题
+		optional string 	abstract 		= 3;//直播摘要/简介
+		optional uint32 	ispublic 		= 4;//是否公开,0-不公开,1-公开
+		optional string 	livepwd			= 5;//直播密码
+		optional uint32 	isuserec		= 6;//是否启用录制,0-不启用录制,1-启用录制(默认启用)
+	}
+	message LiveInfo
+	{
+		optional uint64 liveinfoid   = 1;
+		optional uint32	livesvrtype	 = 2;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
+		optional string livepushurl  = 3;//livesvrtype等于0时CRS直播(推流)的url
+		optional string livepullurl  = 4;//livesvrtype等于0时直播(拉流)的url
+		optional string liveplayurl  = 5;//直播(播放)的url
+		optional LiveSetting livesetinfo = 6;//每次直播的参数设置		
+		repeated LiveAddr liveaddrs	 = 7;//livesvrtype大于0时的直播地址信息
+	}
+	message ConfInfo
+	{
+		optional uint64 confid = 1;//会议ID
+		optional uint64 confreportid = 2;//会议计费id
+		optional string confname  = 3;//会议名称
+		repeated DevInfo devinfos = 4;// 当前会议计费id下所使用的设备(包括上报信息的mc设备)信息
+		repeated UserInfo userinfos = 5; // 终端列表
+		repeated RecInfo recinfos = 6;// 当前会议计费id下录制信息
+		repeated LiveInfo liveinfos = 7;// 当前会议计费id下直播信息
+		optional uint32 confrelcompid  = 8;// 当前会议关联的企业id
+	}
+	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;
+	repeated ConfInfo confinfos = 3;//会议列表
+}
+//MC专用
+message IndNewTermJoinConf {
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token = 2;// 设备序列号
 	optional uint64 confid = 3;//会议ID
@@ -131,9 +242,12 @@ message IndNewTermJoinConf {		//MC专用
 	optional uint32 fromtype = 9;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
 	optional uint32 termtype = 10;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
 	optional uint32 producttype = 11;//产品型号.32bit编码组合值.16bit 厂家编码 + 16bit产品型号编码
+	optional uint64 userrptdetailid = 12;//终端参会时的计费ID
+	optional uint32 userrelcompid  = 13;//该终端归属的企业id
+	optional uint32 confrelcompid  = 14;// 当前会议关联的企业id
 }
-
-message IndTermLeaveConf{				//MC专用
+//MC专用,终端退出会议,devmgr侧可使用该消息作为回收终端授权的确认依据
+message IndTermLeaveConf{
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token = 2;// 设备序列号
 	optional uint64 confid = 3;//会议ID
@@ -142,15 +256,22 @@ message IndTermLeaveConf{				//MC专用
 	optional string alias = 6;//别名
 	optional uint32 netmpid = 7;//该终端使用的netmpid
 	optional uint64 confreportid = 8;
+	optional uint64 userrptdetailid = 9;//终端参会时的计费ID
+	optional uint32 fromtype = 10;// 0-来自随锐平台(即随锐自有RP终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+	optional uint32 termtype = 11;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+	optional uint32 userrelcompid  = 12;//该终端归属的企业id
+	optional uint32 confrelcompid  = 13;// 当前会议关联的企业id
 }
-
-message IndMCCreateConf{				//MC专用
+//MC专用
+message IndMCCreateConf{
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token = 2;
 	optional bool isok = 3;// 结果
 	optional uint64 confid = 4;//会议ID
 	optional string failreason = 5;// 结果
 	optional uint64 confreportid = 6;
+	optional uint64 mcconfdetailid = 7;
+	optional uint32 confrelcompid  = 8;// 当前会议关联的企业id
 }
 
 //mc、netmp、relaymc、relayserver、mp、gw、devmgr、crs、stunserver、VAS通用
@@ -166,21 +287,63 @@ message IndsertodevHeart
 		optional uint32 confcnt = 6;// 当前会议总数(MC专用)
 		optional uint32 livecnt = 7;// 当前直播总数(MC专用)
 		optional uint32 analycnt = 8;// 当前视频分析路数总数(MC专用)
+		optional uint32 monitorcnt = 9;	// 当前在线监控点数(MC专用)
+		optional uint32 voicecnt = 10;	// 当前在线语音点数(MC专用)
+	}
+	message DevInfo
+	{
+		optional uint32 devid = 1;//设备id
+		optional uint64 devdtlid = 2;
+	}
+	message UserInfo
+	{
+		optional uint32 userid = 1;//用户id
+		optional uint64 userdtlid = 2;
+		optional uint32 fromtype = 3;//0-来自随锐平台(即随锐自有SR终端)、1-来自随锐网关(即H.323终端、SIP终端、监控)
+		optional uint32 termtype = 4;// 16bit编码组合值.fromtype为0时,8bit os + 4bit cpu + 4bit产品形态;fromtype为1时,8bit 协议类型 + 8bit产品形态;
+		optional uint32 userrelcompid  = 5;//该终端归属的企业id
+	}
+	message RecInfo
+	{
+		optional uint64 recordid = 1;//某录制通道对应的计费id
+	}
+	message LiveInfo
+	{
+		optional uint64 liveinfoid = 1;//某直播通道对应的计费id
+	}
+	message VAnalyInfo
+	{
+		optional uint64 vanalyinfoid = 1;//某路视频分析对应的计费id
+	}
+	message ConfInfo
+	{
+		optional uint64 confid = 1;//会议ID
+		optional uint64 confreportid = 2;//会议计费id
+		repeated DevInfo devinfos = 3;// 当前会议计费id下所使用的设备信息
+		repeated UserInfo userinfos = 4;// 当前会议计费id下所使用的设备信息
+		repeated RecInfo recinfos = 5;// 当前会议计费id下录制信息
+		repeated LiveInfo liveinfos = 6;// 当前会议计费id下直播信息
+		repeated VAnalyInfo vanalyinfos = 7;// 当前会议计费id下视频分析信息
+		optional uint32 confrelcompid  = 8;// 当前会议关联的企业id
 	}
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token=2;//token组成自定义，唯一即可
 	optional uint32 load1=3;	//netmp:终端数，relayserver、stunserver:下行带宽，mp、GW、VAS：cpu使用率*10000
 	optional uint32 load2=4;	//netmp:下行带宽，relayserver、stunserver:终端数，mp：上行带宽（netmp->mp），Relaymc、GW、VAS：在线终端数
 	optional uint32 svr_type = 5; // 设备类型MC=1、NetMP=2、Relaymc=3、relayserver=4、MP=5、GW=6、devmgr=7、CRS=9、stunserver=11、VAS=12等 	
-	optional LoadInfo loadinfo = 6;//mc负载信息
+	optional LoadInfo loadinfo = 6;//负载信息
+	repeated ConfInfo confinfos = 7;//mc上召开的会议信息(MC专用)
 }
 
+//结束会议,devmgr侧可使用该消息作为回收会议授权的确认依据
 message IndMCEndConf{			//MC专用
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token=2;//token组成自定义，唯一即可
 	optional uint64 confid = 3;//会议ID
 	optional uint64 confreportid = 4;
-	optional uint32 permanentenable = 5;// 是否是永久会议,0-一次性会议、1-永久性会议
+	optional uint32 permanentenable = 5;// 是否是永久会议,0-一次性会议、1-永久性会议	
+	optional uint64 mcconfdetailid = 6;	
+	optional uint32 confrelcompid  = 7;// 当前会议关联的企业id
 }
 
 message IndNetMPConfInfoInMC{
@@ -190,6 +353,7 @@ message IndNetMPConfInfoInMC{
 	optional uint32 netmpid = 4;//该会议使用的netmpid
 	optional uint32 addordel = 5;//MC在会议中使用netmp或删除netmp, 1:add 2:删除
 	optional uint64 confreportid = 6;
+	optional uint64 netmpconfdetailid = 7;
 }
 //MC专用
 message IndNetMPConnStatusInMC{
@@ -211,8 +375,10 @@ message IndCRSStartRec{
 	optional string relativepath	= 8;//CRS录制文件存放根路径
 	optional string confname        = 9;//会议名称
 	optional uint64 confreportid    = 10;
+	optional uint64 confrecordid    = 11;
+	optional uint32 confrelcompid 	= 12;//会议所属企业id
 }
-//MC专用,结束录制会议
+//MC专用,结束录制会议,devmgr侧可使用该消息作为回收录制授权的确认依据
 message IndCRSStopRec{
 	optional uint32 deviceid=1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token=2;//token组成自定义，唯一即可
@@ -226,6 +392,9 @@ message IndCRSStopRec{
 	optional string confname        = 10;//会议名称
 	optional uint64 confreportid    = 11;
 	optional uint64	filesize	= 12;//文件大小,单位：MB
+	optional uint64 confrecordid    = 13;
+	optional uint64 recordfileid    = 14;
+	optional uint32 confrelcompid 	= 15;//会议所属企业id
 }
 //MC专用,单会议录制多文件,不是开始、结束录制操作关联的文件需要调用该消息另行通知
 message IndCRSFileStoragePath{
@@ -240,9 +409,11 @@ message IndCRSFileStoragePath{
 	optional uint32	recordstate	= 9;//该文件录制状态,1-录制开始、2-录制结束
 	optional uint64 confreportid    = 10;
 	optional uint64	filesize	= 11;//文件大小,单位：MB
+	optional uint64 confrecordid    = 12;
+	optional uint64 recordfileid    = 13;
 }
 
-//MC专用,视频分析服务分析视频的状态(目前只上报直播分析的状态)
+//MC专用,视频分析服务分析视频的状态(目前只上报直播分析的状态),当停止分析时,devmgr侧可使用该消息作为回收视频分析授权的确认依据
 message IndVASAnalyVideoState
 {
 	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
@@ -250,8 +421,8 @@ message IndVASAnalyVideoState
 	optional uint64 confid = 3;//会议ID
 	optional uint64 confreportid  = 4;
 	optional uint32 analystate    = 5;//视频分析的状态,0-停止分析,1-正在分析
+	optional uint32 confrelcompid 	= 6;//会议所属企业id
 }
-
 //MC专用,开始直播会议
 message IndCRSStartLive
 {
@@ -279,9 +450,11 @@ message IndCRSStartLive
 	optional LiveSetting livesetinfo	= 8;//每次直播的参数设置
 	optional uint64 confreportid  = 9;
 	optional uint32	livesvrtype	 = 10;//直播服务类型,0-SRS直播、1-阿里云直播、2-腾讯云直播
-	repeated LiveAddr liveaddrs	 = 11;//livesvrtype大于0时的直播地址信息
+	repeated LiveAddr liveaddrs	 = 11;//livesvrtype大于0时的直播地址信息	
+	optional uint64 liveinfoid   = 12;
+	optional uint32 confrelcompid 	= 13;//会议所属企业id
 }
-//MC专用,结束会议直播
+//MC专用,结束会议直播,devmgr侧可使用该消息作为回收直播授权的确认依据
 message IndCRSStopLive
 {
 	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
@@ -290,6 +463,8 @@ message IndCRSStopLive
 	optional uint32 crsid  = 4;//录制服务设备id
 	optional string liveurl   = 5;//CRS直播(推流)的url
     optional uint64 confreportid  = 6;
+	optional uint64 liveinfoid   = 7;
+	optional uint32 confrelcompid 	= 8;//会议所属企业id
 }
 //MC专用,增删改会议点名名单
 message IndModifyConfCallList
@@ -390,12 +565,35 @@ message IndSubSvrInfoToDevmgr
 		optional sint32 level = 2;//本级,sint32类型比int32在编码负数时效率更高
 		repeated ServerInfo  svrinfos = 3; //本级域各设备的地址信息
 	}
+	
 	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token = 2;//token组成自定义，唯一即可
 	optional uint32 addordel = 3;// 1-add, 2-delete
 	repeated DomainInfo domaininfos = 4;//各级域信息
-}
 
+}
+// 将下级企业授权信息同步给上级devmgr
+message IndSubCompCapInfoToDevmgr
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型总授权数
+		optional string starttime = 3;//当前企业对应授权类型的起始时间(格式为：yyyy-mm-dd HH:MM:SS,如：2018-08-10 19:49:08)
+		optional string exptime = 4;//当前企业对应授权类型的超时时间(格式为：yyyy-mm-dd HH:MM:SS,如：2020-08-10 23:49:08)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		repeated LicenceInfo totallicinfos = 3;//企业总授权信息
+	}
+
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint32 operationtype = 3;// 1-redister or delete, 2-start conference licence
+	repeated CompanyInfo compinfos = 4;//所有企业信息
+}
 // 将下级服务心跳同步给上级devmgr
 message IndSubSvrHeartTodev
 {
@@ -447,6 +645,16 @@ message IndVASAnalyVideoResult
 ////////////////////////////Device-->Ser///////////////////////////////////////////////////////
 /////Request////		
 message RspConfInfoToMC{			//MC专用
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型的分配的授权数
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		repeated LicenceInfo getlicinfos = 2;//授权信息(会中不必获取licencetype==1会议授权)
+	}
 	message AgcSetting
 	{
 		optional bool  	agc_enable  			= 1;   //true: 使能AGC，false: 不启用AGC
@@ -463,6 +671,7 @@ message RspConfInfoToMC{			//MC专用
 		optional uint32   	max_encoder_num		= 5; //会议中音频编码器最大个数
 		optional  AgcSetting  agc_setting 		= 6; //混音器AGC设置
 		optional uint32		videosize 	 		= 7;//期望MP编码流的大小(目前只有录制直播屏设置),0：不看、非零：分辨率大小(1:160x90、2:256x144、3:320x180、4:384x216、5:432x240、6:480x270、7:640x360、8:864x480、9:960x540、10:1280x720、11:1920x1080)
+		optional uint32		useedgeserver		= 8; //会议是否使用边缘服务,0-默认不使用、1-使用
 	}
 	message ParticipantInfo 
 	{ 
@@ -498,6 +707,11 @@ message RspConfInfoToMC{			//MC专用
 		optional string 	apname 		       = 2;//名单名称
 		repeated ParticipantInfo parts         = 3;//名单成员,只关注psuid、nickname
 	}
+	message WhiteListInfo
+	{
+		optional uint32 whitelisttype 	= 1;//白名单类型,0-主席模式白名单、1-直播模式白名单、2-联席主持人白名单
+		repeated ParticipantInfo parts  = 2;//名单成员,只关注psuid、nickname
+	}
 	optional bool   isok = 1;//是否成功,若失败,就只需要填充后面的 confid 和 failurereason字段
 	optional uint32 suid = 2;//创建者标识
 	optional uint64 confid = 3;//会议ID
@@ -526,6 +740,15 @@ message RspConfInfoToMC{			//MC专用
 	repeated RollCallInfo rollcalllist = 26;//点名名单列表
 	optional uint32 permanentenable = 27;// 是否是永久会议,0-一次性会议、1-永久性会议
 	repeated AutoPollInfo autopolllist = 28;//自动轮巡名单列表，如果为空表示不指定范围。
+	optional uint32 confrelcompid = 29;//会议所属企业id
+	repeated CompanyInfo complicinfos = 30;//企业授权信息
+	optional uint32	parttotalnums	= 31;//参会者列表里参会者的总数目
+	optional uint32	partalreadynums	= 32;//已经发送的参会者数目,若与parttotalnums一致则这次结束
+	optional uint32	rctotalnums	= 33;//点名名单列表的总数目
+	optional uint32	rcalreadynums = 34;//已经发送的点名名单列表数目,若与rctotalnums一致则这次结束
+	optional uint32	aptotalnums	= 35;//自动轮巡名单列表里参会者的总数目
+	optional uint32	apalreadynums = 36;//已经发送的自动轮巡名单列表数目,若与aptotalnums一致则这次结束
+	repeated WhiteListInfo whitelists = 37;//会议白名单
 }
 
 ////////Indication////
@@ -558,6 +781,28 @@ message IndUpSvrInfoToDevmgr
 	optional string token = 2;//token组成自定义，唯一即可
 	optional uint32 addordel = 3;// 1-add, 2-delete
 	repeated DomainInfo domaininfos = 4;//各级域信息
+}
+// 将上级企业授权服务信息同步给下级devmgr
+message IndUpCompCapInfoToDevmgr
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型总授权数
+		optional string starttime = 3;//当前企业对应授权类型的起始时间(格式为：yyyy-mm-dd HH:MM:SS,如：2018-08-10 19:49:08)
+		optional string exptime = 4;//当前企业对应授权类型的超时时间(格式为：yyyy-mm-dd HH:MM:SS,如：2020-08-10 23:49:08)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		repeated LicenceInfo totallicinfos = 3;//企业总授权信息
+	}
+
+	optional uint32 deviceid = 1;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 2;//token组成自定义，唯一即可
+	optional uint32 operationtype = 3;// 1-redister or delete, 2-start conference licence
+	repeated CompanyInfo compinfos = 4;//所有企业信息
 }
 
 // 将上级服务心跳同步给下级devmgr
@@ -599,6 +844,19 @@ message RspRegister {
 		optional uint32 captype = 1;//能力集类型,0-未知、1-音频、2-视频
 		repeated Capset capsets = 2; //音视频能力集合
 	}
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型总授权数
+		optional string starttime = 3;//当前企业对应授权类型的起始时间(格式为：yyyy-mm-dd HH:MM:SS,如：2018-08-10 19:49:08)
+		optional string exptime = 4;//当前企业对应授权类型的超时时间(格式为：yyyy-mm-dd HH:MM:SS,如：2020-08-10 23:49:08)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		repeated LicenceInfo totallicinfos = 3;//企业总授权信息
+	}
 	optional bool isok=1; //
 	optional uint32 deviceid=2;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
 	optional string token=3;//token组成自定义，唯一即可
@@ -607,6 +865,8 @@ message RspRegister {
 	optional string domainname=6; //该设备所属域名
 	optional uint32 errorcode=7;//错误提示对应的错误码
 	repeated CapInfo capinfos=8;//gw专用,云平台的音视频能力集配置信息
+	optional uint32 	sysmtu	= 9;//系统MTU值,MP专用(默认1100)
+	repeated CompanyInfo compinfos = 10;//所有企业信息
 }
 
 message RspUnRegister {					//MC netmp通用
@@ -636,6 +896,9 @@ message RspGetDeviceInfo
 		optional uint32 groupid = 8;// deviceid对应设备所属媒体域分组id
 		optional string domainname = 9;// relaymc deviceid对应设备所属域名
 		repeated MapIPInfo mapinternetips = 10;//单一会见系统mc、devmgr部署外网,svr_type为2(netmp)、3(relaymc)部署内网时映射的外网ip列表(若服务本身在外网不必关注)
+		optional uint32 nettype = 11; // ip地址类型,0-私(内)网,1-公(外)网,2-VPN地址,目前只返netmp的地址类型		
+		optional uint32 max_bandwidth=12;// 最大支持带宽,单位Mb,目前仅上报netmp服务的能力
+		optional uint32 max_terms=13;// 最大支持终端数,目前仅上报netmp服务的能力
 	}
 	optional string token=2;//token组成自定义，唯一即可
 	repeated DeviceInfo deviceinfolist=3;
@@ -679,13 +942,95 @@ message RspGetSysDeviceInfo
 // 将系统当前负载信息回复给mc
 message RspGetSystemCurLoad 
 {
+	message LoadInfo
+	{
+		optional uint32 confcnt = 1;// 会议总数(MC专用)
+		optional uint32 ternum = 2; // 在线终端总数
+		optional uint32 srcnt = 3;	// 在线SR终端数(MC专用)
+		optional uint32 stdcnt = 4;	// 在线标准终端数(MC专用)
+		optional uint32 reccnt = 5;	// 录制通道数(MC专用)		
+		optional uint32 livecnt = 6;// 直播总数(MC专用)
+		optional uint32 analycnt = 7;// 视频分析路数总数(MC专用)
+		optional uint32 monitorcnt = 8;	// 在线监控点数(MC专用)
+		optional uint32 voicecnt = 9;	// 在线语音点数(MC专用)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		optional LoadInfo curloads   = 3;//该企业授权使用情况
+	}
 	optional string token       = 1;//token组成自定义，唯一即可
 	optional uint32 curconfcnt  = 2;
 	optional uint32 curreccnt   = 3;
 	optional uint32 curlivecnt  = 4;
 	optional uint32 curanalycnt  = 5;
+	repeated CompanyInfo compinfos =6;//所有企业信息
+}
+// 页面更改授权后devmgr同步给mc
+message IndCompLicenseInfo
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型总授权数
+		optional string starttime = 3;//当前企业对应授权类型的起始时间(格式为：yyyy-mm-dd HH:MM:SS,如：2018-08-10 19:49:08)
+		optional string exptime = 4;//当前企业对应授权类型的超时时间(格式为：yyyy-mm-dd HH:MM:SS,如：2020-08-10 23:49:08)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		repeated LicenceInfo licenceinfos = 3;//企业总授权信息
+	}
+	optional bool isok = 1; //
+	optional uint32 deviceid = 2;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 3;//token组成自定义，唯一即可
+	repeated CompanyInfo compinfos = 4;//所有企业信息
+}
+//企业授权信息修改后需要通知其他的devmgr
+message IndCompLicenseInfoToDevmgr
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型总授权数
+		optional string starttime = 3;//当前企业对应授权类型的起始时间(格式为：yyyy-mm-dd HH:MM:SS,如：2018-08-10 19:49:08)
+		optional string exptime = 4;//当前企业对应授权类型的超时时间(格式为：yyyy-mm-dd HH:MM:SS,如：2020-08-10 23:49:08)
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//企业id
+		optional string companyname  = 2;//企业名
+		repeated LicenceInfo licenceinfos = 3;//企业总授权信息
+	}
+
+	optional bool isok = 1; //
+	optional uint32 deviceid = 2;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token = 3;//token组成自定义，唯一即可
+	repeated CompanyInfo compinfos = 4;//所有企业信息
+
 }
 
+message RspLicenseToMC
+{
+	message LicenceInfo
+	{
+		optional uint32 licencetype = 1;//授权类型,0-未知、1-会议授权、2-SR终端授权、3-标准终端授权（包含TER,MCU，微信，STREAM_LIVE（RTSP）,TRUNK（sip trunk））、4-监控授权（包含监控实时流,监控录像）、5-语音授权（包含PSTN）、6-直播授权、7-录制授权、8-人脸识别授权、9-语音识别授权
+		optional sint32 licencenum  = 2;//当前企业对应授权类型的分配的授权数
+	}
+	message CompanyInfo
+	{
+		optional uint32 companyid    = 1;//获取的企业id
+		repeated LicenceInfo getlicinfos = 2;//获取的企业授权信息
+	}
+	optional bool isok 		  = 1; //
+	optional uint32 deviceid  = 2;//设备id，由设备管理器分配（与设备序列号和ip，port相关联）
+	optional string token     = 3;//token组成自定义，唯一即可
+	optional uint64 confid 	  = 4;//会议ID
+	repeated CompanyInfo compinfos = 5;//获取对应企业信息
+	optional uint32	seqnum		   = 6;
+}
 message RspUpdateDeviceInfo {					//MC netmp通用
 	message DeviceInfo
 	{

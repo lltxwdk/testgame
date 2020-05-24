@@ -292,7 +292,7 @@ message IndNewAudioSourceJoined
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -326,7 +326,7 @@ message IndAudioSourceLeave
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		  = 1;
 	optional uint32 	terid 		  = 2;
@@ -357,7 +357,7 @@ message IndNewVideoSourceJoined
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -392,7 +392,7 @@ message IndVideoSourceLeave
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -404,6 +404,45 @@ message IndVideoSourceLeave
 	optional string 	domainname    = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
 	repeated AddrInfo   svraddrs      = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注 
 	repeated DomainInfo  domains      = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndConfStatusToMC
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SubStatusInfo
+	{
+		optional uint32 substatustype = 1;//会议中功能的子功能类型,0-共享是否暂停(开启共享的前提下)、1-共享标注(开启共享的前提下)、2-只有主持人可以发起共享
+		optional uint32 substattus = 2;//会议中功能的子功能对应状态,0-关闭、1-开启（substatustype==2时,0-代表所有人都可以发起共享,1-只有主持人可以发起共享）
+		optional uint32 assistvideotimes = 3;//会议中共享时间,单位：秒；目前只支持substatustype==2时使用,默认值是0，代表不限制时间
+	}
+	message ConfStatusInfo
+	{
+		optional uint32 statustype = 1;//会议中功能的类型,0-未知、1-双流（共享）
+		optional uint32 stattus = 2;//会议中功能的状态，0-关闭、1-开启
+		repeated SubStatusInfo substatusinfos   = 3;//会议中功能的子功能
+	}
+	optional uint64		confid 				= 1;
+	optional uint32 	terid 				= 2;
+	optional uint32 	sponsortype 		= 3;//发起者类型,1-ter、2-web
+	repeated ConfStatusInfo confstatusinfos = 4;//会议功能信息
+	optional string 	domainname          = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains            = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
 }
 /////////Indication end////////////
 
@@ -792,12 +831,12 @@ message CmdSendAssistVideolabel
 	optional uint32 	lablesize			= 5;	//线段粗细（1,2,3,4默认2）
 	optional uint32 	lablecolor			= 6;	//rgb整形数值（默认红色）
 	optional uint32 	linetype			= 7;	//1：实线、2：虚线、3荧光笔(默认透明度0.5)
-   	optional uint32 	leftuppoints_x 		= 8;	//左上方x坐标（共享方的相对值）
-	optional uint32 	leftuppoints_y 		= 9;	//左上方y坐标（共享方的相对值）
-	optional uint32 	rightdownpoints_x	= 10;	//右下方x坐标（共享方的相对值）
-	optional uint32 	rightdownpoints_y	= 11;	//右下方y坐标（共享方的相对值）
-	optional uint32  	resolution_x		= 12;	//(共享方)分辨率x
-	optional uint32  	resolution_y		= 13;	//(共享方)分辨率y
+   	optional double 	leftuppoints_x 		= 8;	//左上方x坐标（共享方的相对值）
+	optional double 	leftuppoints_y 		= 9;	//左上方y坐标（共享方的相对值）
+	optional double 	rightdownpoints_x	= 10;	//右下方x坐标（共享方的相对值）
+	optional double 	rightdownpoints_y	= 11;	//右下方y坐标（共享方的相对值）
+	optional double  	resolution_x		= 12;	//(共享方)分辨率x
+	optional double  	resolution_y		= 13;	//(共享方)分辨率y
 	optional string 	domainname          = 14;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
 	repeated AddrInfo   svraddrs            = 15;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
 	repeated DomainInfo  domains            = 16;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
@@ -965,7 +1004,7 @@ message CmdChangeVideoSourceName
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64		confid 		  = 1;
@@ -997,7 +1036,7 @@ message CmdChangeVideoSourcePriority
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional uint32	priority  = 2;//源的优先级级别(决定srcid谁将是主源)
 	}
 	optional uint64		confid 		  = 1;
@@ -1032,7 +1071,7 @@ message CmdChangePreset
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//预置位发生变化的终端terid
@@ -1110,6 +1149,34 @@ message CmdMCUpdateAutoPollInfo
 	optional string 		domainname         = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
 	repeated AddrInfo   	svraddrs           = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
 	repeated DomainInfo  	domains       	   = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+//H5-->ConfCtrlSvr-->MC/ter-->MC
+message CmdStopSendAssistVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64 	confid 			= 1;
+	optional uint32 	terid 		    = 2;//发起者的terid，0-web、非0-具体终端
+	optional uint32 	sponsortype     = 3;//发起者类型,1-ter、2-web
+	repeated uint32 	avterid 		= 4;//共享者
+	optional string 	domainname      = 5;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs        = 6;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains        = 7;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
 }
 
 ////////Cmmand end///////////
@@ -1752,12 +1819,12 @@ message IndSendAssistVideolabel
 	optional uint32 	lablesize			= 6;	//线段粗细（1,2,3,4默认2）
 	optional uint32 	lablecolor			= 7;	//rgb整形数值（默认红色）
 	optional uint32 	linetype			= 8;	//1：实线、2：虚线、3荧光笔(默认透明度0.5)
-   	optional uint32 	leftuppoints_x 		= 9;	//左上方x坐标（共享方的相对值）
-	optional uint32 	leftuppoints_y 		= 10;	//左上方y坐标（共享方的相对值）
-	optional uint32 	rightdownpoints_x	= 11;	//右下方x坐标（共享方的相对值）
-	optional uint32 	rightdownpoints_y	= 12;	//右下方y坐标（共享方的相对值）
-	optional uint32  	resolution_x		= 13;	//(共享方)分辨率x
-	optional uint32  	resolution_y		= 14;	//(共享方)分辨率y
+   	optional double 	leftuppoints_x 		= 9;	//左上方x坐标（共享方的相对值）
+	optional double 	leftuppoints_y 		= 10;	//左上方y坐标（共享方的相对值）
+	optional double 	rightdownpoints_x	= 11;	//右下方x坐标（共享方的相对值）
+	optional double 	rightdownpoints_y	= 12;	//右下方y坐标（共享方的相对值）
+	optional double  	resolution_x		= 13;	//(共享方)分辨率x
+	optional double  	resolution_y		= 14;	//(共享方)分辨率y
 	optional string     domainname          = 15;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
 	repeated AddrInfo   svraddrs            = 16;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
 	repeated DomainInfo  domains            = 17;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
@@ -1811,7 +1878,7 @@ message IndChangeVideoSourceName
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64		confid 		= 1;
@@ -1844,7 +1911,7 @@ message IndChangeVideoSourcePriority
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional uint32	priority  = 2;//源的优先级级别(决定srcid谁将是主源)
 	}
 	optional uint64		confid 		= 1;
@@ -1879,11 +1946,11 @@ message IndTerChangeDeviceInfos
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -1927,7 +1994,7 @@ message IndTerNewAudioSourceJoined
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -1964,7 +2031,7 @@ message IndTerAudioSourceLeave
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64	confid 			  = 1;
@@ -1999,7 +2066,7 @@ message IndTerNewVideoSourceJoined
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -2037,7 +2104,7 @@ message IndTerVideoSourceLeave
 	}
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -2143,7 +2210,7 @@ message IndChangePreset
 	{ 
 	    optional uint32	 presetid  = 1;//预置位编号
 		optional string	 presetname = 2;//预置位名称
-		optional uint32	 relatedvsrcid  = 3;//相关视频源
+		optional sint32	 relatedvsrcid  = 3;//相关视频源,编号取值范围[0,31],即目前最大支持32个源
 	}
 	optional uint64		confid 		= 1;
 	optional uint32 	terid 		= 2;//接收消息的终端
@@ -2284,6 +2351,70 @@ message IndChangeTerInfo
 	optional string 	domainname  = 5;//接收消息的终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
 	repeated AddrInfo  svraddrs     = 6;//接收消息的终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
 	repeated DomainInfo  domains    = 7;//接收消息的终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+message IndConfStatusToTerm//MC将该消息群发到其他所有在会终端（非SR终端可以不透传）
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	message SubStatusInfo
+	{
+		optional uint32 substatustype = 1;//会议中功能的子功能类型,0-共享是否暂停(开启共享的前提下)、1-共享标注(开启共享的前提下)、2-只有主持人可以发起共享
+		optional uint32 substattus = 2;//会议中功能的子功能对应状态,0-关闭、1-开启（substatustype==2时,0-代表所有人都可以发起共享,1-只有主持人可以发起共享）
+		optional uint32 assistvideotimes = 3;//会议中共享时间,单位：秒；目前只支持substatustype==2时使用,默认值是0，代表不限制时间
+	}
+	message ConfStatusInfo
+	{
+		optional uint32 statustype = 1;//会议中功能的类型,0-未知、1-双流（共享）
+		optional uint32 stattus = 2;//会议中功能的状态，0-关闭、1-开启
+		repeated SubStatusInfo substatusinfos   = 3;//会议中功能的子功能
+	}
+	optional uint64			confid 				= 1;
+	optional uint32 		terid 				= 2;
+	repeated ConfStatusInfo confstatusinfos 	= 3;//会议功能信息
+	optional string 	    domainname          = 4;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo       svraddrs            = 5;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo     domains             = 6;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
+}
+// 通知共享者(双流发送者)停止共享
+message IndStopSendAssistVideo
+{
+	message IPPORT
+	{
+		optional uint32 nettype = 1; // 网络类型,0-内网,1-外网
+		optional string ip = 2;	// 
+		optional uint32 port = 3; // 
+	}
+	message AddrInfo
+	{
+		optional uint32  svrtype     = 1;//服务类型relaymc=3
+		repeated IPPORT  ipportinfos = 2;//地址信息
+		optional uint32  level       = 3;//svrtype为3(relaymc)时填入,便于每级relaymc进行比对用
+	}
+	message DomainInfo
+	{
+		optional string  dname       = 1;//域名名称
+		optional uint32  dlevel      = 2;//域名的层级关系
+	}
+	optional uint64 	confid 				= 1;
+	optional uint32 	terid 				= 2;//共享者
+	optional string     domainname          = 3;//终端所属域的域名,web会控(sponsortype==2和terid==0)可以不关注
+	repeated AddrInfo   svraddrs            = 4;//终端相关服务(relaymc)地址信息,web会控(sponsortype==2和terid==0)可以不关注
+	repeated DomainInfo  domains            = 5;//终端相关的域名路径信息,web会控(sponsortype==2和terid==0)可以不关注
 }
 ////////////Indication end//////////////
 

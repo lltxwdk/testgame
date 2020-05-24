@@ -1,0 +1,77 @@
+﻿生成启动时间为 2020/5/22 0:47:11。
+     1>项目“E:\suirui\06.S-plan\code\02.Product\Cloud\Cpp\Devmgr\branches\dev_crs_net\src\DevMgr\DevMgr.vcxproj”在节点 2 上(Build 个目标)。
+     1>ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\CL.exe /c /I..\sredisdll\ /I"..\json\jsoncpp\jsoncpp-0.10.7\include\\" /I..\..\..\..\..\..\..\..\01.BaseLib\netlib\include /I"..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\include" /I"..\..\..\..\..\..\..\..\00.Common\protobuf\protobuf-interface\output" /I..\..\build\windows\mysql\include /I..\..\..\..\..\..\..\..\00.Common\common /I..\..\build\windows\shentong\include /I"..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include" /I"..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\event2" /I"..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\compat" /I"..\..\build\windows\libevent-2.1.8-stable\win\vs2013\include\WIN32-Code\nmake" /ZI /nologo /W3 /WX- /sdl /Od /Oy- /D WIN32 /D MYSQL_DB_DEF /D _DEBUG /D _CONSOLE /D _LIB /D _AFXDLL /D _SCL_SECURE_NO_WARNINGS /D _CRT_SECURE_NO_WARNINGS /D _WINSOCK_DEPRECATED_NO_WARNINGS /Gm /EHsc /RTC1 /MTd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Fo"Debug\\" /Fd"Debug\vc120.pdb" /Gd /TP /analyze- /errorReport:prompt DevMgr.cpp
+         DevMgr.cpp
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1685): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1731): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1779): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1852): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1910): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(1979): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2004): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2077): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2102): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2209): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2284): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2345): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2414): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2449): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2518): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2595): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2630): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2699): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2936): warning C4800: “unsigned int”: 将值强制为布尔值“true”或“false”(性能警告)
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(2937): warning C4805: “!=”: 在操作中将类型“bool”与类型“unsigned int”混合不安全
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3213): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3241): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3402): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3505): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3686): warning C4244: “初始化”: 从“__int64”转换到“int”，可能丢失数据
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(3999): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(4493): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(6099): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(6868): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(6927): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(7429): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(7439): error C2059: 语法错误:“)”
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(7449): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(8735): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(8774): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(9209): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(9269): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(9336): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(9807): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(10401): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(10778): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(11696): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(11819): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(11904): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(11930): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(18363): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(18405): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(21232): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(21629): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(22136): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(22761): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(22803): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(23407): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(23592): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(23681): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24113): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24150): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24344): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24555): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24580): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24774): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(24978): warning C4244: “初始化”: 从“__int64”转换到“int”，可能丢失数据
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(25542): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(25574): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(25769): warning C4244: “初始化”: 从“__int64”转换到“int”，可能丢失数据
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(25901): warning C4018: “<”: 有符号/无符号不匹配
+     1>e:\suirui\06.s-plan\code\02.product\cloud\cpp\devmgr\branches\dev_crs_net\src\devmgr\devmgr.cpp(26525): warning C4018: “<”: 有符号/无符号不匹配
+     1>已完成生成项目“E:\suirui\06.S-plan\code\02.Product\Cloud\Cpp\Devmgr\branches\dev_crs_net\src\DevMgr\DevMgr.vcxproj”(Build 个目标)的操作 - 失败。
+
+生成失败。
+
+已用时间 00:00:02.81

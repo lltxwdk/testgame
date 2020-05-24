@@ -1,0 +1,49 @@
+CUR_DIR := $(shell pwd)
+
+SHARE_DIR := $(CUR_DIR)/../../build/linux/sredisdll/lib/32/
+$(shell [ -d ${SHARE_DIR} ] || mkdir -p ${SHARE_DIR})
+
+ver = debug
+ifeq ($(ver), debug)
+CFLAGS := -g -Wall -DLINUX
+else
+CFLAGS := -O2 -Wall -DLINUX  
+endif
+
+CC := g++  
+
+LOCAL_SRC_FILES :=  \
+      sredis.cpp\
+      sredisdll.cpp\
+      
+CSRCS :=  \
+	   $(LOCAL_SRC_FILES) \
+
+COBJS := $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(CSRCS)) 
+
+STATIC_LIBRARIES := \
+		-L$(CUR_DIR)/../../build/linux/third-party/redis-3.0.5/lib/32/ \
+		-lhiredis \
+
+SHARED_LIBRARIES := \
+		-L$(CUR_DIR)/ \
+		
+LDLIB :=  \
+	 $(STATIC_LIBRARIES) \
+	 $(SHARED_LIBRARIES) \
+
+LDFLAGS:= -shared -fPIC  -pthread
+
+INCDIR := \
+	  -I$(CUR_DIR)/../../build/linux/third-party/redis-3.0.5/include
+
+TARGET := $(SHARE_DIR)/libsredisdll.a 
+#TARGET := libsredisdll.a 
+
+$(TARGET): $(COBJS)
+	ar r $(TARGET) $^
+
+$(COBJS):$(OBJ_DIR)/%.o:%.cpp
+	$(CC) -c  $< -o $@ $(INCDIR) $(CFLAGS) 
+clean:  
+	rm -rf *.o  *.a  $(COBJS) $(TARGET)  

@@ -29,8 +29,10 @@ public:
 	unsigned int GetOPDBNum() const { return m_nOPDBNum; }
 	unsigned int GetWriteDBTimespan() const { return m_nWriteDBTimespan; }
 	unsigned int GetDevHeartbeatTimeout() const { return m_nDevHeartbeatTimeout; }
+	unsigned int GetConfDetailInfoTimeout() const { return m_nConfdtlinfoTimeout; }
 	bool IsCloseTimeoutSocket() const { return m_bCloseTimeoutSocket; }
-
+	unsigned int GetMCLinceneInfoTime() const { return m_nMCLinceneInfoTime; }
+	
 	unsigned int GetMySvrType() const { return m_nMySvrType; }
 	std::string GetMySerialNumber()const { return m_szMySerialNumber; }
 	std::string GetSelfRegSerialNO()const { return m_szSelfRegSerialNO; }
@@ -84,8 +86,9 @@ private:
 	unsigned int m_nOPDBNum;
 	unsigned int m_nWriteDBTimespan;
 	unsigned int m_nDevHeartbeatTimeout;
+	unsigned int m_nConfdtlinfoTimeout;
 	bool m_bCloseTimeoutSocket;
-
+	unsigned int m_nMCLinceneInfoTime;
 	// generate
 	unsigned int m_nMySvrType;
 	std::string m_szMySerialNumber;

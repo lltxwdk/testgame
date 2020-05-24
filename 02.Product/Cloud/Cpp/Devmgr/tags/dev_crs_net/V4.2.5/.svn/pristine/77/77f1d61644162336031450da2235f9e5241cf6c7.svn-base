@@ -1,0 +1,94 @@
+CUR_DIR := $(shell pwd)
+OBJ_DIR := $(CUR_DIR)
+LIB_DIR := $(CUR_DIR)/../../build/linux
+INCLUDE_DIR := $(CUR_DIR)/../../build/linux
+COMMON_DIR := /home/admin/00.Common/
+LIBSOCKET_DIR := /home/admin/01.BaseLib/libsocket2
+
+BIN_DIR := $(CUR_DIR)/../../build/linux/devmgr/bin/32/
+$(shell [ -d ${BIN_DIR} ] || mkdir -p ${BIN_DIR})
+
+ver = debug
+ifeq ($(ver), debug)
+CFLAGS := -g -fPIC -Wall -DLINUX
+else
+CFLAGS := -O2 -fPIC -Wall -DLINUX
+endif
+
+CC := g++  
+
+LOCAL_SRC_FILES :=  \
+      AutoTrace.cpp \
+      utility.cpp \
+      thread.cpp \
+      thread_mutex.cpp \
+      asyncthread.cpp \
+      parser.cpp \
+		  DBconnector.cpp \
+      list_conference.cpp \
+      list_confreport.cpp \
+	    list_device.cpp \
+      list_deviceconfdetail.cpp \
+      list_deviceconfig.cpp \
+      list_mediagroup.cpp \
+      list_userconfdetail.cpp \
+      wrapper_msg.cpp \
+      tcpclient.cpp \
+      tcpserver.cpp \
+      DevMgr.cpp
+
+CSRCS :=  \
+	   $(LOCAL_SRC_FILES) 
+	   
+CCSRCS :=  \
+	   device_ser.pb.cc
+
+COBJS := $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(CSRCS)) 
+CCOBJS := $(patsubst %.cc, $(OBJ_DIR)/%.o, $(CCSRCS)) 
+
+STATIC_LIBRARIES := \
+		-L$(CUR_DIR)/../../build/linux/third-party/redis-3.0.5/lib/32/ \
+		-lhiredis \
+		-L$(LIB_DIR)/sredisdll/lib/32/ \
+		-lsredisdll \
+		-lpthread \
+	  -L$(LIB_DIR)/third-party/mysql/32/lib/ \
+		-lmysqlclient \
+	  -L/home/admin/00.Common/protobuf/protobuf-interface/lib/linux/32bit_Intel-80386/ \
+		-lprotobuf \
+	  -L/home/admin/01.BaseLib/libsocket2/lib/ \
+    -lsocket
+
+SHARED_LIBRARIES := \
+		-L$(CUR_DIR)/ \
+		
+LDLIB :=  \
+	 $(STATIC_LIBRARIES) \
+	 $(SHARED_LIBRARIES) \
+
+LDFLAGS:= -ldl -lrt
+#LDFLAGS:= -shared -fPIC -ldl -lrt
+
+INCDIR := \
+	  -I$(CUR_DIR)/../../build/linux/third-party/redis-3.0.5/include \
+	  -I$(INCLUDE_DIR)/sredisdll/include/ \
+	  -I$(INCLUDE_DIR)/third-party/mysql/32/include/ \
+	  -I$(COMMON_DIR)/protobuf/protobuf-interface/include/ \
+	  -I$(COMMON_DIR)/protobuf/src/protobuf-2.6.1/src/ \
+	  -I$(LIBSOCKET_DIR)/include/ \
+	  -I$(LIBSOCKET_DIR)/interface/ \
+	  -I$(COMMON_DIR)/common/
+
+TARGET := devmgr
+
+$(TARGET): $(COBJS) $(CCOBJS)
+	$(CC) -o $(TARGET)  $(COBJS) $(CCOBJS) $(LDFLAGS) $(LDLIB)
+	cp devmgr $(BIN_DIR)
+	cp devmgr /home/devmgr/
+
+$(COBJS):$(OBJ_DIR)/%.o:%.cpp 
+	$(CC) -c  $< -o $@ $(INCDIR) $(CFLAGS) 
+$(CCOBJS):$(OBJ_DIR)/%.o:%.cc 
+	$(CC) -c  $< -o $@ $(INCDIR) $(CFLAGS) 
+clean:  
+	rm -rf *.o  *.a  $(COBJS) $(TARGET)  

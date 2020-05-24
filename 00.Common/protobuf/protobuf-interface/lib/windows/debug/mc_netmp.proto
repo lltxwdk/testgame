@@ -25,6 +25,7 @@ message ReqNetMPCreateConf
 	optional uint32     netmpid             = 3;//netmp_token
 	optional uint32		maxterms			= 4;
 	optional uint32     netmpno             = 5;//mc给会议netmp预分配的编号
+	optional uint32		useedgeserver		= 6;//会议是否使用边缘服务,0-默认不使用、1-使用
 }
 //告诉NetMP 会议中有其他NetMP被删除
 message IndDeleteOtherNetMP //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
@@ -253,10 +254,15 @@ message IndConfAllNetMPs//在MC收到NetMP创建会议成功之后,向其发送�
 		optional uint32 terid     = 1;
 		optional uint32 channelid = 2;
 	}
+	message IPPORT
+	{
+		optional string ip = 1;	// 
+		optional uint32 port = 2; // 
+	}
 	message NetMPsInConf
 	{
 		optional uint32 netmpid 			= 1;
-		optional string netmpip				= 2;
+		optional string netmpip				= 2;// 该netmp注册devmgr时使用的localip(nettype等于0)或者connip(nettype等于1),如果edgeipports有地址和端口信息则忽略该字段
 		repeated TersInNetMP 	terids		= 3;
 		optional uint32	audiodatarecvport	= 4;
 		optional uint32	audioctrlrecvport	= 5;
@@ -269,6 +275,7 @@ message IndConfAllNetMPs//在MC收到NetMP创建会议成功之后,向其发送�
 		optional uint32	desktopdatarecvport = 12;
 		optional uint32	desktopctrlrecvport	= 13;
 		optional uint32 netmpno             = 14;//mc给会议netmp预分配的编号
+		repeated IPPORT edgeipports   		= 15;//如果有值说明该netmp提供了对外的边缘地址和端口
 	}	
 	optional uint32		mcid			= 1;
 	optional uint32		netmpid			= 2;
@@ -278,11 +285,16 @@ message IndConfAllNetMPs//在MC收到NetMP创建会议成功之后,向其发送�
 //发送到已经在会议中的NetMP
 message IndConfAddNewNetMP //若一个会议在多个NetMP上召开,群发该消息到该会议上所有的NetMp
 {
+	message IPPORT
+	{
+		optional string ip = 1;	// 
+		optional uint32 port = 2; // 
+	}
 	optional uint32		mcid			= 1;
 	optional uint32		netmpid			= 2;
 	optional uint64		confid			= 3;
 	optional uint32  	newnetmpid		= 4;
-	optional string  	newnetmpip		= 5;
+	optional string  	newnetmpip		= 5;// 该newnetmpid注册devmgr时使用的localip(nettype等于0)或者connip(nettype等于1),如果edgeipports有地址和端口信息则忽略该字段
 	optional uint32	audiodatarecvport	= 6;
 	optional uint32	audioctrlrecvport	= 7;
 	optional uint32	videodatarecvport	= 8;
@@ -294,6 +306,7 @@ message IndConfAddNewNetMP //若一个会议在多个NetMP上召开,群发该消
 	optional uint32	desktopdatarecvport = 14;
 	optional uint32	desktopctrlrecvport	= 15;
 	optional uint32 newnetmpno          = 16;//mc给会议netmp预分配的编号
+	repeated IPPORT edgeipports   		= 17;//如果有值说明该newnetmpid提供了对外的边缘地址和端口
 }
 
 //发送到新添加到会议的NetMP
@@ -384,11 +397,16 @@ message IndVASChannelidToNetMp
 /////////////////////////////////NetMP-->MC/////////////////////////////////////
 message RspMCConfCreate
 { 
+	message IPPORT
+	{
+		optional string ip = 1;	// 
+		optional uint32 port = 2; // 
+	}
 	optional bool 		isok				= 1;
 	optional uint64		confid				= 2;
 	optional uint32		mcid				= 3;
 	optional uint32		netmpid				= 4;//netmp_deviceid
-	optional string     netmpip				= 5;
+	optional string     netmpip				= 5;//对应netmp配置文件的pub ip
 	optional uint32		audiodatarecvport	= 6;
 	optional uint32		audioctrlrecvport	= 7;
 	optional uint32		videodatarecvport	= 8;
@@ -402,6 +420,7 @@ message RspMCConfCreate
 	optional string 	failreason			= 16; //若失败，则会有失败说明	
 	optional uint32     netmpno             = 17;//mc给会议netmp预分配的编号
 	optional uint32     errorcode           = 18;//错误提示对应的错误码
+	repeated IPPORT     edgeipports   		= 19;//如果有值说明该netmp提供了对外的边缘地址和端口
 }
 
 message IndMCHeartBeatOfNetMP

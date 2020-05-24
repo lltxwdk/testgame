@@ -54,6 +54,12 @@ bool CParser::Parser()
 		m_nOPDBNum = GetIniKeyInt("operatdbnum", "OperatDBNum", m_szFileUrl.c_str());
 		m_nWriteDBTimespan = GetIniKeyInt("timespan", "WriteDBTimespan", m_szFileUrl.c_str());
 		m_nDevHeartbeatTimeout = GetIniKeyInt("timespan", "DevHeartbeatTimeout", m_szFileUrl.c_str());
+		m_nConfdtlinfoTimeout = GetIniKeyInt("timespan", "ConfDetailInfoTimeout", m_szFileUrl.c_str());
+		m_nMCLinceneInfoTime = GetIniKeyInt("timespan", "DevLinceneCheckTime", m_szFileUrl.c_str());
+		if (m_nConfdtlinfoTimeout == 0)
+		{
+			m_nConfdtlinfoTimeout = 5 * 60;//ƒ¨»œ5∑÷÷”
+		}
 
 		int isCloseTimeoutSocket = GetIniKeyInt("timespan", "IsCloseTimeoutSocket", m_szFileUrl.c_str());
 		m_bCloseTimeoutSocket = (isCloseTimeoutSocket != 0) ? true : false;

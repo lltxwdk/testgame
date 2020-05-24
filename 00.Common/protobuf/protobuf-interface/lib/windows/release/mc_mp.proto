@@ -65,7 +65,7 @@ message IndMPTerJoined
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -260,7 +260,7 @@ message CmdMPSetScreenLayout
 		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 	= 7;//终端名称
-		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空表示不指定范围。
 	} 
 	optional uint64				confid			= 1;//被设置的会议
@@ -392,7 +392,7 @@ message IndMPTerCameraEnable
 {
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64 	confid 			= 1;
@@ -443,7 +443,7 @@ message IndMPChangeVideoSourceName
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64 	confid 			= 1;
@@ -459,7 +459,7 @@ message IndMPChangeVideoSourcePriority
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional uint32	priority  = 2;//源的优先级级别(决定srcid谁将是主源)
 	}
 	optional uint64 	confid 			= 1;
@@ -475,7 +475,7 @@ message IndMPNewAudioSourceJoined
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -493,7 +493,7 @@ message IndMPAudioSourceLeave
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 	}
 	optional uint64 	confid 			= 1;
@@ -509,7 +509,7 @@ message IndMPNewVideoSourceJoined
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -528,7 +528,7 @@ message IndMPVideoSourceLeave
 {
     message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -546,7 +546,7 @@ message IndMPChangeDeviceInfos
 {
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 		optional string	  name	  = 2;//源名称
 		optional bool     isOn    = 3;//源是否打开
 		optional uint32	priority  = 4;//源的优先级级别(决定srcid谁将是主源)
@@ -588,7 +588,7 @@ message IndMPChairLock
 {
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	
 	optional uint64 	confid 		= 1;
@@ -602,7 +602,7 @@ message IndMPChairUnLock
 {
 	message SourceInfo 
 	{ 
-	    optional uint32	  srcid   = 1;//源编号,0-0号摄像头、1- 1号源、2-2号源、、、31-31号源,目前最大支持32个源
+	    optional sint32	  srcid   = 1;//源编号,编号取值范围[0,31],即目前最大支持32个源
 	}
 	
 	optional uint64 	confid 			= 1;
@@ -648,7 +648,7 @@ message CmdMPSeleteVideo
 		optional uint32 terid 		= 1; 
 		optional uint32 channelid	= 2;// 终端通道id
 		optional uint32 videosize	= 3;// 0:不看 1:level-1 2:level-2 3:level-3.......n:level-n
-		optional uint32 srcid 		= 4;// 终端视频源编号,0-0号源、1- 1号源、2-2号源、、、31-31号源,最大支持32个源
+		optional sint32 srcid 		= 4;// 终端视频源编号,编号取值范围[0,31],即目前最大支持32个源
 	} 
 	optional uint64		confid		= 1;
 	optional uint32		mcid		= 2;//接收消息的mc_deviceid
@@ -698,7 +698,7 @@ message IndMPLayoutInfo
 		optional uint32 terid 		= 5;//如果contenttype==3时,表示对应双流发送者terid
 		optional uint32 channelid	= 6;//如果contenttype==3时,表示对应双流发送者channelid
 		optional string tername 	= 7;//终端名称
-		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0-0号摄像头、1- 1号摄像头、2-2号摄像头、、、31-31号摄像头,目前最大支持32个摄像头
+		optional sint32 vsrcid      = 8;//sint32类型比int32在编码负数时效率更高,终端视频源编号,-1-没有摄像头,0~31号摄像头,目前最大支持32个摄像头
 		repeated AutoPollInfo  autopolllist = 9;//optype==3时,自动轮巡名单列表，如果为空表示不指定范围。
 	}
 	message LayoutInfo

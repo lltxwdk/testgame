@@ -14,6 +14,7 @@
 #include "sr_queuemsgid.h"
 #include "timer_manager.h"
 
+#include "list_compcap.h"
 using namespace ISREDIS;
 using std::vector;
 using std::map;
@@ -113,7 +114,8 @@ class CRollCallList;
 class CConfPollInfo;
 class CPollList;
 class CDataDictionary;
-
+class CCompLincene;
+class CSysParameter;
 
 struct sMysqlTablePtr
 {
@@ -145,6 +147,47 @@ enum tag_timerflag{
 	e_req_up_stunserverinfo_timer = 0xaab6,
 	e_register_self_timer = 0xaab7,
 };
+typedef enum{
+	e_CompanyLincene_Uknow		= 0,
+	e_CompanyLincene_Conf		= 1,
+	e_CompanyLincene_Sr			= 2,
+	e_CompanyLincene_Std		= 3,
+	e_CompanyLincene_Monitor	= 4,
+	e_CompanyLincene_Voice		= 5,
+	e_CompanyLincene_Live		= 6,
+	e_CompanyLincene_Record		= 7,
+
+}E_CompanyLinceneType;
+
+typedef enum{
+	e_Term_From_Platform = 0x0, // 随锐平台(随锐自有RP终端)
+	e_Term_From_Gateway = 0x1 // 随锐网关(H.323终端、SIP终端)
+}E_TermFromType;
+
+typedef enum{
+	e_StdTermType_AUTO_TER = 0x0000, // 协议自动,终端
+	e_StdTermType_AUTO_MCU = 0x0001, // 协议自动,MCU
+	e_StdTermType_AUTO_MONITOR_LIVE = 0x0002, // 协议自动,监控实时流
+	e_StdTermType_AUTO_MONITOR_REC = 0x0003, // 协议自动,监控录像
+	e_StdTermType_AUTO_PSTN = 0x0004, // 协议自动,95013语音网关PSTN呼叫
+	e_StdTermType_AUTO_VX = 0x0005, // 协议自动,微信网页客户端
+	e_StdTermType_AUTO_STREAM_LIVE = 0x0006, // 协议自动,流媒体实时(直播)流
+	e_StdTermType_AUTO_TRUNK = 0x0007, // 协议自动,TRUNK
+
+	e_StdTermType_SIP_TER = 0x0100, // SIP协议,终端
+	e_StdTermType_SIP_MCU = 0x0101, // SIP协议,MCU
+	e_StdTermType_SIP_PSTN = 0x0104, // SIP协议,PSTN
+	e_StdTermType_SIP_TRUNK = 0x0107, // SIP协议,TRUNK
+
+	e_StdTermType_H323_TER = 0x0200, // H323协议,终端
+	e_StdTermType_H323_MCU = 0x0201, // H323协议,MCU
+	e_StdTermType_H323_PSTN = 0x0204, // H323协议,PSTN
+	e_StdTermType_H323_TRUNK = 0x0207, // H323协议,TRUNK
+
+	e_StdTermType_GB28181_MONITOR_LIVE = 0x0302, // GB28181协议,监控实时流
+	e_StdTermType_GB28181_MONITOR_REC = 0x0303, // GB28181协议,监控录像
+	e_StdTermType_RTSP_STREAM_LIVE = 0x0506, // RTSP协议,流媒体实时(直播)流
+}E_StdTermType;
 
 class UpdateDeviceInfoData
 {
@@ -211,14 +254,12 @@ public:
 
 	CAsyncThread*	m_pMainThread;			// 用户机主线程
 	CDevice* m_pMainDevice;
-	CDevice* m_pUpmsgDevice;
 	std::map<CAsyncThread*, CDevice*> m_mapAsyncThreadDevice;
 
 	std::map<std::string, std::string> m_mapSystemDomainInfo;
 	std::string m_softwareversion;
 
 	CDeviceConfig* m_pMainDeviceConfig;
-	CDeviceConfig* m_pUpmsgDeviceConfig;
 	std::map<CAsyncThread*, CDeviceConfig*> m_mapAsyncThreadDeviceConfig;
 
 	CConference* m_pMainConference;
@@ -277,6 +318,14 @@ public:
 	CDataDictionary* m_pMainDataDictionary;
 	std::map<CAsyncThread*, CDataDictionary*> m_mapAsyncThreadDataDictionary;
 
+	CSysParameter* m_pMainSysParameter;
+	std::map<CAsyncThread*, CSysParameter*> m_mapAsyncThreadSysParameter;
+
+	CCompCapLincene* m_pMainLinceneCompCap;
+	CCompCapLincene* m_pUpmsgLinceneCompCap;
+	std::map<CAsyncThread*, CCompCapLincene*> m_mapAsyncThreadLinceneCompCap;
+	
+
 	//CUserConfDetail* m_pMainUserConfDetail;
 	//CUserConfDetail* m_pUpmsgUserConfDetail;
 	//std::map<CAsyncThread*, CUserConfDetail*> m_mapAsyncThreadUserConfDetial;
@@ -286,6 +335,7 @@ public:
 	void Handle_CheckDeviceHeartbeat(void *pArg);
 	void Handle_UpdateHttpSvrLisentState(void *pArg);
 
+	void Handle_UpdateHttpLinceneInfo_msg(void *pArg);
 //#ifdef WIN32
 //	UINT m_idCheckHeartbeatTimer;
 //#elif defined LINUX
@@ -303,8 +353,107 @@ protected:
 	int ReloadNginx(char* domainname, char* regip, char* connip, unsigned int port);
 	void Handle_ReloadNginx(void* pArg);
 	//int CheckDomainInfoHavechange(char* newdomainip, char* domainname, int checktype);
+	//初始化加载授权信息
+	void InitLinceneInfo();
+	
+	void Handle_InitLinceneInfo(void* pArg);
 
-	void UpdateConfRealtime(unsigned long long confid, int realtimetype, char* time, time_t lltime, int permanentenable=0); // realtimetype=0表示真实开始时间,realtimetype=1表示真实结束时间
+	bool InitLicenceInfoToRedis(CCompCapLincene* pCompLincene);
+	void SetInitCompCapMapTables();
+	//
+	void SetCompLinceneMapInfo(std::map<string, sLinceneInfo>& mapLinceneTable, char* src, char* value);
+	void GetCompLinceneTypeInfo(const char* src, char* type, char* attribute);
+
+	//拆分授权开始时间
+	void GetLinceneStartTime(map<std::string, sLinceneInfo>& linceneInfo, const char* src);
+
+	bool GetAllCompLinceneInfo(std::map<int, map<std::string, sLinceneInfo> >& mapComplincene, CCompCapLincene* pCompLincene);
+	//
+	unsigned int GetMcGroupId(unsigned int mcid);
+	void CheckRedisTernumLicence(int compid);
+
+	//查询数据库企业授权
+	void Handle_SelectCompLinceneInfoToDB(void* pArg);
+	void SelectCompLinceneInfoToDB(CCompCapLincene* pCompLincene, std::set<unsigned int> scompid);
+
+	//授权修改后通知mc
+
+	void CompLinceneUpdateToMC(std::map<unsigned int, map<std::string, sLinceneInfo> > mapLinceneInfo);
+	//企业授权修改后将新的授权value更新redis
+
+	void UpdateCompLinceneInfo(std::map<unsigned int, map<std::string, sLinceneInfo> > linceneInfo);
+
+	//企业剩余授权信息
+	int GetCompLinceneSuperInfo(int compid, unsigned int licencetype, int needcount,bool writeflag);
+	//
+	void SetMcCompLinceneInfo(unsigned int mcid, unsigned int compid, int usecount, bool isstart);
+	//设置会议与企业关联表 type -1 add conf  -0 delete conf
+	void SetConfToCompList(unsigned int compid, unsigned long long confid, int type);
+
+	void TimeoutConfLinceneRevover(std::vector<SR_uint64> ConfidList);
+	//
+	void SetMcCompanyUseLincene(unsigned int deviceid, unsigned int compid,unsigned int lictype,int count,bool isues);
+	//截取字符串
+	void SubString(std::map<std::string, int>& cmd_key_val, std::string src);
+	//
+	void OperationRedisUseSurpLincene(int compid, const char* srckey,int opcount,bool opertype);
+	//获取企业总授权
+	void GetCompTotalLincene(unsigned int compid,std::map<string, int>& mapCompLincene);
+	//devmgr请求获取企业某些授权
+	bool ReqCompLinceneInfo(const SRMsgs::ReqLicenseFromDevMgr* req, CCompCapLincene* pCompLincene, SRMsgs::RspLicenseToMC* rspsend);
+	//异常情况(授权不成功)时企业使用授权情况的确认
+	void CompanyUseLicenceACK(const SRMsgs::IndCompanyUseLicenceACK* req);
+	//检测本次会议请求信息是否是第一次入会还是断线重连
+	void CheckConfReqInfoAndRecoveryLincene(unsigned long long confid, unsigned int deviceid);
+	// 将mc对应的会议中各企业授权信息存入redis
+	void SetConfCompLinceneInfoToRedis(unsigned long long confid, unsigned int deviceid, unsigned int compid, unsigned int lictype, int count);
+	//删除mc上会议confid的表
+	void DeleteMcConfCompLinceneTables(unsigned long long confid, unsigned int deviceid);
+	//回收会议的相关企业授权信息
+	void RecoveryConfCompLinceneInfo(std::map<string, map<string, int> > mapLinceneInfo, unsigned long long confid, unsigned int deviceid);
+	//同步会议授权
+	void CheckMCSynConfCompLinceneInfo(unsigned long long confid, unsigned int deviceid, unsigned int confcompid,int liveCount,int recordCount);
+	//同步终端授权
+	void GetMCSynConfTernCompLinceneInfo(std::map<unsigned int, map<std::string, int> >& mapComplincene, unsigned int terncompid, int fromtype, int termtype);
+	void CheckMCSynConfTernCompLinceneInfo(unsigned long long confid, unsigned int deviceid, std::map<unsigned int, map<std::string, int> > mapComplincene);
+	//检验mc上会议的授权信息
+	void CheckMCConfLinceneInfo();
+	// 更新校验各个mc上授权信息
+	void UpdateCheckMCHeartbeatLinceneInfo(const SRMsgs::IndsertodevHeart* ind);
+	//终端授权
+	void RecoverTermLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, unsigned int termtype, unsigned int confrelcompid,unsigned int fromtype, char* time, time_t lltime);
+	void Handle_RecoverTermLincene(void* pArg);
+	
+	//回收会议授
+	void RecoverConfLincene(unsigned int deviceid, unsigned long long confid, unsigned int confrelcompid, char* time, time_t lltime);
+	void Handle_RecoverConfincene(void* pArg);
+	//回收录制授权
+	void RecoverRecordLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, char* time, time_t lltime);
+	void Handle_RecoverRecordLincene(void* pArg);
+	//回收直播授权
+	void RecoverLiveLincene(unsigned int deviceid, unsigned long long confid, unsigned int userrelcompid, char* time, time_t lltime);
+	void Handle_RecoverLiveLincene(void* pArg);
+
+	//添加同步的企业id到redis
+	void SyncCompIdToRedis(unsigned int deviceid, unsigned int compid);
+	void DeleteCompanyInfoRedis(int deviceid);
+	// delete企业授权信息
+	void Handle_DeleteCompanyInfoRedis(void *pArg);
+	//update企业授权信息到redis
+	void UpdateCompanyInfoRedis(std::map<unsigned int, map<unsigned int, sLinceneInfo> > mapLinceneInfo, int opertype, bool isdelete = false);
+	//update企业授权信息到redis
+	void UpdateTotalCompanyInfoRedis( unsigned int compid, map<unsigned int, sLinceneInfo> mapLinceneInfo, bool isdelete);
+
+	// 更新下级发到上级的企业授权信息
+	void SyncSubCompCapInfo(const SRMsgs::IndSubCompCapInfoToDevmgr* ind, time_t timeNow);
+	// 更新上级到下级的企业授权信息
+	void SyncUpCompCapInfo(const SRMsgs::IndUpCompCapInfoToDevmgr* ind, time_t timeNow);
+	// 授权信息发生变化通知上下级devmgr
+	void CompLinceneUpdateToAllDevmgr(std::map<unsigned int, map<std::string, sLinceneInfo> > linceneInfo,int opertype);
+	
+
+	// realtimetype=0表示真实开始时间,realtimetype=1表示真实结束时间;permanentenable=0表示一次性会议、permanentenable=1表示永久性会议、permanentenable=-1表示超时回写数据时未知会议是一次性会议还是永久会议
+	void UpdateConfRealtime(unsigned long long confid, int realtimetype, char* time, time_t lltime, int permanentenable=-1);
 	void Handle_UpdateConfRealtime(void* pArg);
 	void InsertConfReport(unsigned long long confid, unsigned long long confreportid, char* time, time_t lltime);
 	void UpdateConfReport(unsigned long long confid, unsigned long long confreportid, char* time, time_t lltime);
@@ -312,12 +461,12 @@ protected:
 	void Handle_UpdateConfReport(void* pArg);
 	
 	void InsertDeviceConfDetail(unsigned long long confid, int deviceid, unsigned long long confreportid, unsigned long long devicedetailid, char* time, time_t lltime, bool bfromnetmp = false);
-	void UpdateDeviceConfDetail(unsigned long long confid, int deviceid, char* time, time_t lltime);
+	void UpdateDeviceConfDetail(unsigned long long confid, int deviceid, unsigned long long confreportid, unsigned long long devicedetailid, char* time, time_t lltime);
 	void Handle_InsertDeviceConfDetail(void* pArg);
 	void Handle_UpdateDeviceConfDetail(void* pArg);
 
 	void InsertConfRecord(unsigned long long confid, unsigned long long confreportid, unsigned long long confrecordid, char* time, time_t lltime, char* confname);
-	void UpdateConfRecord(unsigned long long confid, unsigned long long confreportid, char* time, time_t lltime, char* confname);
+	void UpdateConfRecord(unsigned long long confid, unsigned long long confreportid, unsigned long long confrecordid, char* time, time_t lltime, char* confname);
 	void Handle_InsertConfRecord(void* pArg);
 	void Handle_UpdateConfRecord(void* pArg);
 
@@ -337,7 +486,7 @@ protected:
 	void Handle_UpdateTerStatisticsInfo(void* pArg);
 
 	void AddUserConfDetail(int suid, unsigned long long confid, unsigned long long confreportid, unsigned long long userrptdetailid, char* alias, char* time, time_t lltime, int fromtype, int termtype);
-	void DelUserConfDetail(int suid, unsigned long long confid, char* time, time_t lltime);
+	void DelUserConfDetail(int suid, unsigned long long confid, unsigned long long confreportid, unsigned long long userrptdetailid, char* time, time_t lltime);
 	
 	void DeleteAllRedis();
 	void LoadAllRedisDevice();
@@ -377,6 +526,12 @@ protected:
 	//void ReqUPStunServerInfoPeric();
 	//void Handle_ReqUPStunServerInfoToDevmgr(void *pArg);
 
+	void CheckConfTimeoutData();
+	void Handle_CheckConfTimeoutData(void *pArg);
+
+	void PushMsgToWriteDBQueue(char* pushvalue);
+	void Handle_PushMsgToWriteDBQueue(void *pArg);
+
 	void CheckWriteDB();
 	void Handle_CheckWriteDB(void *pArg);
 
@@ -393,16 +548,20 @@ protected:
 	void UpdateSelfHeartbeatToDB(int selfdeviceid, time_t timeNow);
 	void Handle_UpdateSelfHeartbeatToDB(void *pArg);
 
-	bool ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *pClient, CDeviceConfig* pDeviceConfig, CDevice* pDevice, CDataDictionary* pDataDictionary, SRMsgs::RspRegister* rspsend);
+	bool ProcessReqRegister(const SRMsgs::ReqRegister* req, DeviceConnect *pClient, CDeviceConfig* pDeviceConfig, CDevice* pDevice, CDataDictionary* pDataDictionary, CCompCapLincene* pCompLincene, CSysParameter* pSysParameter, SRMsgs::RspRegister* rspsend);
 	bool GetDeviceInfo(const SRMsgs::ReqGetDeviceInfo* req, SRMsgs::RspGetDeviceInfo* rsp);
 	bool GetSysDeviceInfo(const SRMsgs::ReqGetSysDeviceInfo* req, SRMsgs::RspGetSysDeviceInfo* rsp);
 	bool GetSystemCurLoad(const SRMsgs::ReqGetSystemCurLoad* req, SRMsgs::RspGetSystemCurLoad* rsp);
 	void UpdatePeerHeartbeatToDB(const SRMsgs::IndsertodevHeart* ind, time_t timeNow);
+	//void GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConference* pConference, CConfParticipant* pConfParticipant, CConfLiveSetting* pConfLiveSetting
+	//	, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, SRMsgs::RspConfInfoToMC* rspsend);
+
 	void GetConfInfoFromDB(const SRMsgs::ReqConfInfoFromDevMgr* req, CConference* pConference, CConfParticipant* pConfParticipant, CConfLiveSetting* pConfLiveSetting
-		, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, SRMsgs::RspConfInfoToMC* rspsend);
+		, CConfRollCallInfo* pConfRollCallInfo, CRollCallList* pRollCallList, CConfPollInfo* pConfPollInfo, CPollList* pPollList, DeviceConnect *pClient);
 
 	void SerialProtoMsgAndSend(DeviceConnect *pClient, int proto_msguid, const google::protobuf::Message* msg);
 
+	void SyncConfInfo(const SRMsgs::IndSyncConfInfo* ind);
 	void SyncConfInfo(const SRMsgs::ReqRegister* req, CDevice* pDevice, time_t timeNow);
 	void GetSubGroupidInfo(SR_uint32 uiParentGroupid, std::set<SR_uint32> &groupids, SR_uint32 &uiNodeNum);
 
@@ -413,7 +572,7 @@ protected:
 	void Handle_ClientReciveData(void* pArg);
 	void Handle_RegisterToDevmgr(void *pArg);
 	bool ParseServerData(AcitiveConnect *pSvr, CAsyncThread* pThread, const char* pData, const int nLen, unsigned long recv_data_time);
-	SR_void processRspRegister(const SRMsgs::RspRegister* s);
+	SR_void processRspRegister(const SRMsgs::RspRegister* s, CCompCapLincene* pCompLincene);
 	void SyncUpSvrInfo(const SRMsgs::IndUpSvrInfoToDevmgr* ind, time_t timeNow);
 	void UpdateUpSvrHeartbeatToDB(const SRMsgs::IndUpSvrHeartTodev* ind, time_t timeNow);
 	void SyncSysSvrInfo(const SRMsgs::RspGetSysDeviceInfo* rsp, time_t timeNow);
@@ -487,13 +646,21 @@ private:
 	typedef std::vector<sUserConfInfo>::iterator UserConfInfo_iter;
 	CCriticalSection m_csUCI;
 
+	//企业授权映射
+	std::map<int, std::string> m_MapCompCapTables;
+	std::map<int, std::string> m_MapCapRedisTables;
+	std::map<std::string, int> m_MapCompCapReverTables;
+	//授权key与redis对应, key-redis表的key,value-授权
+	std::map<std::string, std::string> m_CompCapRedisTables;
+
 	unsigned int m_op_db_num;
 	unsigned int m_write_db_timespan;
 	//unsigned long long m_ullnum_per_post;
 	time_t m_last_post_msg_time; // 秒级
 	unsigned int m_nGetDevHeartbeatTimeout;
+	unsigned int m_nConfdtlinfoTimeout;// redis中会议计费信息超时时间,单位（秒）
 	bool m_bCloseTimeoutSocket; // 是否删除心跳超时socket
-
+	unsigned int m_nGetMCLinceneInfoTime; // 校验mc上各会议中企业授权信息时间,单位（秒）
 
 	int m_iLoglevel;
 	bool m_bisStdout;

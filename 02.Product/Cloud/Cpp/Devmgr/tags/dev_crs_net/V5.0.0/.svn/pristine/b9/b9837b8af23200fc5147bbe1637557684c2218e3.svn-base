@@ -1,0 +1,454 @@
+
+#ifdef WIN32
+#include "stdafx.h"
+#endif
+#include "list_conference.h"
+#include <cstdlib>
+#include <stdio.h>
+
+CConference::CConference()
+{
+	m_exist = false;
+	
+	m_conf_id = 0;
+	m_user_id = 0;
+	m_conf_passwd = "";
+	m_recv_passwd = "";
+	m_conf_subject = "";
+	m_create_date = "";
+	m_conf_type = 0;
+	m_conf_chairman = 0;
+	m_conf_starttype = 0;
+	m_conf_starttime = "";
+	m_conf_endtime = "";
+	m_conf_maxterm = 0;
+	m_audio_enable = 0;
+	m_video_enable = 0;
+	m_permanent_enable = 0;
+	m_isdeleted = 0;
+	m_ctrl_user_id = 0;
+	m_anonymous_enable = 0;
+	m_conf_name = "";
+	m_encrypt_alg = 0;
+	m_device_id = 0;
+	m_auto_rec = 0;
+}
+
+CConference::~CConference()
+{
+
+}
+
+//CConference* pConference
+//{
+//	static CConference g_cConference;
+//	return &g_cConference;
+//}
+
+bool CConference::InsertDB()
+{
+/*	char cInsert[1024];
+	sprintf(cInsert, "insert into device(device_id, mediagroup_id, device_config_serial, device_serial, \
+			device_type, device_ip, device_port, max_terms) values('%d','%d','%s','%s','%d','%s','%d','%d')", \
+			m_device_id, m_mediagroup_id, m_device_config_serial.c_str(), m_device_serial.c_str(), m_device_type, 
+			m_device_ip.c_str(), m_device_port, m_max_terms);
+	if (!CDBConnector::GetInstance()->ExectCommand(cInsert))
+	{
+		printf("insert conference error\r\n");
+		printf(CDBConnector::GetInstance()->OutErrors());
+		return false;
+	}
+*/
+	return true;
+}
+
+bool CConference::DeleteDB()
+{
+/*	char cDelete[1024];
+	sprintf(cDelete, "delete from device where device_id = '%d'", m_device_id);
+	if (!CDBConnector::GetInstance()->ExectCommand(cDelete))
+	{
+		printf("delete conference error\r\n");
+		printf(CDBConnector::GetInstance()->OutErrors());
+		return false;
+	}
+*/
+	return true;
+}
+
+bool CConference::UpdateDB(int realtimetype, int permanentenable)
+{
+	CCriticalAutoLock MyLock(m_csConf);
+
+	char cUpdate[1024];
+	if (realtimetype == 0) // real_starttime
+	{
+#ifdef WIN32
+		sprintf(cUpdate, "update conference set conf_realstarttime = '%s', conf_status = '%d' where conf_id='%I64d'", m_conf_realstarttime.c_str(), m_conf_status, m_conf_id);
+#elif defined LINUX
+		sprintf(cUpdate, "update conference set conf_realstarttime = '%s', conf_status = '%d' where conf_id='%lld'", m_conf_realstarttime.c_str(), m_conf_status, m_conf_id);
+#endif	
+
+		sr_printf(SR_LOGLEVEL_DEBUG, " %s\n", cUpdate);
+
+		if (!CDBConnector::GetInstance()->ExectCommand(cUpdate))
+		{
+			sr_printf(SR_LOGLEVEL_ERROR, "update conference conf_realstarttime error: %s\n", CDBConnector::GetInstance()->OutErrors());
+			return false;
+		}
+	} 
+	else if(realtimetype == 1) // real_endtime
+	{
+		if (permanentenable == -1)
+		{
+
+#ifdef WIN32
+			sprintf(cUpdate, "update conference conf, conf_report confrpt set conf.conf_realendtime = '%s', conf.conf_status = '1' where conf.conf_id='%I64d' and confrpt.conf_id='%I64d' and conf.conf_realstarttime=confrpt.real_starttime and confrpt.real_endtime!='1970-01-01 00:00:00' and conf.permanent_enable=0", m_conf_realendtime.c_str(), m_conf_id, m_conf_id);
+#elif defined LINUX
+			sprintf(cUpdate, "update conference conf, conf_report confrpt set conf.conf_realendtime = '%s', conf.conf_status = '1' where conf.conf_id='%lld' and confrpt.conf_id='%lld' and conf.conf_realstarttime=confrpt.real_starttime and confrpt.real_endtime!='1970-01-01 00:00:00' and conf.permanent_enable=0", m_conf_realendtime.c_str(), m_conf_id, m_conf_id);
+#endif	
+			sr_printf(SR_LOGLEVEL_DEBUG, " %s\n", cUpdate);
+			bool bUp1_OK = false;
+			bool bUp0_OK = false;
+			bUp1_OK = CDBConnector::GetInstance()->ExectCommand(cUpdate);
+			if (!bUp1_OK)
+			{
+				sr_printf(SR_LOGLEVEL_WARNING, "update conference conf_status=1 error: %s\n", CDBConnector::GetInstance()->OutErrors());
+			}
+
+			char cUpdate0[1024];
+#ifdef WIN32
+			sprintf(cUpdate0, "update conference conf, conf_report confrpt set conf.conf_realendtime = '%s', conf.conf_status = '0' where conf.conf_id='%I64d' and confrpt.conf_id='%I64d' and conf.conf_realstarttime=confrpt.real_starttime and confrpt.real_endtime!='1970-01-01 00:00:00' and conf.permanent_enable=1", m_conf_realendtime.c_str(), m_conf_id, m_conf_id);
+#elif defined LINUX
+			sprintf(cUpdate0, "update conference conf, conf_report confrpt set conf.conf_realendtime = '%s', conf.conf_status = '0' where conf.conf_id='%lld' and confrpt.conf_id='%lld' and conf.conf_realstarttime=confrpt.real_starttime and confrpt.real_endtime!='1970-01-01 00:00:00' and conf.permanent_enable=1", m_conf_realendtime.c_str(), m_conf_id, m_conf_id);
+#endif
+			sr_printf(SR_LOGLEVEL_DEBUG, " %s\n", cUpdate0);
+			bUp0_OK = CDBConnector::GetInstance()->ExectCommand(cUpdate0);
+			if (!bUp0_OK)
+			{
+				sr_printf(SR_LOGLEVEL_WARNING, "update conference conf_status=0 error: %s\n", CDBConnector::GetInstance()->OutErrors());
+			}
+			
+			if (bUp1_OK == false
+				&& bUp0_OK == false)
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "update conference conf_realendtime error: %s\n", CDBConnector::GetInstance()->OutErrors());
+				return false;
+			}
+		} 
+		else
+		{
+#ifdef WIN32
+			sprintf(cUpdate, "update conference set conf_realendtime = '%s', conf_status = '%d' where conf_id='%I64d'", m_conf_realendtime.c_str(), m_conf_status, m_conf_id);
+#elif defined LINUX
+			sprintf(cUpdate, "update conference set conf_realendtime = '%s', conf_status = '%d' where conf_id='%lld'", m_conf_realendtime.c_str(), m_conf_status, m_conf_id);
+#endif
+
+			sr_printf(SR_LOGLEVEL_DEBUG, " %s\n", cUpdate);
+
+			if (!CDBConnector::GetInstance()->ExectCommand(cUpdate))
+			{
+				sr_printf(SR_LOGLEVEL_ERROR, "update conference conf_realendtime error: %s\n", CDBConnector::GetInstance()->OutErrors());
+				return false;
+			}
+		}
+	}	
+
+	return true;
+}
+
+bool CConference::SelectDB()
+{
+	CCriticalAutoLock MyLock(m_csConf);
+	m_exist = false;
+	//获取后，更新本地变量
+	char cSelect[1024];
+#ifdef WIN32
+	sprintf(cSelect, "select conf_id,user_id,conf_passwd,recv_passwd,conf_subject,conf_type,conf_chairman,conf_createtm,conf_starttype,conf_starttime,conf_endtime,conf_maxterm,audio_enable,video_enable,permanent_enable,isdeleted,ctrl_user_id,ctrl_pwd,anonymous_enable,conf_name,encypt_alg,auto_rec,video_size,use_edgeserver from conference where conf_id='%I64d'", m_conf_id);
+#elif defined LINUX
+	sprintf(cSelect, "select conf_id,user_id,conf_passwd,recv_passwd,conf_subject,conf_type,conf_chairman,conf_createtm,conf_starttype,conf_starttime,conf_endtime,conf_maxterm,audio_enable,video_enable,permanent_enable,isdeleted,ctrl_user_id,ctrl_pwd,anonymous_enable,conf_name,encypt_alg,auto_rec,video_size,use_edgeserver from conference where conf_id='%lld'", m_conf_id);
+#endif
+
+#ifdef MYSQL_DB_DEF
+	unsigned long long llRowNum = 0;
+	MYSQL_ROW row;
+	MYSQL_RES *pQuery = NULL;
+
+	if (!CDBConnector::GetInstance()->GetResult(cSelect, llRowNum, row, &pQuery))
+	{
+		printf("CConference::SelectDB() GetResult error\r\n");
+		printf(CDBConnector::GetInstance()->OutErrors());
+
+		printf("^^^^^^^^1111111^^^^^^^^^^^^^ CConference::SelectDB()  FreeResult( pQuery = %p ) ^^^^^^^^^^^^^^^^^^\n", pQuery);
+
+		CDBConnector::GetInstance()->FreeResult(pQuery);
+		return false;
+	}
+
+
+	//if (nRow == 1)
+	if (llRowNum == 1)
+	{
+		//MYSQL_ROW row = CDBConnector::GetInstance()->GetRecord();
+
+		if (row != NULL && row[0] != NULL)
+		{
+#ifdef WIN32
+			m_conf_id = _atoi64(row[0]);//
+			printf("CConference::SelectDB() OK conf_id:%s->%I64d\r\n", row[0], m_conf_id);
+#elif defined LINUX
+			m_conf_id = strtoll(row[0], NULL, 10);//
+			printf("CConference::SelectDB() OK conf_id:%s->%lld\r\n", row[0], m_conf_id);
+#endif	
+		}
+		if (row[1] != NULL)
+			m_user_id = atoi(row[1]);//strtoul(row[1], 0, 10);
+		if (row[2] != NULL)
+		{
+			m_conf_passwd = row[2];
+		}
+		else
+		{
+			m_conf_passwd.clear();
+		}
+		if (row[3] != NULL)
+		{
+			m_recv_passwd = row[3];
+		}
+		else
+		{
+			m_recv_passwd.clear();
+		}
+		if (row[4] != NULL)
+		{
+			m_conf_subject = row[4];
+		}
+		else
+		{
+			m_conf_subject.clear();
+		}
+		if (row[5] != NULL)
+			m_conf_type = atoi(row[5]);
+		if (row[6] != NULL)
+			m_conf_chairman = atoi(row[6]);
+		if (row[7] != NULL)
+		{
+			m_create_date = row[7];
+		}
+		else
+		{
+			m_create_date.clear();
+		}
+		if (row[8] != NULL)
+			m_conf_starttype = atoi(row[8]);
+		if (row[9] != NULL)
+		{
+			m_conf_starttime = row[9];
+		}
+		else
+		{
+			m_conf_starttime.clear();
+		}
+		if (row[10] != NULL)
+		{
+			m_conf_endtime = row[10];
+		}
+		else
+		{
+			m_conf_endtime.clear();
+		}
+		if (row[11] != NULL)
+			m_conf_maxterm = atoi(row[11]);
+		if (row[12] != NULL)
+			m_audio_enable = atoi(row[12]);
+		if (row[13] != NULL)
+			m_video_enable = atoi(row[13]);
+		if (row[14] != NULL)
+			m_permanent_enable = atoi(row[14]);
+		if (row[15] != NULL)
+			m_isdeleted = atoi(row[15]);
+		if (row[16] != NULL)
+			m_ctrl_user_id = atoi(row[16]);
+		if (row[17] != NULL)
+		{
+			m_ctrl_pwd = row[17];
+		}
+		else
+		{
+			m_ctrl_pwd.clear();
+		}
+		if (row[18] != NULL)
+			m_anonymous_enable = atoi(row[18]);
+		if (row[19] != NULL)
+		{
+			m_conf_name = row[19];
+		}
+		else
+		{
+			m_conf_name.clear();
+		}
+		if (row[20] != NULL)
+			m_encrypt_alg = atoi(row[20]);
+
+		if (row[21] != NULL)
+			m_auto_rec = atoi(row[21]);
+
+		m_video_size = 10;
+		if (row[22] != NULL)
+			m_video_size = atoi(row[22]);
+
+		m_useedgeserver = 0;
+		if (row[23] != NULL)
+			m_useedgeserver = atoi(row[23]);
+
+		m_exist = true;
+	}
+
+	printf("^^^^^^^^22222222^^^^^^^^^^^^^ CConference::SelectDB()  FreeResult( pQuery = %p ) ^^^^^^^^^^^^^^^^^^\n", pQuery);
+
+	CDBConnector::GetInstance()->FreeResult(pQuery);
+
+	return true;
+#elif SHENTONG_DB_DEF
+	unsigned long long ullRowNum = 0;
+	Statement *pstmt = NULL;
+	ResultSet *prs = NULL;
+	bool bgetok = false;
+	if (!CDBConnector::GetInstance()->GetResults(cSelect, &pstmt, &prs))
+	{
+		printf("select conference error\r\n");
+
+		CDBConnector::GetInstance()->FreeResult(pstmt, prs);
+
+		return false;
+	}
+	else
+	{
+		if (prs != NULL)
+		{
+			// 注意：列的编号是从1开始,如果结果为空也会进入while循环,此时获取的值是0
+			while (prs->next())
+			{
+				ullRowNum++;
+				if (ullRowNum == 1)
+				{
+					std::string strtemp;
+					unsigned long long ullConfid = 0;
+					//					strtemp.clear();
+					//					strtemp = prs->getString(1);
+					//#ifdef WIN32
+					//					ullConfid = _atoi64(strtemp.c_str());
+					//#elif defined LINUX
+					//					ullConfid = strtoll(strtemp.c_str(), NULL, 10);
+					//#endif	
+					//					m_conf_id = ullConfid;
+
+					ullConfid = (unsigned long)prs->getNumber(1);
+					m_conf_id = ullConfid;
+
+					unsigned int uiUserid = 0;
+					uiUserid = prs->getInt(2);
+					m_user_id = uiUserid;
+
+					//strtemp.clear();
+					//strtemp = prs->getString(3);
+
+					m_conf_passwd.clear();
+					m_conf_passwd = prs->getString(3);
+
+					m_recv_passwd.clear();
+					m_recv_passwd = prs->getString(4);
+
+					m_conf_subject.clear();
+					m_conf_subject = prs->getString(5);
+
+					int iConftype = 0;
+					iConftype = prs->getInt(6);
+					m_conf_type = iConftype;
+
+					unsigned int uiChairman = 0;
+					uiChairman = prs->getInt(7);
+					m_conf_chairman = uiChairman;
+
+					m_create_date.clear();
+					m_create_date = prs->getString(8);
+
+					int iStarttype = 0;
+					iStarttype = prs->getInt(9);
+					m_conf_starttype = iStarttype;
+
+					m_conf_starttime.clear();
+					m_conf_starttime = prs->getString(10);
+
+					m_conf_endtime.clear();
+					m_conf_endtime = prs->getString(11);
+
+					int iMaxterm = 0;
+					iMaxterm = prs->getInt(12);
+					m_conf_maxterm = iMaxterm;
+
+					int iAudioenable = 0;
+					iAudioenable = prs->getInt(13);
+					m_audio_enable = iAudioenable;
+
+					int iVideoenable = 0;
+					iVideoenable = prs->getInt(14);
+					m_video_enable = iVideoenable;
+
+					int iPermanentenable = 0;
+					iPermanentenable = prs->getInt(15);
+					m_permanent_enable = iPermanentenable;
+
+					int iIsdeleted = 0;
+					iIsdeleted = prs->getInt(16);
+					m_isdeleted = iIsdeleted;
+
+					int iCtrluserid = 0;
+					iCtrluserid = prs->getInt(17);
+					m_ctrl_user_id = iCtrluserid;
+
+					m_ctrl_pwd.clear();
+					m_ctrl_pwd = prs->getString(18);
+
+					int iAnonymousenable = 0;
+					iAnonymousenable = prs->getInt(19);
+					m_anonymous_enable = iAnonymousenable;
+
+					m_conf_name.clear();
+					m_conf_name = prs->getString(20);
+
+					int iEncryptalg = 0;
+					iEncryptalg = prs->getInt(21);
+					m_encrypt_alg = iEncryptalg;
+
+					int iAutoREC = 0;
+					iAutoREC = prs->getInt(22);
+					m_auto_rec = iAutoREC;
+
+					int iVideSize = 10;
+					iVideSize = prs->getInt(23);
+					m_video_size = iVideSize;
+
+					int iUseEdgeServer = 0;
+					iUseEdgeServer = prs->getInt(24);
+					m_useedgeserver = iUseEdgeServer;
+
+					m_exist = true;
+
+					bgetok = true;
+
+					break;
+				}
+			}
+		}
+		else
+		{
+			bgetok = false;
+		}
+
+		CDBConnector::GetInstance()->FreeResult(pstmt, prs);
+	}
+
+	return bgetok;
+#endif
+}
